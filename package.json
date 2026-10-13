@@ -1,0 +1,30 @@
+{
+  "name": "linktest-platform",
+  "version": "1.0.0",
+  "description": "LinkTest — AI-Powered Learning, Practice, Assessment, and Progress-Tracking Platform",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n \"backend,frontend\" -c \"blue,green\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/run-local.ps1",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "start:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/run-local.ps1",
+    "build": "npm --prefix frontend run build",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/verify.ps1",
+    "test": "powershell -ExecutionPolicy Bypass -File ./test-all-e2e.ps1",
+    "test:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/verify.ps1",
+    "install:all": "npm install && npm --prefix frontend install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "linktest",
+    "edtech",
+    "learning-platform",
+    "ai-tutor",
+    "ollama",
+    "assessment"
+  ],
+  "author": "LinkTest Engineering Team",
+  "license": "ISC"
+}

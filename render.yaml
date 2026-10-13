@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: linktest-backend
+    env: docker
+    rootDir: backend-java
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8081
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_APP_PASSWORD
+        sync: false
+      - key: CLOUD_AI_API_KEY
+        sync: false
+      - key: CLOUD_AI_MODEL
+        value: llama-3.1-8b-instant
