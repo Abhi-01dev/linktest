@@ -63,37 +63,11 @@ export function GoogleSignInButton({
     );
   }
 
-  // Graceful fallback button when GOOGLE_CLIENT_ID is pending configuration
+  // Fallback handler when GOOGLE_CLIENT_ID is not configured
   const handleClickFallback = () => {
     if (disabled || internalLoading) return;
     setInternalLoading(true);
-
-    // Provide clear developer guidance in the UI
-    const mockNotice =
-      'Google Sign-In is ready! To connect to your live Google Cloud Console credentials, set VITE_GOOGLE_CLIENT_ID in frontend/.env and GOOGLE_CLIENT_ID in backend-java/.env.';
-    
-    // Check if test/demo mock token is wanted
-    const useDevMock = window.confirm(
-      `${mockNotice}\n\nWould you like to test the Google authentication flow with a simulated Google ID Token for Aarav Sharma (student@linktest.io)?`
-    );
-
-    if (useDevMock) {
-      // Create a test JWT credential structure that backend test mode accepts
-      const simulatedPayload = {
-        sub: 'google-sub-mock-123456789',
-        email: 'student@linktest.io',
-        name: 'Aarav Sharma',
-        picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80',
-        email_verified: true,
-        iss: 'https://accounts.google.com',
-        aud: 'dev-mock-client-id'
-      };
-      
-      const mockToken = `mock.${btoa(JSON.stringify(simulatedPayload))}.sig`;
-      onSuccess?.(mockToken);
-    } else {
-      onError?.(new Error('Google Client ID not yet configured in environment.'));
-    }
+    onError?.(new Error('Google Sign-In is currently unavailable. Please sign in using your email and password.'));
     setInternalLoading(false);
   };
 

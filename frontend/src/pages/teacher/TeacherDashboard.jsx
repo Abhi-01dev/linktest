@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -13,7 +13,15 @@ import {
   Clock,
   ArrowRight,
   PlusCircle,
-  GraduationCap
+  GraduationCap,
+  ShieldCheck,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  X,
+  FileCheck2,
+  Check,
+  RotateCcw
 } from 'lucide-react';
 
 export function TeacherDashboard() {
@@ -21,7 +29,24 @@ export function TeacherDashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Join Requests State
+  const [joinRequests, setJoinRequests] = useState([]);
+  const [loadingRequests, setLoadingRequests] = useState(false);
+  const [requestFilter, setRequestFilter] = useState('PENDING'); // 'PENDING', 'APPROVED', 'REJECTED', 'ALL'
+  const [actionProcessingId, setActionProcessingId] = useState(null);
+  const [rejectModal, setRejectModal] = useState({ open: false, request: null, reason: '' });
+
   const { showToast } = useToast();
+
+  const fetchJoinRequests = useCallback(async (statusToFetch = requestFilter) => {
+    try {
+      const res = await api.getTeacherMockTestJoinRequests({ status: statusToFetch });
+      const list = res?.requests || res?.data?.requests || [];
+      setJoinRequests(list);
+    } catch (err) {
+      console.warn('Failed to poll mock test join requests:', err);
+    }
+  }, [requestFilter]);
 
   useEffect(() => {
     async function load() {
@@ -36,7 +61,87 @@ export function TeacherDashboard() {
       }
     }
     load();
-  }, []);
+  }, [showToast]);
+
+  // Initial load of join requests
+  useEffect(() => {
+    fetchJoinRequests(requestFilter);
+  }, [fetchJoinRequests, requestFilter]);
+
+  // Real-time polling for join requests every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchJoinRequests(requestFilter);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [fetchJoinRequests, requestFilter]);
+
+  // Handle Approve
+  const handleApprove = async (reqItem) => {
+    try {
+      setActionProcessingId(reqItem.id);
+      await api.approveMockTestJoinRequest(reqItem.id);
+      showToast(`Approved mock test access for ${reqItem.student_name}.`, 'success');
+      // Update local state immediately
+      setJoinRequests(prev => prev.map(r => (
+        r.id === reqItem.id ? { ...r, status: 'APPROVED', reviewed_by: user?.id, reviewed_at: new Date().toISOString() } : r
+      )));
+    } catch (err) {
+      console.error('Approval failed:', err);
+      showToast(err.message || 'Failed to approve request.', 'error');
+    } finally {
+      setActionProcessingId(null);
+    }
+  };
+
+  // Open Reject Modal
+  const openRejectModal = (reqItem) => {
+    setRejectModal({
+      open: true,
+      request: reqItem,
+      reason: ''
+    });
+  };
+
+  // Confirm Reject
+  const handleConfirmReject = async () => {
+    if (!rejectModal.request) return;
+    try {
+      setActionProcessingId(rejectModal.request.id);
+      await api.rejectMockTestJoinRequest(rejectModal.request.id, rejectModal.reason);
+      showToast(`Rejected mock test request for ${rejectModal.request.student_name}.`, 'info');
+      // Update local state immediately
+      setJoinRequests(prev => prev.map(r => (
+        r.id === rejectModal.request.id
+          ? {
+              ...r,
+              status: 'REJECTED',
+              rejection_reason: rejectModal.reason,
+              reviewed_by: user?.id,
+              reviewed_at: new Date().toISOString()
+            }
+          : r
+      )));
+      setRejectModal({ open: false, request: null, reason: '' });
+    } catch (err) {
+      console.error('Rejection failed:', err);
+      showToast(err.message || 'Failed to reject request.', 'error');
+    } finally {
+      setActionProcessingId(null);
+    }
+  };
+
+  const formatRequestTime = (isoString) => {
+    if (!isoString) return 'Just now';
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      return isoString;
+    }
+  };
 
   const summary = data?.summary || {};
   const todaySchedule = data?.today_schedule || [];
@@ -129,6 +234,275 @@ export function TeacherDashboard() {
             {summary.upcoming_live_sessions || 0}
           </div>
         </div>
+
+        <div className="card" style={{ padding: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', color: '#2563EB', marginBottom: '0.5rem' }}>
+            <FileCheck2 size={18} />
+            <span style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase' }}>Mock Test Requests</span>
+          </div>
+          <div style={{ fontSize: '1.9rem', fontWeight: 800, color: '#2563EB' }}>
+            {joinRequests.filter(r => r.status === 'PENDING').length}
+          </div>
+        </div>
+      </div>
+
+      {/* Mock Test Requests Section */}
+      <div className="card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          marginBottom: '1.25rem',
+          borderBottom: '1px solid #F1F5F9',
+          paddingBottom: '1rem'
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#0F172A', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <ShieldCheck size={20} style={{ color: '#2563EB' }} />
+                <span>Mock Test Requests</span>
+              </h3>
+              {joinRequests.filter(r => r.status === 'PENDING').length > 0 && (
+                <span style={{
+                  background: '#FEF3C7',
+                  color: '#B45309',
+                  border: '1px solid #FCD34D',
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '999px',
+                  fontSize: '0.75rem',
+                  fontWeight: 800
+                }}>
+                  {joinRequests.filter(r => r.status === 'PENDING').length} PENDING
+                </span>
+              )}
+            </div>
+            <p style={{ color: '#64748B', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
+              Review and approve candidates requesting admission to scheduled examination rooms.
+            </p>
+          </div>
+
+          {/* Filter Pills */}
+          <div style={{ display: 'flex', gap: '0.4rem', background: '#F1F5F9', padding: '0.25rem', borderRadius: '8px' }}>
+            {[
+              { id: 'PENDING', label: 'Pending' },
+              { id: 'APPROVED', label: 'Approved' },
+              { id: 'REJECTED', label: 'Rejected' },
+              { id: 'ALL', label: 'All' }
+            ].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setRequestFilter(f.id)}
+                style={{
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '6px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  border: 'none',
+                  background: requestFilter === f.id ? '#FFFFFF' : 'transparent',
+                  color: requestFilter === f.id ? '#0F172A' : '#64748B',
+                  boxShadow: requestFilter === f.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Requests Table */}
+        {joinRequests.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#64748B' }}>
+            <FileCheck2 size={36} style={{ color: '#CBD5E1', margin: '0 auto 0.75rem', display: 'block' }} />
+            <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>No {requestFilter.toLowerCase()} join requests found.</div>
+            <div style={{ fontSize: '0.82rem', color: '#94A3B8', marginTop: '0.25rem' }}>
+              Newly submitted student requests will automatically appear here in real time.
+            </div>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+              <thead>
+                <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <th style={{ padding: '0.75rem 1rem', fontWeight: 700 }}>Student</th>
+                  <th style={{ padding: '0.75rem 1rem', fontWeight: 700 }}>Mock Test</th>
+                  <th style={{ padding: '0.75rem 1rem', fontWeight: 700 }}>Requested</th>
+                  <th style={{ padding: '0.75rem 1rem', fontWeight: 700 }}>Status</th>
+                  <th style={{ padding: '0.75rem 1rem', fontWeight: 700, textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {joinRequests.map((reqItem) => {
+                  const isProcessing = actionProcessingId === reqItem.id;
+                  const isPending = reqItem.status === 'PENDING';
+                  const isApproved = reqItem.status === 'APPROVED';
+                  const isRejected = reqItem.status === 'REJECTED';
+
+                  return (
+                    <tr
+                      key={reqItem.id}
+                      style={{
+                        borderBottom: '1px solid #F1F5F9',
+                        transition: 'background 0.15s ease'
+                      }}
+                    >
+                      {/* Student Info */}
+                      <td style={{ padding: '0.85rem 1rem' }}>
+                        <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.92rem' }}>
+                          {reqItem.student_name || 'Student'}
+                        </div>
+                        {reqItem.student_email && (
+                          <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                            {reqItem.student_email}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Mock Test */}
+                      <td style={{ padding: '0.85rem 1rem' }}>
+                        <div style={{ fontWeight: 600, color: '#1E293B' }}>
+                          {reqItem.mock_test_title || 'Mock Examination'}
+                        </div>
+                        {reqItem.mock_test_subject && (
+                          <span style={{ fontSize: '0.74rem', color: '#2563EB', background: '#EFF6FF', padding: '0.15rem 0.45rem', borderRadius: '4px', fontWeight: 600, display: 'inline-block', marginTop: '0.2rem' }}>
+                            {reqItem.mock_test_subject}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Requested At */}
+                      <td style={{ padding: '0.85rem 1rem', color: '#64748B', fontSize: '0.82rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Clock size={13} style={{ color: '#94A3B8' }} />
+                          <span>{formatRequestTime(reqItem.requested_at)}</span>
+                        </div>
+                      </td>
+
+                      {/* Status */}
+                      <td style={{ padding: '0.85rem 1rem' }}>
+                        {isPending ? (
+                          <span style={{
+                            background: '#FEF3C7',
+                            color: '#B45309',
+                            border: '1px solid #FCD34D',
+                            padding: '0.25rem 0.6rem',
+                            borderRadius: '999px',
+                            fontSize: '0.74rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.04em'
+                          }}>
+                            PENDING
+                          </span>
+                        ) : isApproved ? (
+                          <span style={{
+                            background: '#DCFCE7',
+                            color: '#15803D',
+                            border: '1px solid #86EFAC',
+                            padding: '0.25rem 0.6rem',
+                            borderRadius: '999px',
+                            fontSize: '0.74rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.04em'
+                          }}>
+                            APPROVED
+                          </span>
+                        ) : isRejected ? (
+                          <div>
+                            <span style={{
+                              background: '#FEE2E2',
+                              color: '#B91C1C',
+                              border: '1px solid #FCA5A5',
+                              padding: '0.25rem 0.6rem',
+                              borderRadius: '999px',
+                              fontSize: '0.74rem',
+                              fontWeight: 800,
+                              letterSpacing: '0.04em'
+                            }}>
+                              REJECTED
+                            </span>
+                            {reqItem.rejection_reason && (
+                              <div style={{ fontSize: '0.72rem', color: '#991B1B', marginTop: '0.25rem' }}>
+                                Reason: {reqItem.rejection_reason}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '0.75rem', color: '#64748B' }}>{reqItem.status}</span>
+                        )}
+                      </td>
+
+                      {/* Actions */}
+                      <td style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>
+                        {isPending ? (
+                          <div style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <button
+                              onClick={() => handleApprove(reqItem)}
+                              disabled={isProcessing}
+                              className="btn btn-sm"
+                              style={{
+                                background: '#16A34A',
+                                color: '#FFFFFF',
+                                border: 'none',
+                                padding: '0.35rem 0.75rem',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                cursor: isProcessing ? 'not-allowed' : 'pointer'
+                              }}
+                            >
+                              <Check size={13} />
+                              <span>{isProcessing ? 'Saving...' : 'Approve'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => openRejectModal(reqItem)}
+                              disabled={isProcessing}
+                              className="btn btn-sm btn-outline"
+                              style={{
+                                color: '#DC2626',
+                                borderColor: '#FCA5A5',
+                                background: '#FFFFFF',
+                                padding: '0.35rem 0.75rem',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                cursor: isProcessing ? 'not-allowed' : 'pointer'
+                              }}
+                            >
+                              <X size={13} />
+                              <span>Reject</span>
+                            </button>
+                          </div>
+                        ) : isApproved ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#16A34A', fontSize: '0.8rem', fontWeight: 700 }}>
+                            <CheckCircle2 size={15} />
+                            <span>Approved</span>
+                          </div>
+                        ) : isRejected ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
+                            <XCircle size={15} />
+                            <span>Declined</span>
+                          </div>
+                        ) : (
+                          <span style={{ color: '#94A3B8', fontSize: '0.8rem' }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Today's Schedule & Live Classes */}
@@ -233,6 +607,113 @@ export function TeacherDashboard() {
           )}
         </div>
       </div>
+
+      {/* Reject Join Request Modal Dialog */}
+      {rejectModal.open && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '16px',
+            maxWidth: '480px',
+            width: '100%',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              padding: '1.25rem 1.5rem',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <AlertCircle size={20} style={{ color: '#DC2626' }} />
+                <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#0F172A' }}>
+                  Reject Join Request
+                </h3>
+              </div>
+              <button
+                onClick={() => setRejectModal({ open: false, request: null, reason: '' })}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B' }}
+                aria-label="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              <p style={{ fontSize: '0.88rem', color: '#475569', marginBottom: '1rem', lineHeight: 1.5 }}>
+                Decline admission for candidate <strong>{rejectModal.request?.student_name}</strong> to examination <strong>{rejectModal.request?.mock_test_title}</strong>.
+              </p>
+
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.4rem' }}>
+                Rejection reason:
+              </label>
+              <textarea
+                rows={3}
+                value={rejectModal.reason}
+                onChange={(e) => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
+                placeholder="e.g. Please wait until the scheduled start time."
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 0.85rem',
+                  borderRadius: '8px',
+                  border: '1px solid #CBD5E1',
+                  fontSize: '0.88rem',
+                  outline: 'none',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{
+              padding: '1rem 1.5rem',
+              background: '#F8FAFC',
+              borderTop: '1px solid #E2E8F0',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '0.75rem'
+            }}>
+              <button
+                onClick={() => setRejectModal({ open: false, request: null, reason: '' })}
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.84rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReject}
+                disabled={actionProcessingId === rejectModal.request?.id}
+                className="btn btn-primary"
+                style={{
+                  padding: '0.45rem 1.15rem',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  background: '#DC2626',
+                  borderColor: '#DC2626'
+                }}
+              >
+                {actionProcessingId === rejectModal.request?.id ? 'Rejecting...' : 'Reject Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

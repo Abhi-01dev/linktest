@@ -217,7 +217,9 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ message, conversation_id: conversationId })
     });
-    return res.data;
+    const data = res.data || {};
+    const text = data.reply || data.response || '';
+    return { ...data, reply: text, response: text };
   }
 
   async generateQuiz(topic, count = 5) {
@@ -231,7 +233,7 @@ class ApiClient {
   // Admin APIs
   async getAdminDashboard() {
     const res = await this.request('/admin/dashboard');
-    return res.data.stats;
+    return res.data?.stats || res.data || {};
   }
 
   async getAdminUsers() {
@@ -240,57 +242,57 @@ class ApiClient {
   }
 
   async createCourse(courseData) {
-    const res = await this.request('/admin/courses', {
+    const res = await this.request('/courses', {
       method: 'POST',
       body: JSON.stringify(courseData)
     });
-    return res.data.course;
+    return res.data?.course || res.data;
   }
 
   async updateCourse(id, courseData) {
-    const res = await this.request(`/admin/courses/${id}`, {
+    const res = await this.request(`/courses/${id}`, {
       method: 'PUT',
       body: JSON.stringify(courseData)
     });
-    return res.data.course;
+    return res.data?.course || res.data;
   }
 
   async deleteCourse(id) {
-    const res = await this.request(`/admin/courses/${id}`, {
+    const res = await this.request(`/courses/${id}`, {
       method: 'DELETE'
     });
     return res.data;
   }
 
   async createLesson(courseId, lessonData) {
-    const res = await this.request(`/admin/courses/${courseId}/lessons`, {
+    const res = await this.request(`/lessons/course/${courseId}`, {
       method: 'POST',
       body: JSON.stringify(lessonData)
     });
-    return res.data.lesson;
+    return res.data?.lesson || res.data;
   }
 
   async updateLesson(id, lessonData) {
-    const res = await this.request(`/admin/lessons/${id}`, {
+    const res = await this.request(`/lessons/${id}`, {
       method: 'PUT',
       body: JSON.stringify(lessonData)
     });
-    return res.data.lesson;
+    return res.data?.lesson || res.data;
   }
 
   async deleteLesson(id) {
-    const res = await this.request(`/admin/lessons/${id}`, {
+    const res = await this.request(`/lessons/${id}`, {
       method: 'DELETE'
     });
     return res.data;
   }
 
   async createQuiz(quizData) {
-    const res = await this.request('/admin/quizzes', {
+    const res = await this.request('/quizzes', {
       method: 'POST',
       body: JSON.stringify(quizData)
     });
-    return res.data.quiz;
+    return res.data?.quiz || res.data;
   }
 
   // ── Auth Extended Endpoints ──────────────────────────────────────────
@@ -401,7 +403,7 @@ class ApiClient {
   }
 
   async getAdminSubjects() {
-    const res = await this.request('/admin/subjects');
+    const res = await this.request('/subjects');
     return res.data?.subjects || (Array.isArray(res.data) ? res.data : []);
   }
 
@@ -987,6 +989,9 @@ class ApiClient {
   }
 
   async startMockTestAttempt(id) {
+    if (!id || id === 'undefined' || id === 'null' || !String(id).trim()) {
+      throw new Error('Valid mock test ID is required to start an attempt.');
+    }
     const res = await this.request(`/mock-tests/${id}/attempts`, {
       method: 'POST'
     });
@@ -994,11 +999,17 @@ class ApiClient {
   }
 
   async getMockTestAttempt(attemptId) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to load examination.');
+    }
     const res = await this.request(`/mock-tests/attempts/${attemptId}`);
     return res.data;
   }
 
   async saveMockTestAnswer(attemptId, answerData) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to save answers.');
+    }
     const res = await this.request(`/mock-tests/attempts/${attemptId}/answers`, {
       method: 'PUT',
       body: JSON.stringify(answerData)
@@ -1007,6 +1018,9 @@ class ApiClient {
   }
 
   async logMockTestProctoringEvent(attemptId, eventData) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to log proctoring event.');
+    }
     const res = await this.request(`/mock-tests/attempts/${attemptId}/events`, {
       method: 'POST',
       body: JSON.stringify(eventData)
@@ -1015,6 +1029,9 @@ class ApiClient {
   }
 
   async submitMockTestAttempt(attemptId, options = {}) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to submit examination.');
+    }
     const res = await this.request(`/mock-tests/attempts/${attemptId}/submit`, {
       method: 'POST',
       body: JSON.stringify(options)
@@ -1023,6 +1040,9 @@ class ApiClient {
   }
 
   async getMockTestAttemptResult(attemptId) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to load examination result.');
+    }
     const res = await this.request(`/mock-tests/attempts/${attemptId}/result`);
     return res.data;
   }
@@ -1041,6 +1061,70 @@ class ApiClient {
     const res = await this.request(`/mock-tests/events/${eventId}/review`, {
       method: 'POST',
       body: JSON.stringify(reviewData)
+    });
+    return res.data;
+  }
+
+  // ==========================================
+  // MOCK TEST JOIN REQUESTS & APPROVALS
+  // ==========================================
+  async requestMockTestJoin(testId) {
+    if (!testId || testId === 'undefined' || testId === 'null' || !String(testId).trim()) {
+      throw new Error('Valid mock test ID is required to request join approval.');
+    }
+    const res = await this.request(`/mock-tests/${testId}/join-request`, {
+      method: 'POST'
+    });
+    return res.data;
+  }
+
+  async getMockTestJoinStatus(testId) {
+    if (!testId || testId === 'undefined' || testId === 'null' || !String(testId).trim()) {
+      throw new Error('Valid mock test ID is required to check join status.');
+    }
+    const res = await this.request(`/mock-tests/${testId}/join-request`);
+    return res.data;
+  }
+
+  async getTeacherMockTestJoinRequests(params = {}) {
+    const searchParams = new URLSearchParams();
+    if (params.status && params.status !== 'all') searchParams.set('status', params.status);
+    if (params.mock_test_id) searchParams.set('mock_test_id', params.mock_test_id);
+    const qs = searchParams.toString();
+    const endpoint = `/teacher/mock-tests/join-requests${qs ? `?${qs}` : ''}`;
+    const res = await this.request(endpoint);
+    return res.data;
+  }
+
+  async getMockTestJoinRequests(testId, params = {}) {
+    if (!testId || testId === 'undefined' || testId === 'null' || !String(testId).trim()) {
+      throw new Error('Valid mock test ID is required to retrieve join requests.');
+    }
+    const searchParams = new URLSearchParams();
+    if (params.status && params.status !== 'all') searchParams.set('status', params.status);
+    const qs = searchParams.toString();
+    const endpoint = `/teacher/mock-tests/${testId}/join-requests${qs ? `?${qs}` : ''}`;
+    const res = await this.request(endpoint);
+    return res.data;
+  }
+
+  async approveMockTestJoinRequest(requestId) {
+    if (!requestId || requestId === 'undefined' || requestId === 'null' || !String(requestId).trim()) {
+      throw new Error('Valid request ID is required to approve join request.');
+    }
+    const res = await this.request(`/teacher/mock-tests/join-requests/${requestId}/approve`, {
+      method: 'POST'
+    });
+    return res.data;
+  }
+
+  async rejectMockTestJoinRequest(requestId, reason = '') {
+    if (!requestId || requestId === 'undefined' || requestId === 'null' || !String(requestId).trim()) {
+      throw new Error('Valid request ID is required to reject join request.');
+    }
+    const res = await this.request(`/teacher/mock-tests/join-requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason })
     });
     return res.data;
   }

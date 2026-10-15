@@ -119,25 +119,51 @@ export function MockTestRunnerPage() {
 
   useEffect(() => {
     async function loadAttempt() {
+      if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+        setInitError('Invalid examination attempt ID specified. Please return to the mock test catalog.');
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         const data = await api.getMockTestAttempt(attemptId);
         setExamData(data);
-        setRemainingSeconds(data.remaining_seconds || 0);
-        setWarningCount(data.warning_count || 0);
+
+        const attemptStatus = data?.status || data?.attempt?.status;
+        if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed') {
+          setRemainingSeconds(0);
+          setLoading(false);
+          return;
+        }
+
+        // Calculate remaining seconds reliably
+        let remaining = data.remaining_seconds ?? data.remainingSeconds;
+        if (remaining === undefined || remaining === null) {
+          const expiresAt = data.attempt?.expires_at || data.attempt?.expiresAt || data.expires_at || data.expiresAt;
+          if (expiresAt) {
+            remaining = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+          } else {
+            const dur = data.test?.duration_minutes ?? data.duration_minutes ?? 60;
+            remaining = dur * 60;
+          }
+        }
+        setRemainingSeconds(remaining);
+        setWarningCount(data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0);
 
         // Preload saved answers
         if (data.responses) {
           setResponses(data.responses);
         }
 
+        const proctorConfig = data.proctoring_config || data.proctoringConfig || data.test?.proctoring_config;
         // Start webcam if test requires proctoring
-        if (data.proctoring_config?.webcam_required) {
+        if (proctorConfig?.webcam_required) {
           startCamera();
         }
 
         // Request fullscreen if required
-        if (data.proctoring_config?.fullscreen_required) {
+        if (proctorConfig?.fullscreen_required) {
           try {
             if (!document.fullscreenElement) {
               await document.documentElement.requestFullscreen();
@@ -166,6 +192,8 @@ export function MockTestRunnerPage() {
 
   useEffect(() => {
     if (loading || !examData) return;
+    const attemptStatus = examData?.status || examData?.attempt?.status;
+    if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed') return;
 
     timerIntervalRef.current = setInterval(() => {
       setRemainingSeconds(prev => {
@@ -453,9 +481,51 @@ export function MockTestRunnerPage() {
     );
   }
 
-  const activeQuestion = examData.questions[currentIndex];
-  const activeResponse = responses[activeQuestion?.id]?.response_data || null;
-  const isMarked = Boolean(responses[activeQuestion?.id]?.is_marked_for_review);
+  const attemptStatus = examData?.status || examData?.attempt?.status;
+  const isCompleted = attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
+
+  if (isCompleted) {
+    return (
+      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '600px' }}>
+        <div style={{
+          background: 'var(--color-surface, #FFFFFF)',
+          border: '1px solid var(--color-border, #E2E8F0)',
+          padding: '2.5rem',
+          borderRadius: 'var(--radius-lg, 12px)',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
+        }}>
+          <CheckCircle2 size={48} style={{ color: '#16A34A', margin: '0 auto 1rem' }} />
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--color-navy, #0F172A)' }}>
+            Examination Completed
+          </h2>
+          <p style={{ color: '#64748B', marginBottom: '1.75rem', lineHeight: 1.6 }}>
+            This examination attempt has already been submitted and finalized. Further responses cannot be recorded.
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+            <button
+              onClick={() => navigate(`/mock-tests/attempts/${attemptId}/result`)}
+              className="btn btn-primary"
+              style={{ fontWeight: 700 }}
+            >
+              View Scorecard & Results
+            </button>
+            <button
+              onClick={() => navigate('/mock-tests')}
+              className="btn btn-secondary"
+              style={{ fontWeight: 600 }}
+            >
+              Back to Catalog
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const activeQuestion = (examData.questions || [])[currentIndex] || null;
+  const activeResponse = activeQuestion ? (responses[activeQuestion.id]?.response_data || null) : null;
+  const isMarked = activeQuestion ? Boolean(responses[activeQuestion.id]?.is_marked_for_review) : false;
 
   return (
     <div style={{
@@ -484,10 +554,10 @@ export function MockTestRunnerPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <div>
             <div style={{ fontSize: '0.72rem', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {examData.subject} • Candidate: {user?.full_name}
+              {(examData.subject || examData.test?.subject || 'Examination')} • Candidate: {user?.full_name}
             </div>
             <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.01em' }}>
-              {examData.test_title}
+              {examData.test_title || examData.title || examData.test?.title || 'Mock Examination'}
             </div>
           </div>
         </div>

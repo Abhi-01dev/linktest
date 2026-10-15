@@ -5,14 +5,14 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n \"backend,frontend\" -c \"blue,green\" \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/run-local.ps1",
+    "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
-    "start:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/run-local.ps1",
+    "start:backend": "npm --prefix backend start",
     "build": "npm --prefix frontend run build",
-    "build:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/verify.ps1",
+    "build:backend": "node -e \"console.log('Node backend ready')\"",
     "test": "powershell -ExecutionPolicy Bypass -File ./test-all-e2e.ps1",
-    "test:backend": "powershell -ExecutionPolicy Bypass -File ./backend-java/verify.ps1",
-    "install:all": "npm install && npm --prefix frontend install"
+    "test:backend": "npm --prefix backend test",
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

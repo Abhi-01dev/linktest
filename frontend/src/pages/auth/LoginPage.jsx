@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { LinkTestLogo } from '../../components/common/LinkTestLogo';
 import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
-import { LogIn, AlertCircle, ArrowRight, ShieldCheck, UserCheck, GraduationCap } from 'lucide-react';
+import { LogIn, AlertCircle, ArrowRight } from 'lucide-react';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -82,27 +82,6 @@ export function LoginPage() {
     }
   };
 
-  const fillStudentDemo = () => {
-    setEmail('student@linktest.io');
-    setPassword('Student123!');
-    setError('');
-    setUnverifiedEmail('');
-  };
-
-  const fillTeacherDemo = () => {
-    setEmail('teacher@linktest.io');
-    setPassword('Teacher123!');
-    setError('');
-    setUnverifiedEmail('');
-  };
-
-  const fillAdminDemo = () => {
-    setEmail('admin@linktest.io');
-    setPassword('Admin123!');
-    setError('');
-    setUnverifiedEmail('');
-  };
-
   return (
     <div
       style={{
@@ -174,50 +153,6 @@ export function LoginPage() {
             <span>{error}</span>
           </div>
         )}
-
-        {/* Demo One-Click Fill Helpers */}
-        <div
-          style={{
-            background: 'var(--color-bg-alt)',
-            borderRadius: 'var(--radius-md)',
-            padding: '0.85rem',
-            marginBottom: '1.5rem',
-            border: '1px dashed var(--color-border)'
-          }}
-        >
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem', textAlign: 'center' }}>
-            ⚡ Instant Demo Accounts
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.4rem' }}>
-            <button
-              type="button"
-              onClick={fillStudentDemo}
-              className="btn btn-outline btn-sm"
-              style={{ fontSize: '0.74rem', padding: '0.35rem 0.2rem' }}
-            >
-              <UserCheck size={13} style={{ color: 'var(--color-orange)' }} />
-              <span>Student</span>
-            </button>
-            <button
-              type="button"
-              onClick={fillTeacherDemo}
-              className="btn btn-outline btn-sm"
-              style={{ fontSize: '0.74rem', padding: '0.35rem 0.2rem' }}
-            >
-              <GraduationCap size={13} style={{ color: '#2563EB' }} />
-              <span>Teacher</span>
-            </button>
-            <button
-              type="button"
-              onClick={fillAdminDemo}
-              className="btn btn-outline btn-sm"
-              style={{ fontSize: '0.74rem', padding: '0.35rem 0.2rem' }}
-            >
-              <ShieldCheck size={13} style={{ color: '#DC2626' }} />
-              <span>Admin</span>
-            </button>
-          </div>
-        </div>
 
         {/* Google Sign-In */}
         <div style={{ marginBottom: '1.25rem' }}>

@@ -2,7 +2,7 @@
 
 > **"Learn Smarter. Practice Better. Test Your Progress."**
 
-LinkTest is a full-stack, enterprise-grade educational Learning Management System (LMS) inspired by modern educational platforms. Built with React, Java (Spring Boot 3 / OpenJDK 21), PostgreSQL, and local AI tutoring via Ollama (`qwen2.5:0.5b`) with cloud fallback options, LinkTest delivers dedicated, responsive portals for **Students**, **Teachers**, and **Administrators**.
+LinkTest is a full-stack, enterprise-grade educational Learning Management System (LMS) inspired by modern educational platforms. Built with React, Node.js + Express, PostgreSQL, and local AI tutoring via Ollama (`qwen2.5:0.5b`) with cloud fallback options, LinkTest delivers dedicated, responsive portals for **Students**, **Teachers**, and **Administrators**.
 
 ---
 
@@ -40,15 +40,17 @@ LinkTest is a full-stack, enterprise-grade educational Learning Management Syste
 
 ---
 
-## 2. Seed Credentials for Quick Testing
+## 2. Administrator Access & Production Setup
 
-LinkTest includes pre-seeded demonstration accounts for all three roles. The Login page (`http://localhost:5173/login`) provides **1-Click Demo Fill** buttons for immediate testing:
+Create an administrator using the production setup procedure:
 
-| Portal | Email | Password | Direct Dashboard URL |
-| :--- | :--- | :--- | :--- |
-| **Student** | `student@linktest.io` | `Student123!` | [http://localhost:5173/student/dashboard](http://localhost:5173/student/dashboard) |
-| **Teacher** | `teacher@linktest.io` | `Teacher123!` | [http://localhost:5173/teacher/dashboard](http://localhost:5173/teacher/dashboard) |
-| **Admin** | `admin@linktest.io` | `Admin123!` | [http://localhost:5173/admin/dashboard](http://localhost:5173/admin/dashboard) |
+```bash
+# Provision or configure administrator credentials
+ADMIN_EMAIL="admin@linktest.io" ADMIN_PASSWORD="your-secure-password" npm --prefix backend run create-admin
+```
+
+Once provisioned, sign in to the platform at [http://localhost:5173/login](http://localhost:5173/login) using your configured administrator credentials.
+
 
 ---
 
@@ -73,7 +75,7 @@ npm run dev
 ```
 
 Or run them in dedicated terminal windows:
-- **Backend (Port 8081 - Java Spring Boot):** `cd backend-java; .\run-local.ps1`
+- **Backend (Port 8081 - Node.js + Express):** `cd backend; npm run dev`
 - **Frontend (Port 5173 - React/Vite):** `cd frontend; npm run dev`
 
 Open your browser at: **`http://localhost:5173`**
@@ -145,13 +147,13 @@ LinkTest implements enterprise-grade, cryptographically verified Google Sign-In 
 
 ### Step 4: Configure Environment Variables
 
-**Backend (`backend-java/.env`):**
+**Backend (`backend/.env`):**
 ```env
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 GOOGLE_CALLBACK_URL=http://localhost:8081/api/auth/google/callback
 ```
-*(Never commit `backend-java/.env` with secrets to git!)*
+*(Never commit `backend/.env` with secrets to git!)*
 
 **Frontend (`frontend/.env`):**
 ```env

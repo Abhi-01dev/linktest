@@ -42,7 +42,11 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
       try {
         setLoading(true);
         setError(null);
-        const data = await api.getLiveKitToken({ sessionId: session.id });
+        const data = await api.getLiveKitToken({
+          sessionId: session.id,
+          roomName: `session-${session.id}`,
+          isPublisher: Boolean(isTeacher)
+        });
         if (isMounted) {
           if (!data?.token || !data?.serverUrl) {
             throw new Error('Invalid LiveKit token received from server.');
@@ -267,7 +271,11 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
                 onClick={() => {
                   setError(null);
                   setLoading(true);
-                  api.getLiveKitToken({ sessionId: session.id })
+                  api.getLiveKitToken({
+                    sessionId: session.id,
+                    roomName: `session-${session.id}`,
+                    isPublisher: Boolean(isTeacher)
+                  })
                     .then(data => setTokenData(data))
                     .catch(err => setError(err.message))
                     .finally(() => setLoading(false));

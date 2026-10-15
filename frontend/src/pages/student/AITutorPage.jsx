@@ -113,7 +113,7 @@ What concept would you like to explore today?`,
       const assistantMsg = {
         id: 'asst-' + Date.now(),
         role: 'assistant',
-        content: res.reply,
+        content: res?.reply || res?.response || '',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, assistantMsg]);

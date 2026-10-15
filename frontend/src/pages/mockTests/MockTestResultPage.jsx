@@ -32,6 +32,12 @@ export function MockTestResultPage() {
 
   useEffect(() => {
     async function loadResult() {
+      if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+        setError('Invalid examination attempt ID specified.');
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         const data = await api.getMockTestAttemptResult(attemptId);
@@ -76,6 +82,18 @@ export function MockTestResultPage() {
     );
   }
 
+  const correctCount = result.correct_count ?? result.correctCount ?? result.attempt?.correct_count ?? result.attempt?.correctCount ?? 0;
+  const incorrectCount = result.incorrect_count ?? result.incorrectCount ?? result.attempt?.incorrect_count ?? result.attempt?.incorrectCount ?? 0;
+  const unansweredCount = result.unanswered_count ?? result.unansweredCount ?? result.attempt?.unanswered_count ?? result.attempt?.unansweredCount ?? 0;
+  const totalScore = result.total_score ?? result.totalScore ?? result.attempt?.total_score ?? result.attempt?.totalScore ?? 0;
+  const maxScore = result.max_score ?? result.maxScore ?? result.attempt?.max_score ?? result.attempt?.maxScore ?? (result.test?.total_marks ?? 100);
+  const percentage = result.percentage ?? result.attempt?.percentage ?? 0;
+  const passed = result.passed ?? result.attempt?.passed ?? false;
+  const passPercentage = result.pass_percentage ?? result.passPercentage ?? result.test?.pass_percentage ?? 40;
+  const testTitle = result.test_title || result.title || result.test?.title || 'Mock Examination';
+  const subject = result.subject || result.test?.subject || 'Examination';
+  const timeSpentSeconds = result.time_spent_seconds ?? result.timeSpentSeconds ?? result.attempt?.time_spent_seconds ?? 0;
+
   const filteredQuestions = (result.questions || []).filter(q => {
     if (filterType === 'correct') return q.is_correct === true;
     if (filterType === 'incorrect') return q.is_correct === false;
@@ -83,8 +101,8 @@ export function MockTestResultPage() {
     return true;
   });
 
-  const accuracy = (result.correct_count + result.incorrect_count) > 0
-    ? Math.round((result.correct_count / (result.correct_count + result.incorrect_count)) * 100)
+  const accuracy = (correctCount + incorrectCount) > 0
+    ? Math.round((correctCount / (correctCount + incorrectCount)) * 100)
     : 0;
 
   return (
@@ -131,13 +149,13 @@ export function MockTestResultPage() {
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1.5rem' }}>
             <div>
               <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-orange-dark)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {result.subject} • Assessment Scorecard
+                {subject} • Assessment Scorecard
               </div>
               <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-navy)', margin: '0.3rem 0 0.5rem' }}>
-                {result.test_title}
+                {testTitle}
               </h1>
               <div style={{ fontSize: '0.84rem', color: 'var(--color-text-secondary)' }}>
-                Candidate: <strong>{user?.full_name}</strong> • Completed on {new Date(result.submitted_at || Date.now()).toLocaleString()}
+                Candidate: <strong>{user?.full_name}</strong> • Completed on {new Date(result.submitted_at || result.submittedAt || Date.now()).toLocaleString()}
               </div>
             </div>
 
@@ -148,19 +166,19 @@ export function MockTestResultPage() {
               alignItems: 'center',
               padding: '0.75rem 1.5rem',
               borderRadius: 'var(--radius-md)',
-              background: result.passed ? '#ECFDF5' : '#FEF2F2',
-              border: `2px solid ${result.passed ? '#10B981' : '#EF4444'}`
+              background: passed ? '#ECFDF5' : '#FEF2F2',
+              border: `2px solid ${passed ? '#10B981' : '#EF4444'}`
             }}>
               <span style={{
                 fontSize: '1.25rem',
                 fontWeight: 900,
-                color: result.passed ? '#059669' : '#DC2626',
+                color: passed ? '#059669' : '#DC2626',
                 letterSpacing: '0.05em'
               }}>
-                {result.passed ? 'PASSED' : 'NEEDS PRACTICE'}
+                {passed ? 'PASSED' : 'NEEDS PRACTICE'}
               </span>
               <span style={{ fontSize: '0.75rem', color: '#64748B' }}>
-                Pass Cutoff: {result.pass_percentage}%
+                Pass Cutoff: {passPercentage}%
               </span>
             </div>
           </div>
@@ -175,9 +193,9 @@ export function MockTestResultPage() {
             <div style={{ background: 'var(--color-bg-alt)', padding: '1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
               <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>SCORE OBTAINED</div>
               <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#2563EB', marginTop: '0.2rem' }}>
-                {result.total_score} <span style={{ fontSize: '1rem', color: '#64748B' }}>/ {result.max_score}</span>
+                {totalScore} <span style={{ fontSize: '1rem', color: '#64748B' }}>/ {maxScore}</span>
               </div>
-              <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '0.2rem' }}>{result.percentage}% Marks</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '0.2rem' }}>{percentage}% Marks</div>
             </div>
 
             <div style={{ background: 'var(--color-bg-alt)', padding: '1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
@@ -191,7 +209,7 @@ export function MockTestResultPage() {
             <div style={{ background: 'var(--color-bg-alt)', padding: '1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
               <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>TIME SPENT</div>
               <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--color-navy)', marginTop: '0.2rem' }}>
-                {Math.floor(result.time_spent_seconds / 60)}m {result.time_spent_seconds % 60}s
+                {Math.floor(timeSpentSeconds / 60)}m {timeSpentSeconds % 60}s
               </div>
               <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '0.2rem' }}>Total examination time</div>
             </div>
@@ -199,9 +217,9 @@ export function MockTestResultPage() {
             <div style={{ background: 'var(--color-bg-alt)', padding: '1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
               <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>BREAKDOWN</div>
               <div style={{ fontSize: '0.85rem', fontWeight: 700, marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                <span style={{ color: '#059669' }}>✓ {result.correct_count} Correct</span>
-                <span style={{ color: '#DC2626' }}>✗ {result.incorrect_count} Incorrect</span>
-                <span style={{ color: '#64748B' }}>○ {result.unanswered_count} Unanswered</span>
+                <span style={{ color: '#059669' }}>✓ {correctCount} Correct</span>
+                <span style={{ color: '#DC2626' }}>✗ {incorrectCount} Incorrect</span>
+                <span style={{ color: '#64748B' }}>○ {unansweredCount} Unanswered</span>
               </div>
             </div>
           </div>

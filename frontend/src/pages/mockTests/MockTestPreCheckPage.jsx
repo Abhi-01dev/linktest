@@ -28,6 +28,9 @@ export function MockTestPreCheckPage() {
   const [test, setTest] = useState(null);
   const [loading, setLoading] = useState(true);
   const [initError, setInitError] = useState(null);
+  const [joinStatus, setJoinStatus] = useState(null); // 'NONE', 'PENDING', 'APPROVED', 'REJECTED'
+  const [rejectionReason, setRejectionReason] = useState(null);
+  const [requestingJoin, setRequestingJoin] = useState(false);
 
   // Verification Checklist State
   const [cameraChecked, setCameraChecked] = useState(false);
@@ -51,12 +54,28 @@ export function MockTestPreCheckPage() {
     faceDetectionEnabled: true
   });
 
-  // Load test details
+  // Load test details & join status
+  const checkJoinStatus = async () => {
+    try {
+      const statusRes = await api.getMockTestJoinStatus(id);
+      setJoinStatus(statusRes?.status || 'NONE');
+      setRejectionReason(statusRes?.rejection_reason || null);
+      return statusRes?.status;
+    } catch (e) {
+      // If error or unauthenticated, default to NONE
+      setJoinStatus('NONE');
+      return 'NONE';
+    }
+  };
+
   useEffect(() => {
     async function fetchTest() {
       try {
-        const data = await api.getMockTestById(id);
-        setTest(data);
+        const [testData] = await Promise.all([
+          api.getMockTestById(id),
+          checkJoinStatus()
+        ]);
+        setTest(testData);
         // Quick network ping check
         const health = await api.request('/health');
         if (health) setNetworkChecked(true);
@@ -68,6 +87,33 @@ export function MockTestPreCheckPage() {
     }
     fetchTest();
   }, [id]);
+
+  // Polling for approval if status is PENDING
+  useEffect(() => {
+    if (joinStatus !== 'PENDING') return;
+
+    const interval = setInterval(async () => {
+      const status = await checkJoinStatus();
+      if (status === 'APPROVED') {
+        clearInterval(interval);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [joinStatus, id]);
+
+  const handleRequestJoin = async () => {
+    try {
+      setRequestingJoin(true);
+      await api.requestMockTestJoin(id);
+      setJoinStatus('PENDING');
+      setRejectionReason(null);
+    } catch (err) {
+      alert(err.message || 'Failed to submit join request.');
+    } finally {
+      setRequestingJoin(false);
+    }
+  };
 
   // Trigger camera start
   const handleStartCameraCheck = async () => {
@@ -96,12 +142,21 @@ export function MockTestPreCheckPage() {
     setStarting(true);
     try {
       const data = await api.startMockTestAttempt(id);
+      const attemptId = data?.attempt_id || data?.attemptId || data?.attempt?.id || data?.id;
+      if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+        throw new Error('Examination session initialization did not return a valid attempt ID.');
+      }
       // Clean up local camera before routing to runner
       stopCamera();
-      navigate(`/mock-tests/${id}/runner/${data.attempt_id}`);
+      navigate(`/mock-tests/${id}/runner/${attemptId}`);
     } catch (err) {
       console.error('Failed to launch exam:', err);
-      alert(err.message || 'Could not initialize examination attempt.');
+      if (err.code === 'MOCK_TEST_APPROVAL_REQUIRED' || err.status === 403) {
+        setJoinStatus('PENDING');
+        alert(err.message || 'Teacher approval is required before you can join this mock test.');
+      } else {
+        alert(err.message || 'Could not initialize examination attempt.');
+      }
       setStarting(false);
     }
   };
@@ -140,6 +195,92 @@ export function MockTestPreCheckPage() {
           <Link to="/mock-tests" className="btn btn-secondary" style={{ marginTop: '1rem' }}>
             Back to Mock Tests
           </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // If user is a student and approval is not granted, block pre-check screen
+  if (user?.role === 'STUDENT' && joinStatus !== 'APPROVED') {
+    return (
+      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '620px' }}>
+        <div style={{
+          background: '#FFFFFF',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--color-border)',
+          padding: '2.5rem',
+          boxShadow: 'var(--shadow-md)',
+          textAlign: 'center'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: joinStatus === 'PENDING' ? '#FEF3C7' : joinStatus === 'REJECTED' ? '#FEE2E2' : '#EFF6FF',
+            color: joinStatus === 'PENDING' ? '#D97706' : joinStatus === 'REJECTED' ? '#DC2626' : '#2563EB',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.25rem'
+          }}>
+            <ShieldCheck size={32} />
+          </div>
+
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--color-navy)', marginBottom: '0.75rem' }}>
+            {joinStatus === 'PENDING'
+              ? 'Teacher Approval Pending'
+              : joinStatus === 'REJECTED'
+              ? 'Join Request Declined'
+              : 'Teacher Approval Required'}
+          </h2>
+
+          <p style={{ color: '#64748B', fontSize: '0.95rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+            {joinStatus === 'PENDING'
+              ? 'Your request to join this examination has been sent to your instructor. As soon as the teacher approves your request, you can enter the test environment.'
+              : joinStatus === 'REJECTED'
+              ? (rejectionReason ? `Your request was declined: "${rejectionReason}"` : 'Your request was declined by the instructor. You may submit a new request if permitted.')
+              : 'Institutional policy requires your teacher or proctor to approve your admission before you can begin this examination.'}
+          </p>
+
+          {joinStatus === 'PENDING' ? (
+            <div style={{
+              background: '#FFFBEB',
+              border: '1px solid #FCD34D',
+              borderRadius: '8px',
+              padding: '0.85rem 1rem',
+              color: '#92400E',
+              fontSize: '0.86rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '1.75rem'
+            }}>
+              <span className="spinner-border spinner-border-sm" style={{ width: '1rem', height: '1rem', borderWidth: '2px' }} />
+              <span>Checking approval status in real time...</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', marginBottom: '1.75rem' }}>
+              <button
+                onClick={handleRequestJoin}
+                disabled={requestingJoin}
+                className="btn btn-primary"
+                style={{ padding: '0.6rem 1.4rem', fontWeight: 700 }}
+              >
+                {requestingJoin
+                  ? 'Submitting...'
+                  : joinStatus === 'REJECTED'
+                  ? 'Request Again'
+                  : 'Request to Join'}
+              </button>
+            </div>
+          )}
+
+          <div>
+            <Link to="/mock-tests" className="btn btn-secondary btn-sm">
+              <ArrowLeft size={14} style={{ marginRight: '0.35rem' }} />
+              Back to Mock Test Hub
+            </Link>
+          </div>
         </div>
       </div>
     );

@@ -54,17 +54,16 @@ npm run dev
 
 ---
 
-## 3. Accessing the Platform & Seed Credentials
+## 3. Administrator Access & Production Setup
 
-Open your web browser at: **`http://localhost:5173`**
+Create an administrator using the production setup procedure:
 
-You can use the **1-Click Demo Fill** buttons on the Login page (`http://localhost:5173/login`) or use the following pre-seeded credentials:
+```bash
+ADMIN_EMAIL="admin@linktest.io" ADMIN_PASSWORD="your-secure-password" npm --prefix backend run create-admin
+```
 
-| Role | Email | Password | Primary Dashboard |
-| :--- | :--- | :--- | :--- |
-| **Student** | `student@linktest.io` | `Student123!` | `http://localhost:5173/student/dashboard` |
-| **Teacher** | `teacher@linktest.io` | `Teacher123!` | `http://localhost:5173/teacher/dashboard` |
-| **Admin** | `admin@linktest.io` | `Admin123!` | `http://localhost:5173/admin/dashboard` |
+Once provisioned, sign in to the platform at **`http://localhost:5173/login`** using your configured administrator credentials.
+
 
 ---
 

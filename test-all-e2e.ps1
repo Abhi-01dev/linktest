@@ -29,7 +29,7 @@ function Test-Step {
 # 1. Health & Diagnostics
 Test-Step "1. Health Endpoint" {
     $res = Invoke-RestMethod -Uri "$baseUrl/health" -Method Get
-    if ($res.success -ne $true -or $res.data.status -ne "UP") { throw "Health status not UP" }
+    if ($res.success -ne $true -or ($res.data.status -ne "UP" -and $res.data.status -ne "operational")) { throw "Health status not UP/operational" }
     "Status: $($res.data.status), Platform: $($res.data.platform)"
 }
 
@@ -225,9 +225,16 @@ Test-Step "15. Student Exam Flow (Create Test, Publish, Attempt, Autosave, Submi
     $pubBody = @{ status = "published" } | ConvertTo-Json
     $null = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testId/publish" -Method Post -Body $pubBody -ContentType "application/json" -Headers $tHeaders
     
+    # 2b. Student submits join request
+    $joinReq = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testId/join-request" -Method Post -Headers $sHeaders
+    $reqId = $joinReq.data.id
+
+    # 2c. Teacher approves join request
+    $null = Invoke-RestMethod -Uri "$baseUrl/teacher/mock-tests/join-requests/$reqId/approve" -Method Post -Headers $tHeaders
+    
     # 3. Student starts attempt
     $attemptRes = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testId/attempts" -Method Post -Headers $sHeaders
-    $attemptId = $attemptRes.data.attempt.id
+    $attemptId = if ($attemptRes.data.attempt_id) { $attemptRes.data.attempt_id } else { $attemptRes.data.attempt.id }
     
     # 4. Student autosaves response
     $qId = $attemptRes.data.questions[0].id
@@ -248,7 +255,10 @@ Test-Step "15. Student Exam Flow (Create Test, Publish, Attempt, Autosave, Submi
     # 7. Clean up test
     $null = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testId" -Method Delete -Headers $tHeaders
     
-    "Attempt ID: $attemptId, Status: $($submitRes.data.attempt.status), Score: $($resultRes.data.attempt.total_score)/$($resultRes.data.attempt.max_score)"
+    $st = if ($submitRes.data.attempt) { $submitRes.data.attempt.status } else { $submitRes.data.status }
+    $sc = if ($resultRes.data.attempt) { $resultRes.data.attempt.total_score } else { $resultRes.data.total_score }
+    $ms = if ($resultRes.data.attempt) { $resultRes.data.attempt.max_score } else { $resultRes.data.max_score }
+    "Attempt ID: $attemptId, Status: $st, Score: $sc/$ms"
 }
 
 # 7. Audit & Security Logs, Reports Analysis

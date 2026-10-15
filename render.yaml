@@ -2,7 +2,7 @@ services:
   - type: web
     name: linktest-backend
     env: docker
-    rootDir: backend-java
+    rootDir: backend
     dockerfilePath: Dockerfile
     envVars:
       - key: NODE_ENV

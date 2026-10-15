@@ -163,12 +163,16 @@ export function AdminBatchesPage() {
     }
 
     setSubmitting(true);
+    const payload = {
+      ...formData,
+      course_id: formData.course_id && formData.course_id.trim() !== '' ? formData.course_id.trim() : null
+    };
     try {
       if (editingBatch) {
-        await api.updateBatch(editingBatch.id, formData);
+        await api.updateBatch(editingBatch.id, payload);
         showToast('Batch updated successfully', 'success');
       } else {
-        await api.createBatch(formData);
+        await api.createBatch(payload);
         showToast('Batch created successfully', 'success');
       }
       setShowCreateModal(false);

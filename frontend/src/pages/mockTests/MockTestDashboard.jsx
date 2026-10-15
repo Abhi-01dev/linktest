@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import { api } from '../../services/api';
 import { StudentNav } from '../../components/student/StudentNav';
 import {
@@ -22,38 +23,88 @@ import {
   Layers,
   ChevronRight,
   Eye,
-  Camera
+  Camera,
+  AlertCircle,
+  Hourglass,
+  Send,
+  X
 } from 'lucide-react';
 
 export function MockTestDashboard() {
   const { user, isStudent } = useAuth();
+  const { showToast } = useToast();
   const navigate = useNavigate();
 
   const [tests, setTests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [requestingId, setRequestingId] = useState(null);
+  const [bannerMessage, setBannerMessage] = useState(null);
 
   // Filter state
   const [activeTab, setActiveTab] = useState('all'); // 'all', 'mock_exam', 'practice', 'interview_prep', 'completed'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState('all');
 
-  useEffect(() => {
-    async function loadTests() {
-      setLoading(false);
-      try {
-        setLoading(true);
-        const data = await api.getMockTests();
-        setTests(data || []);
-      } catch (err) {
-        console.error('Failed to load mock tests:', err);
+  const fetchMockTests = async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    try {
+      const data = await api.getMockTests();
+      setTests(data || []);
+    } catch (err) {
+      console.error('Failed to load mock tests:', err);
+      if (showLoading) {
         setError('Unable to load examinations. Please check backend connection.');
-      } finally {
-        setLoading(false);
       }
+    } finally {
+      if (showLoading) setLoading(false);
     }
-    loadTests();
+  };
+
+  useEffect(() => {
+    fetchMockTests(true);
   }, []);
+
+  // Poll for join request approval updates when any test is PENDING
+  useEffect(() => {
+    const hasPending = tests.some(t => t.join_request_status === 'PENDING');
+    if (!hasPending) return;
+
+    const interval = setInterval(() => {
+      fetchMockTests(false);
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [tests]);
+
+  const handleRequestJoin = async (testId) => {
+    if (!testId) return;
+    try {
+      setRequestingId(testId);
+      const res = await api.requestMockTestJoin(testId);
+      const msg = 'Join request sent to your teacher. Please wait for approval.';
+      showToast(msg, 'success');
+      setBannerMessage(msg);
+
+      // Optimistic update
+      setTests(prev => prev.map(t => {
+        if (t.id === testId) {
+          return {
+            ...t,
+            join_request_status: 'PENDING',
+            join_request_id: res?.request?.id || res?.id,
+            rejection_reason: null
+          };
+        }
+        return t;
+      }));
+    } catch (err) {
+      console.error('Join request failed:', err);
+      showToast(err.message || 'Failed to submit join request.', 'error');
+    } finally {
+      setRequestingId(null);
+    }
+  };
 
   // Filtered tests
   const filteredTests = tests.filter(test => {
@@ -147,6 +198,35 @@ export function MockTestDashboard() {
             </p>
           </div>
         </div>
+
+        {/* Join Request Info Banner */}
+        {bannerMessage && (
+          <div style={{
+            background: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            color: '#1E40AF',
+            padding: '0.85rem 1.25rem',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            boxShadow: 'var(--shadow-sm)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <Clock size={18} style={{ color: '#2563EB', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{bannerMessage}</span>
+            </div>
+            <button
+              onClick={() => setBannerMessage(null)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748B', display: 'flex', alignItems: 'center' }}
+              aria-label="Dismiss banner"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Filters and Search Bar */}
         <div style={{
@@ -269,8 +349,17 @@ export function MockTestDashboard() {
             gap: '1.5rem'
           }}>
             {filteredTests.map((test) => {
-              const isProctored = test.proctoring_config?.webcam_required;
-              const hasActiveAttempt = Boolean(test.active_attempt_id);
+              const isProctored = (test.proctoring_config?.webcam_required ?? test.proctoringConfig?.webcam_required);
+              const rawAttemptId = test.active_attempt_id || test.activeAttemptId;
+              const hasActiveAttempt = Boolean(rawAttemptId && rawAttemptId !== 'undefined' && rawAttemptId !== 'null' && String(rawAttemptId).trim());
+              const activeAttemptId = hasActiveAttempt ? rawAttemptId : null;
+              const durationMinutes = test.duration_minutes ?? test.durationMinutes ?? 60;
+              const totalMarks = test.total_marks ?? test.totalMarks ?? 100;
+              const maxAttempts = test.max_attempts ?? test.maxAttempts ?? 3;
+              const attemptsUsed = test.attempts_used ?? test.attemptsUsed ?? 0;
+              const canAttempt = test.can_attempt !== undefined
+                ? Boolean(test.can_attempt)
+                : (test.status === 'published' && (!maxAttempts || attemptsUsed < maxAttempts));
 
               return (
                 <div
@@ -336,19 +425,19 @@ export function MockTestDashboard() {
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         <Clock size={15} style={{ color: 'var(--color-orange)' }} />
-                        <span><strong>{test.duration_minutes}</strong> mins</span>
+                        <span><strong>{durationMinutes}</strong> mins</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         <Award size={15} style={{ color: '#2563EB' }} />
-                        <span><strong>{test.total_marks}</strong> Marks</span>
+                        <span><strong>{totalMarks}</strong> Marks</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                        <AlertTriangle size={15} style={{ color: test.negative_marking ? '#DC2626' : '#10B981' }} />
-                        <span>{test.negative_marking ? `-${test.negative_mark_penalty} Neg. Mark` : 'No Negative Mark'}</span>
+                        <AlertTriangle size={15} style={{ color: (test.negative_marking ?? test.negativeMarking) ? '#DC2626' : '#10B981' }} />
+                        <span>{(test.negative_marking ?? test.negativeMarking) ? `-${test.negative_mark_penalty ?? test.negativeMarkPenalty ?? 1} Neg. Mark` : 'No Negative Mark'}</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         <RotateCcw size={15} style={{ color: '#7C3AED' }} />
-                        <span>Max <strong>{test.max_attempts}</strong> Attempts</span>
+                        <span>Max <strong>{maxAttempts}</strong> Attempts</span>
                       </div>
                     </div>
 
@@ -386,7 +475,7 @@ export function MockTestDashboard() {
                         </div>
                       )}
 
-                      {test.proctoring_config?.fullscreen_required && (
+                      {(test.proctoring_config?.fullscreen_required ?? test.proctoringConfig?.fullscreen_required) && (
                         <div style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -405,6 +494,25 @@ export function MockTestDashboard() {
                     </div>
                   </div>
 
+                  {/* Rejection Notice Banner if rejected */}
+                  {test.join_request_status === 'REJECTED' && (
+                    <div style={{
+                      margin: '0.4rem 1.25rem 0',
+                      padding: '0.5rem 0.75rem',
+                      background: '#FEF2F2',
+                      border: '1px solid #FECACA',
+                      borderRadius: '6px',
+                      color: '#DC2626',
+                      fontSize: '0.78rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem'
+                    }}>
+                      <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                      <span><strong>Teacher Rejection:</strong> {test.rejection_reason || 'Request was declined. You may request again when eligible.'}</span>
+                    </div>
+                  )}
+
                   {/* Card Footer Actions */}
                   <div style={{
                     padding: '0.85rem 1.25rem',
@@ -416,9 +524,9 @@ export function MockTestDashboard() {
                   }}>
                     {/* Status / History Pill */}
                     <div>
-                      {test.attempts_used > 0 ? (
-                        <div style={{ fontSize: '0.78rem', color: test.has_passed ? '#059669' : '#DC2626', fontWeight: 700 }}>
-                          Best: {test.best_score}/{test.total_marks} ({test.best_percentage}%)
+                      {attemptsUsed > 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: (test.has_passed ?? test.hasPassed) ? '#059669' : '#DC2626', fontWeight: 700 }}>
+                          Best: {test.best_score ?? test.bestScore}/{totalMarks} ({test.best_percentage ?? test.bestPercentage}%)
                         </div>
                       ) : (
                         <div style={{ fontSize: '0.76rem', color: '#64748B' }}>
@@ -431,7 +539,7 @@ export function MockTestDashboard() {
                     <div>
                       {hasActiveAttempt ? (
                         <Link
-                          to={`/mock-tests/${test.id}/runner/${test.active_attempt_id}`}
+                          to={`/mock-tests/${test.id}/runner/${activeAttemptId}`}
                           className="btn btn-warning"
                           style={{
                             padding: '0.45rem 0.95rem',
@@ -445,23 +553,87 @@ export function MockTestDashboard() {
                           <Play size={14} />
                           <span>Resume Exam</span>
                         </Link>
-                      ) : test.can_attempt ? (
-                        <Link
-                          to={`/mock-tests/${test.id}/check`}
-                          className="btn btn-primary"
-                          style={{
-                            padding: '0.45rem 0.95rem',
-                            fontSize: '0.82rem',
-                            fontWeight: 700,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.35rem'
-                          }}
-                        >
-                          <Play size={14} />
-                          <span>Start Exam</span>
-                        </Link>
-                      ) : test.attempts_used > 0 ? (
+                      ) : canAttempt ? (
+                        test.join_request_status === 'APPROVED' ? (
+                          <Link
+                            to={`/mock-tests/${test.id}/check`}
+                            className="btn btn-primary"
+                            style={{
+                              padding: '0.45rem 0.95rem',
+                              fontSize: '0.82rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              background: '#16A34A',
+                              borderColor: '#16A34A'
+                            }}
+                          >
+                            <Play size={14} />
+                            <span>Start Mock Test</span>
+                          </Link>
+                        ) : test.join_request_status === 'PENDING' ? (
+                          <button
+                            disabled
+                            className="btn"
+                            style={{
+                              padding: '0.45rem 0.95rem',
+                              fontSize: '0.82rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              background: '#FEF3C7',
+                              color: '#B45309',
+                              border: '1px solid #FCD34D',
+                              cursor: 'not-allowed',
+                              opacity: 0.95
+                            }}
+                          >
+                            <Hourglass size={14} />
+                            <span>Waiting for Teacher Approval</span>
+                          </button>
+                        ) : test.join_request_status === 'REJECTED' ? (
+                          <button
+                            onClick={() => handleRequestJoin(test.id)}
+                            disabled={requestingId === test.id}
+                            className="btn btn-outline"
+                            style={{
+                              padding: '0.45rem 0.95rem',
+                              fontSize: '0.82rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              borderColor: '#DC2626',
+                              color: '#DC2626',
+                              background: '#FFF5F5'
+                            }}
+                          >
+                            <Send size={14} />
+                            <span>{requestingId === test.id ? 'Sending...' : 'Request Again'}</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleRequestJoin(test.id)}
+                            disabled={requestingId === test.id}
+                            className="btn btn-primary"
+                            style={{
+                              padding: '0.45rem 0.95rem',
+                              fontSize: '0.82rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              background: '#2563EB',
+                              borderColor: '#2563EB'
+                            }}
+                          >
+                            <Send size={14} />
+                            <span>{requestingId === test.id ? 'Sending Request...' : 'Request to Join'}</span>
+                          </button>
+                        )
+                      ) : attemptsUsed > 0 ? (
                         <Link
                           to={`/mock-tests/history?test_id=${test.id}`}
                           className="btn btn-secondary"

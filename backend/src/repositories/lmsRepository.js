@@ -1,0 +1,1077 @@
+import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
+import crypto from 'crypto';
+
+export const lmsRepository = {
+  // ============================================================
+  // CLASSES
+  // ============================================================
+  async getClasses() {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT c.*, s.name as session_name,
+                COUNT(DISTINCT sce.student_id)::int as student_count,
+                COUNT(DISTINCT b.id)::int as batch_count
+         FROM classes c
+         LEFT JOIN academic_sessions s ON c.academic_session_id = s.id
+         LEFT JOIN batches b ON b.class_id = c.id
+         LEFT JOIN student_class_enrollments sce ON sce.class_id = c.id
+         GROUP BY c.id, s.name ORDER BY c.created_at DESC`
+      );
+      return res.rows;
+    }
+    return memoryStore.classes.map(cls => {
+      const batches = memoryStore.batches.filter(b => b.class_id === cls.id);
+      const students = memoryStore.student_class_enrollments.filter(e => e.class_id === cls.id);
+      const session = memoryStore.academic_sessions.find(s => s.id === cls.academic_session_id);
+      return { ...cls, session_name: session?.name, student_count: students.length, batch_count: batches.length };
+    });
+  },
+
+  async getClassById(id) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM classes WHERE id = $1', [id]);
+      return res.rows[0] || null;
+    }
+    return memoryStore.classes.find(c => c.id === id) || null;
+  },
+
+  async createClass({ name, description, academicSessionId }) {
+    const id = crypto.randomUUID();
+    const created_at = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO classes (id, name, description, academic_session_id, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [id, name, description, academicSessionId, created_at]
+      );
+      return res.rows[0];
+    }
+    const cls = { id, name, description, academic_session_id: academicSessionId, created_at };
+    memoryStore.classes.push(cls);
+    return cls;
+  },
+
+  async updateClass(id, { name, description, academicSessionId }) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `UPDATE classes SET name=COALESCE($1,name), description=COALESCE($2,description), academic_session_id=COALESCE($3,academic_session_id) WHERE id=$4 RETURNING *`,
+        [name, description, academicSessionId, id]
+      );
+      return res.rows[0] || null;
+    }
+    const cls = memoryStore.classes.find(c => c.id === id);
+    if (!cls) return null;
+    if (name) cls.name = name;
+    if (description !== undefined) cls.description = description;
+    if (academicSessionId) cls.academic_session_id = academicSessionId;
+    return cls;
+  },
+
+  // ============================================================
+  // BATCHES
+  // ============================================================
+  async getBatchesByClass(classId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT b.*, u.full_name as class_teacher_name, COUNT(sce.student_id)::int as student_count
+         FROM batches b
+         LEFT JOIN users u ON b.class_teacher_id = u.id
+         LEFT JOIN student_class_enrollments sce ON sce.batch_id = b.id
+         WHERE b.class_id = $1 GROUP BY b.id, u.full_name ORDER BY b.name`,
+        [classId]
+      );
+      return res.rows;
+    }
+    return memoryStore.batches
+      .filter(b => b.class_id === classId)
+      .map(b => {
+        const teacher = memoryStore.users.find(u => u.id === b.class_teacher_id);
+        const students = memoryStore.student_class_enrollments.filter(e => e.batch_id === b.id);
+        return { ...b, class_teacher_name: teacher?.full_name, student_count: students.length };
+      });
+  },
+
+  async createBatch({ classId, name, capacity, classTeacherId }) {
+    const id = crypto.randomUUID();
+    const created_at = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO batches (id, class_id, name, capacity, class_teacher_id, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [id, classId, name, capacity || 50, classTeacherId || null, created_at]
+      );
+      return res.rows[0];
+    }
+    const batch = { id, class_id: classId, name, capacity: capacity || 50, class_teacher_id: classTeacherId || null, created_at };
+    memoryStore.batches.push(batch);
+    return batch;
+  },
+
+  // ============================================================
+  // SUBJECTS
+  // ============================================================
+  async getSubjects() {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM subjects ORDER BY name');
+      return res.rows;
+    }
+    return [...memoryStore.subjects].sort((a, b) => a.name.localeCompare(b.name));
+  },
+
+  async createSubject({ name, code, description }) {
+    const id = crypto.randomUUID();
+    const created_at = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO subjects (id, name, code, description, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [id, name, code || null, description || null, created_at]
+      );
+      return res.rows[0];
+    }
+    const subject = { id, name, code: code || null, description: description || null, created_at };
+    memoryStore.subjects.push(subject);
+    return subject;
+  },
+
+  // ============================================================
+  // ACADEMIC SESSIONS
+  // ============================================================
+  async getAcademicSessions() {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM academic_sessions ORDER BY start_date DESC');
+      return res.rows;
+    }
+    return [...memoryStore.academic_sessions].sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+  },
+
+  // ============================================================
+  // TEACHER ASSIGNMENTS
+  // ============================================================
+  async getTeacherAssignments(teacherId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT ta.*, c.name as class_name, b.name as batch_name, s.name as subject_name
+         FROM teacher_assignments ta
+         JOIN classes c ON ta.class_id = c.id
+         LEFT JOIN batches b ON ta.batch_id = b.id
+         JOIN subjects s ON ta.subject_id = s.id
+         WHERE ta.teacher_id = $1`,
+        [teacherId]
+      );
+      return res.rows;
+    }
+    return memoryStore.teacher_assignments
+      .filter(ta => ta.teacher_id === teacherId)
+      .map(ta => {
+        const cls = memoryStore.classes.find(c => c.id === ta.class_id);
+        const batch = memoryStore.batches.find(b => b.id === ta.batch_id);
+        const subject = memoryStore.subjects.find(s => s.id === ta.subject_id);
+        return { ...ta, class_name: cls?.name, batch_name: batch?.name, subject_name: subject?.name };
+      });
+  },
+
+  async assignTeacher({ teacherId, classId, batchId, subjectId }) {
+    // Check if assignment already exists
+    if (isPostgresConnected && pool) {
+      const exists = await pool.query(
+        `SELECT id FROM teacher_assignments WHERE teacher_id=$1 AND class_id=$2 AND subject_id=$3 AND (batch_id=$4 OR (batch_id IS NULL AND $4 IS NULL))`,
+        [teacherId, classId, subjectId, batchId || null]
+      );
+      if (exists.rows.length > 0) return exists.rows[0];
+      const id = crypto.randomUUID();
+      const res = await pool.query(
+        `INSERT INTO teacher_assignments (id, teacher_id, class_id, batch_id, subject_id, assigned_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [id, teacherId, classId, batchId || null, subjectId, new Date().toISOString()]
+      );
+      return res.rows[0];
+    }
+    const existing = memoryStore.teacher_assignments.find(
+      ta => ta.teacher_id === teacherId && ta.class_id === classId && ta.subject_id === subjectId && ta.batch_id === (batchId || null)
+    );
+    if (existing) return existing;
+    const ta = { id: crypto.randomUUID(), teacher_id: teacherId, class_id: classId, batch_id: batchId || null, subject_id: subjectId, assigned_at: new Date().toISOString() };
+    memoryStore.teacher_assignments.push(ta);
+    return ta;
+  },
+
+  async removeTeacherAssignment(assignmentId) {
+    if (isPostgresConnected && pool) {
+      await pool.query('DELETE FROM teacher_assignments WHERE id = $1', [assignmentId]);
+      return true;
+    }
+    const idx = memoryStore.teacher_assignments.findIndex(ta => ta.id === assignmentId);
+    if (idx === -1) return false;
+    memoryStore.teacher_assignments.splice(idx, 1);
+    return true;
+  },
+
+  // ============================================================
+  // STUDENT CLASS ENROLLMENTS
+  // ============================================================
+  async enrollStudentInClass({ studentId, classId, batchId }) {
+    if (isPostgresConnected && pool) {
+      const exists = await pool.query(
+        'SELECT id FROM student_class_enrollments WHERE student_id=$1 AND class_id=$2',
+        [studentId, classId]
+      );
+      if (exists.rows.length > 0) return exists.rows[0];
+      const id = crypto.randomUUID();
+      const res = await pool.query(
+        `INSERT INTO student_class_enrollments (id, student_id, class_id, batch_id, enrolled_at) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [id, studentId, classId, batchId || null, new Date().toISOString()]
+      );
+      return res.rows[0];
+    }
+    const existing = memoryStore.student_class_enrollments.find(e => e.student_id === studentId && e.class_id === classId);
+    if (existing) return existing;
+    const enrollment = { id: crypto.randomUUID(), student_id: studentId, class_id: classId, batch_id: batchId || null, enrolled_at: new Date().toISOString() };
+    memoryStore.student_class_enrollments.push(enrollment);
+    return enrollment;
+  },
+
+  async getStudentsInClass(classId, batchId = null) {
+    if (isPostgresConnected && pool) {
+      let query = `SELECT u.id, u.full_name, u.email, u.status, u.last_login_at,
+                          sp.enrollment_number, sce.batch_id, sce.enrolled_at, b.name as batch_name
+                   FROM student_class_enrollments sce
+                   JOIN users u ON sce.student_id = u.id
+                   LEFT JOIN student_profiles sp ON sp.user_id = u.id
+                   LEFT JOIN batches b ON sce.batch_id = b.id
+                   WHERE sce.class_id = $1`;
+      const params = [classId];
+      if (batchId) { params.push(batchId); query += ` AND sce.batch_id = $2`; }
+      const res = await pool.query(query + ' ORDER BY u.full_name', params);
+      return res.rows;
+    }
+    let enrollments = memoryStore.student_class_enrollments.filter(e => e.class_id === classId);
+    if (batchId) enrollments = enrollments.filter(e => e.batch_id === batchId);
+    return enrollments.map(e => {
+      const user = memoryStore.users.find(u => u.id === e.student_id);
+      const profile = memoryStore.student_profiles.find(p => p.user_id === e.student_id);
+      const batch = memoryStore.batches.find(b => b.id === e.batch_id);
+      if (!user) return null;
+      const { password_hash, ...safeUser } = user;
+      return { ...safeUser, enrollment_number: profile?.enrollment_number, batch_id: e.batch_id, enrolled_at: e.enrolled_at, batch_name: batch?.name };
+    }).filter(Boolean);
+  },
+
+  async getClassesForStudent(studentId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT c.*, b.name as batch_name, sce.batch_id FROM student_class_enrollments sce
+         JOIN classes c ON sce.class_id = c.id
+         LEFT JOIN batches b ON sce.batch_id = b.id
+         WHERE sce.student_id = $1`,
+        [studentId]
+      );
+      return res.rows;
+    }
+    return memoryStore.student_class_enrollments
+      .filter(e => e.student_id === studentId)
+      .map(e => {
+        const cls = memoryStore.classes.find(c => c.id === e.class_id);
+        const batch = memoryStore.batches.find(b => b.id === e.batch_id);
+        return cls ? { ...cls, batch_id: e.batch_id, batch_name: batch?.name } : null;
+      }).filter(Boolean);
+  },
+
+  // ============================================================
+  // TIMETABLE
+  // ============================================================
+  async getTimetable({ classId, batchId, teacherId, dayOfWeek } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (classId) { params.push(classId); where += ` AND te.class_id = $${params.length}`; }
+      if (batchId) { params.push(batchId); where += ` AND te.batch_id = $${params.length}`; }
+      if (teacherId) { params.push(teacherId); where += ` AND te.teacher_id = $${params.length}`; }
+      if (dayOfWeek !== undefined) { params.push(dayOfWeek); where += ` AND te.day_of_week = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT te.*, c.name as class_name, b.name as batch_name, s.name as subject_name, u.full_name as teacher_name
+         FROM timetable_entries te
+         JOIN classes c ON te.class_id = c.id
+         LEFT JOIN batches b ON te.batch_id = b.id
+         JOIN subjects s ON te.subject_id = s.id
+         JOIN users u ON te.teacher_id = u.id
+         ${where} ORDER BY te.day_of_week, te.start_time`,
+        params
+      );
+      return res.rows;
+    }
+    let entries = [...memoryStore.timetable_entries];
+    if (classId) entries = entries.filter(e => e.class_id === classId);
+    if (batchId) entries = entries.filter(e => e.batch_id === batchId);
+    if (teacherId) entries = entries.filter(e => e.teacher_id === teacherId);
+    if (dayOfWeek !== undefined) entries = entries.filter(e => e.day_of_week === dayOfWeek);
+    return entries.map(te => {
+      const cls = memoryStore.classes.find(c => c.id === te.class_id);
+      const batch = memoryStore.batches.find(b => b.id === te.batch_id);
+      const subject = memoryStore.subjects.find(s => s.id === te.subject_id);
+      const teacher = memoryStore.users.find(u => u.id === te.teacher_id);
+      return { ...te, class_name: cls?.name, batch_name: batch?.name, subject_name: subject?.name, teacher_name: teacher?.full_name };
+    }).sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time));
+  },
+
+  async createTimetableEntry({ classId, batchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room, academicSessionId }) {
+    const id = crypto.randomUUID();
+    const created_at = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO timetable_entries (id, class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [id, classId, batchId || null, subjectId, teacherId, dayOfWeek, startTime, endTime, room || null, academicSessionId || null, created_at]
+      );
+      return res.rows[0];
+    }
+    const entry = { id, class_id: classId, batch_id: batchId || null, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: room || null, academic_session_id: academicSessionId || null, created_at };
+    memoryStore.timetable_entries.push(entry);
+    return entry;
+  },
+
+  async deleteTimetableEntry(id) {
+    if (isPostgresConnected && pool) {
+      await pool.query('DELETE FROM timetable_entries WHERE id = $1', [id]);
+      return true;
+    }
+    const idx = memoryStore.timetable_entries.findIndex(e => e.id === id);
+    if (idx === -1) return false;
+    memoryStore.timetable_entries.splice(idx, 1);
+    return true;
+  },
+
+  // ============================================================
+  // ATTENDANCE
+  // ============================================================
+  async markAttendance(records) {
+    // records: [{ studentId, classId, batchId, subjectId, date, status, markedBy }]
+    const results = [];
+    for (const r of records) {
+      const id = crypto.randomUUID();
+      const created_at = new Date().toISOString();
+      if (isPostgresConnected && pool) {
+        const res = await pool.query(
+          `INSERT INTO attendance_records (id, student_id, class_id, batch_id, subject_id, date, status, marked_by, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (student_id, class_id, subject_id, date) DO UPDATE SET status = EXCLUDED.status, marked_by = EXCLUDED.marked_by
+           RETURNING *`,
+          [id, r.studentId, r.classId, r.batchId || null, r.subjectId || null, r.date, r.status, r.markedBy, created_at]
+        );
+        results.push(res.rows[0]);
+      } else {
+        const existing = memoryStore.attendance_records.find(
+          a => a.student_id === r.studentId && a.class_id === r.classId && a.date === r.date && (a.subject_id === r.subjectId || (!a.subject_id && !r.subjectId))
+        );
+        if (existing) {
+          existing.status = r.status;
+          existing.marked_by = r.markedBy;
+          results.push(existing);
+        } else {
+          const record = { id, student_id: r.studentId, class_id: r.classId, batch_id: r.batchId || null, subject_id: r.subjectId || null, date: r.date, status: r.status, marked_by: r.markedBy, correction_reason: null, corrected_at: null, corrected_by: null, created_at };
+          memoryStore.attendance_records.push(record);
+          results.push(record);
+        }
+      }
+    }
+    return results;
+  },
+
+  async getAttendance({ studentId, classId, batchId, subjectId, date, fromDate, toDate } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (studentId) { params.push(studentId); where += ` AND ar.student_id = $${params.length}`; }
+      if (classId) { params.push(classId); where += ` AND ar.class_id = $${params.length}`; }
+      if (subjectId) { params.push(subjectId); where += ` AND ar.subject_id = $${params.length}`; }
+      if (date) { params.push(date); where += ` AND ar.date = $${params.length}`; }
+      if (fromDate) { params.push(fromDate); where += ` AND ar.date >= $${params.length}`; }
+      if (toDate) { params.push(toDate); where += ` AND ar.date <= $${params.length}`; }
+      const res = await pool.query(
+        `SELECT ar.*, u.full_name as student_name, s.name as subject_name
+         FROM attendance_records ar
+         JOIN users u ON ar.student_id = u.id
+         LEFT JOIN subjects s ON ar.subject_id = s.id
+         ${where} ORDER BY ar.date DESC, u.full_name`,
+        params
+      );
+      return res.rows;
+    }
+    let records = [...memoryStore.attendance_records];
+    if (studentId) records = records.filter(r => r.student_id === studentId);
+    if (classId) records = records.filter(r => r.class_id === classId);
+    if (subjectId) records = records.filter(r => r.subject_id === subjectId);
+    if (date) records = records.filter(r => r.date === date);
+    if (fromDate) records = records.filter(r => r.date >= fromDate);
+    if (toDate) records = records.filter(r => r.date <= toDate);
+    return records.map(r => {
+      const user = memoryStore.users.find(u => u.id === r.student_id);
+      const subject = memoryStore.subjects.find(s => s.id === r.subject_id);
+      return { ...r, student_name: user?.full_name, subject_name: subject?.name };
+    }).sort((a, b) => b.date.localeCompare(a.date));
+  },
+
+  // ============================================================
+  // ASSIGNMENTS
+  // ============================================================
+  async getAssignments({ classId, batchId, teacherId, status, studentId } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (classId) { params.push(classId); where += ` AND a.class_id = $${params.length}`; }
+      if (teacherId) { params.push(teacherId); where += ` AND a.teacher_id = $${params.length}`; }
+      if (status) { params.push(status); where += ` AND a.status = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT a.*, s.name as subject_name, c.name as class_name, u.full_name as teacher_name
+         FROM assignments a
+         LEFT JOIN subjects s ON a.subject_id = s.id
+         JOIN classes c ON a.class_id = c.id
+         JOIN users u ON a.teacher_id = u.id
+         ${where} ORDER BY a.due_date ASC`,
+        params
+      );
+      return res.rows;
+    }
+    let assignments = [...memoryStore.assignments];
+    if (classId) assignments = assignments.filter(a => a.class_id === classId);
+    if (teacherId) assignments = assignments.filter(a => a.teacher_id === teacherId);
+    if (status) assignments = assignments.filter(a => a.status === status);
+    // For students: only show published assignments in their classes
+    if (studentId) {
+      const enrollments = memoryStore.student_class_enrollments.filter(e => e.student_id === studentId);
+      const classIds = enrollments.map(e => e.class_id);
+      assignments = assignments.filter(a => classIds.includes(a.class_id) && a.status === 'published');
+    }
+    return assignments.map(a => {
+      const subject = memoryStore.subjects.find(s => s.id === a.subject_id);
+      const cls = memoryStore.classes.find(c => c.id === a.class_id);
+      const teacher = memoryStore.users.find(u => u.id === a.teacher_id);
+      return { ...a, subject_name: subject?.name, class_name: cls?.name, teacher_name: teacher?.full_name };
+    }).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+  },
+
+  async createAssignment({ title, instructions, subjectId, classId, batchId, teacherId, issueDate, dueDate, maxMarks, status }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO assignments (id, title, instructions, subject_id, class_id, batch_id, teacher_id, issue_date, due_date, max_marks, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING *`,
+        [id, title, instructions, subjectId || null, classId, batchId || null, teacherId, issueDate, dueDate, maxMarks || 100, status || 'draft', now]
+      );
+      return res.rows[0];
+    }
+    const assignment = { id, title, instructions, subject_id: subjectId || null, class_id: classId, batch_id: batchId || null, teacher_id: teacherId, issue_date: issueDate, due_date: dueDate, max_marks: maxMarks || 100, status: status || 'draft', created_at: now, updated_at: now };
+    memoryStore.assignments.push(assignment);
+    return assignment;
+  },
+
+  async updateAssignment(id, updates) {
+    if (isPostgresConnected && pool) {
+      const fields = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE assignments SET ${fields}, updated_at = NOW() WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const assignment = memoryStore.assignments.find(a => a.id === id);
+    if (!assignment) return null;
+    Object.assign(assignment, updates, { updated_at: new Date().toISOString() });
+    return assignment;
+  },
+
+  // ============================================================
+  // ASSIGNMENT SUBMISSIONS
+  // ============================================================
+  async submitAssignment({ assignmentId, studentId, content, filePath, fileName }) {
+    const existing = await this.getSubmission(assignmentId, studentId);
+    const id = existing?.id || crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO assignment_submissions (id, assignment_id, student_id, content, file_path, file_name, submitted_at, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'submitted')
+         ON CONFLICT (assignment_id, student_id) DO UPDATE
+         SET content = EXCLUDED.content, file_path = EXCLUDED.file_path, file_name = EXCLUDED.file_name, submitted_at = EXCLUDED.submitted_at
+         RETURNING *`,
+        [id, assignmentId, studentId, content || null, filePath || null, fileName || null, now]
+      );
+      return res.rows[0];
+    }
+    if (existing) {
+      existing.content = content || null;
+      existing.file_path = filePath || null;
+      existing.file_name = fileName || null;
+      existing.submitted_at = now;
+      return existing;
+    }
+    const submission = { id, assignment_id: assignmentId, student_id: studentId, content: content || null, file_path: filePath || null, file_name: fileName || null, submitted_at: now, marks_obtained: null, feedback: null, graded_by: null, graded_at: null, status: 'submitted' };
+    memoryStore.assignment_submissions.push(submission);
+    return submission;
+  },
+
+  async getSubmission(assignmentId, studentId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM assignment_submissions WHERE assignment_id=$1 AND student_id=$2', [assignmentId, studentId]);
+      return res.rows[0] || null;
+    }
+    return memoryStore.assignment_submissions.find(s => s.assignment_id === assignmentId && s.student_id === studentId) || null;
+  },
+
+  async getSubmissionsForAssignment(assignmentId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT s.*, u.full_name as student_name, u.email as student_email, sp.enrollment_number
+         FROM assignment_submissions s
+         JOIN users u ON s.student_id = u.id
+         LEFT JOIN student_profiles sp ON sp.user_id = u.id
+         WHERE s.assignment_id = $1 ORDER BY s.submitted_at DESC`,
+        [assignmentId]
+      );
+      return res.rows;
+    }
+    return memoryStore.assignment_submissions
+      .filter(s => s.assignment_id === assignmentId)
+      .map(s => {
+        const user = memoryStore.users.find(u => u.id === s.student_id);
+        const profile = memoryStore.student_profiles.find(p => p.user_id === s.student_id);
+        return { ...s, student_name: user?.full_name, student_email: user?.email, enrollment_number: profile?.enrollment_number };
+      });
+  },
+
+  async gradeSubmission(submissionId, { marksObtained, feedback, gradedBy }) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `UPDATE assignment_submissions SET marks_obtained=$1, feedback=$2, graded_by=$3, graded_at=NOW(), status='graded' WHERE id=$4 RETURNING *`,
+        [marksObtained, feedback, gradedBy, submissionId]
+      );
+      return res.rows[0] || null;
+    }
+    const sub = memoryStore.assignment_submissions.find(s => s.id === submissionId);
+    if (!sub) return null;
+    sub.marks_obtained = marksObtained;
+    sub.feedback = feedback;
+    sub.graded_by = gradedBy;
+    sub.graded_at = new Date().toISOString();
+    sub.status = 'graded';
+    return sub;
+  },
+
+  // ============================================================
+  // STUDY MATERIALS
+  // ============================================================
+  async getMaterials({ subjectId, classId, courseId, uploadedBy, published } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (subjectId) { params.push(subjectId); where += ` AND sm.subject_id = $${params.length}`; }
+      if (classId) { params.push(classId); where += ` AND sm.class_id = $${params.length}`; }
+      if (courseId) { params.push(courseId); where += ` AND sm.course_id = $${params.length}`; }
+      if (uploadedBy) { params.push(uploadedBy); where += ` AND sm.uploaded_by = $${params.length}`; }
+      if (published !== undefined) { params.push(published); where += ` AND sm.published = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT sm.*, u.full_name as uploader_name, s.name as subject_name, c.name as class_name
+         FROM study_materials sm
+         JOIN users u ON sm.uploaded_by = u.id
+         LEFT JOIN subjects s ON sm.subject_id = s.id
+         LEFT JOIN classes c ON sm.class_id = c.id
+         ${where} ORDER BY sm.created_at DESC`,
+        params
+      );
+      return res.rows;
+    }
+    let mats = [...memoryStore.study_materials];
+    if (subjectId) mats = mats.filter(m => m.subject_id === subjectId);
+    if (classId) mats = mats.filter(m => m.class_id === classId);
+    if (courseId) mats = mats.filter(m => m.course_id === courseId);
+    if (uploadedBy) mats = mats.filter(m => m.uploaded_by === uploadedBy);
+    if (published !== undefined) mats = mats.filter(m => m.published === published);
+    return mats.map(m => {
+      const user = memoryStore.users.find(u => u.id === m.uploaded_by);
+      const subject = memoryStore.subjects.find(s => s.id === m.subject_id);
+      const cls = memoryStore.classes.find(c => c.id === m.class_id);
+      return { ...m, uploader_name: user?.full_name, subject_name: subject?.name, class_name: cls?.name };
+    }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+
+  async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, courseId, lessonId, uploadedBy }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO study_materials (id, title, description, type, file_path, file_name, file_size, external_url, subject_id, class_id, course_id, lesson_id, uploaded_by, published, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false,$14,$14) RETURNING *`,
+        [id, title, description || null, type || 'document', filePath || null, fileName || null, fileSize || null, externalUrl || null, subjectId || null, classId || null, courseId || null, lessonId || null, uploadedBy, now]
+      );
+      return res.rows[0];
+    }
+    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: subjectId || null, class_id: classId || null, course_id: courseId || null, lesson_id: lessonId || null, uploaded_by: uploadedBy, published: false, created_at: now, updated_at: now };
+    memoryStore.study_materials.push(mat);
+    return mat;
+  },
+
+  async updateMaterial(id, updates) {
+    if (isPostgresConnected && pool) {
+      const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE study_materials SET ${setClause}, updated_at = NOW() WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const mat = memoryStore.study_materials.find(m => m.id === id);
+    if (!mat) return null;
+    Object.assign(mat, updates, { updated_at: new Date().toISOString() });
+    return mat;
+  },
+
+  // ============================================================
+  // ANNOUNCEMENTS
+  // ============================================================
+  async getAnnouncements({ targetType, targetId, status, authorId, limit = 50 } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (targetType) { params.push(targetType); where += ` AND a.target_type = $${params.length}`; }
+      if (targetId) { params.push(targetId); where += ` AND a.target_id = $${params.length}`; }
+      if (status) { params.push(status); where += ` AND a.status = $${params.length}`; }
+      if (authorId) { params.push(authorId); where += ` AND a.author_id = $${params.length}`; }
+      params.push(limit);
+      const res = await pool.query(
+        `SELECT a.*, u.full_name as author_name FROM announcements a
+         JOIN users u ON a.author_id = u.id
+         ${where} ORDER BY a.created_at DESC LIMIT $${params.length}`,
+        params
+      );
+      return res.rows;
+    }
+    let anns = [...memoryStore.announcements];
+    if (targetType) anns = anns.filter(a => a.target_type === targetType);
+    if (targetId) anns = anns.filter(a => a.target_id === targetId);
+    if (status) anns = anns.filter(a => a.status === status);
+    if (authorId) anns = anns.filter(a => a.author_id === authorId);
+    return anns.slice(0, limit).map(a => {
+      const author = memoryStore.users.find(u => u.id === a.author_id);
+      return { ...a, author_name: author?.full_name };
+    }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+
+  async createAnnouncement({ title, content, authorId, targetType, targetId, status, publishAt }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO announcements (id, title, content, author_id, target_type, target_id, status, publish_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+        [id, title, content, authorId, targetType || 'global', targetId || null, status || 'draft', publishAt || null, now]
+      );
+      return res.rows[0];
+    }
+    const ann = { id, title, content, author_id: authorId, target_type: targetType || 'global', target_id: targetId || null, status: status || 'draft', publish_at: publishAt || null, created_at: now, updated_at: now };
+    memoryStore.announcements.push(ann);
+    return ann;
+  },
+
+  async updateAnnouncement(id, updates) {
+    if (isPostgresConnected && pool) {
+      const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE announcements SET ${setClause}, updated_at = NOW() WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const ann = memoryStore.announcements.find(a => a.id === id);
+    if (!ann) return null;
+    Object.assign(ann, updates, { updated_at: new Date().toISOString() });
+    return ann;
+  },
+
+  // ============================================================
+  // NOTIFICATIONS
+  // ============================================================
+  async createNotification({ userId, title, message, type, link }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO notifications (id, user_id, title, message, type, link, read, created_at) VALUES ($1,$2,$3,$4,$5,$6,false,$7) RETURNING *`,
+        [id, userId, title, message, type || 'info', link || null, now]
+      );
+      return res.rows[0];
+    }
+    const notif = { id, user_id: userId, title, message, type: type || 'info', link: link || null, read: false, created_at: now };
+    memoryStore.notifications.push(notif);
+    return notif;
+  },
+
+  async getNotifications(userId, unreadOnly = false) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT * FROM notifications WHERE user_id = $1 ${unreadOnly ? 'AND read = false' : ''} ORDER BY created_at DESC LIMIT 50`,
+        [userId]
+      );
+      return res.rows;
+    }
+    let notifs = memoryStore.notifications.filter(n => n.user_id === userId);
+    if (unreadOnly) notifs = notifs.filter(n => !n.read);
+    return notifs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 50);
+  },
+
+  async markNotificationsRead(userId, notificationIds = null) {
+    if (isPostgresConnected && pool) {
+      if (notificationIds) {
+        await pool.query('UPDATE notifications SET read = true WHERE user_id = $1 AND id = ANY($2)', [userId, notificationIds]);
+      } else {
+        await pool.query('UPDATE notifications SET read = true WHERE user_id = $1', [userId]);
+      }
+      return true;
+    }
+    memoryStore.notifications.forEach(n => {
+      if (n.user_id === userId && (!notificationIds || notificationIds.includes(n.id))) {
+        n.read = true;
+      }
+    });
+    return true;
+  },
+
+  // ============================================================
+  // LEAVE REQUESTS
+  // ============================================================
+  async getLeaveRequests({ teacherId, status } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (teacherId) { params.push(teacherId); where += ` AND lr.teacher_id = $${params.length}`; }
+      if (status) { params.push(status); where += ` AND lr.status = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT lr.*, u.full_name as teacher_name, u.email as teacher_email
+         FROM leave_requests lr JOIN users u ON lr.teacher_id = u.id
+         ${where} ORDER BY lr.created_at DESC`,
+        params
+      );
+      return res.rows;
+    }
+    let reqs = [...memoryStore.leave_requests];
+    if (teacherId) reqs = reqs.filter(r => r.teacher_id === teacherId);
+    if (status) reqs = reqs.filter(r => r.status === status);
+    return reqs.map(r => {
+      const user = memoryStore.users.find(u => u.id === r.teacher_id);
+      return { ...r, teacher_name: user?.full_name, teacher_email: user?.email };
+    }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+
+  async createLeaveRequest({ teacherId, fromDate, toDate, reason }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO leave_requests (id, teacher_id, from_date, to_date, reason, status, created_at) VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING *`,
+        [id, teacherId, fromDate, toDate, reason, now]
+      );
+      return res.rows[0];
+    }
+    const req = { id, teacher_id: teacherId, from_date: fromDate, to_date: toDate, reason, status: 'pending', reviewed_by: null, reviewed_at: null, review_note: null, created_at: now };
+    memoryStore.leave_requests.push(req);
+    return req;
+  },
+
+  async reviewLeaveRequest(id, { status, reviewedBy, reviewNote }) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `UPDATE leave_requests SET status=$1, reviewed_by=$2, reviewed_at=NOW(), review_note=$3 WHERE id=$4 RETURNING *`,
+        [status, reviewedBy, reviewNote || null, id]
+      );
+      return res.rows[0] || null;
+    }
+    const req = memoryStore.leave_requests.find(r => r.id === id);
+    if (!req) return null;
+    req.status = status;
+    req.reviewed_by = reviewedBy;
+    req.reviewed_at = new Date().toISOString();
+    req.review_note = reviewNote || null;
+    return req;
+  },
+
+  // ============================================================
+  // FEEDBACK TICKETS
+  // ============================================================
+  async createTicket({ submitterId, category, subject, description }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO feedback_tickets (id, submitter_id, category, subject, description, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,'open',$6,$6) RETURNING *`,
+        [id, submitterId, category || 'general', subject, description, now]
+      );
+      return res.rows[0];
+    }
+    const ticket = { id, submitter_id: submitterId, category: category || 'general', subject, description, status: 'open', assigned_to: null, admin_response: null, resolved_at: null, created_at: now, updated_at: now };
+    memoryStore.feedback_tickets.push(ticket);
+    return ticket;
+  },
+
+  async getTickets({ submitterId, status, assignedTo } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (submitterId) { params.push(submitterId); where += ` AND ft.submitter_id = $${params.length}`; }
+      if (status) { params.push(status); where += ` AND ft.status = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT ft.*, u.full_name as submitter_name FROM feedback_tickets ft JOIN users u ON ft.submitter_id = u.id ${where} ORDER BY ft.created_at DESC`,
+        params
+      );
+      return res.rows;
+    }
+    let tickets = [...memoryStore.feedback_tickets];
+    if (submitterId) tickets = tickets.filter(t => t.submitter_id === submitterId);
+    if (status) tickets = tickets.filter(t => t.status === status);
+    return tickets.map(t => {
+      const user = memoryStore.users.find(u => u.id === t.submitter_id);
+      return { ...t, submitter_name: user?.full_name };
+    }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+
+  async updateTicket(id, updates) {
+    if (isPostgresConnected && pool) {
+      const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE feedback_tickets SET ${setClause}, updated_at = NOW() WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const ticket = memoryStore.feedback_tickets.find(t => t.id === id);
+    if (!ticket) return null;
+    Object.assign(ticket, updates, { updated_at: new Date().toISOString() });
+    return ticket;
+  },
+
+  // ============================================================
+  // LIVE CLASSES
+  // ============================================================
+  async getLiveClasses({ teacherId, classId, batchId, studentId, status } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (teacherId) { params.push(teacherId); where += ` AND lc.teacher_id = $${params.length}`; }
+      if (classId) { params.push(classId); where += ` AND lc.class_id = $${params.length}`; }
+      if (batchId) { params.push(batchId); where += ` AND lc.batch_id = $${params.length}`; }
+      if (status) { params.push(status); where += ` AND lc.status = $${params.length}`; }
+      if (studentId) {
+        params.push(studentId);
+        where += ` AND (
+          lc.class_id IN (SELECT class_id FROM student_class_enrollments WHERE student_id = $${params.length})
+          OR lc.batch_id IN (SELECT batch_id FROM batch_enrollments WHERE student_id = $${params.length} AND status = 'active')
+          OR (lc.class_id IS NULL AND lc.batch_id IS NULL)
+          OR NOT EXISTS (SELECT 1 FROM student_class_enrollments WHERE student_id = $${params.length})
+        )`;
+      }
+      const res = await pool.query(
+        `SELECT lc.*, u.full_name as teacher_name, c.name as class_name, s.name as subject_name, b.name as batch_name
+         FROM live_class_sessions lc
+         JOIN users u ON lc.teacher_id = u.id
+         LEFT JOIN classes c ON lc.class_id = c.id
+         LEFT JOIN subjects s ON lc.subject_id = s.id
+         LEFT JOIN batches b ON lc.batch_id = b.id
+         ${where} ORDER BY lc.scheduled_at ASC`,
+        params
+      );
+      return res.rows;
+    }
+    let sessions = [...memoryStore.live_class_sessions];
+    if (teacherId) sessions = sessions.filter(s => s.teacher_id === teacherId);
+    if (classId) sessions = sessions.filter(s => s.class_id === classId);
+    if (batchId) sessions = sessions.filter(s => s.batch_id === batchId);
+    if (status) sessions = sessions.filter(s => s.status === status);
+    return sessions.map(lc => {
+      const teacher = memoryStore.users.find(u => u.id === lc.teacher_id);
+      const cls = memoryStore.classes.find(c => c.id === lc.class_id);
+      const batch = (memoryStore.batches || []).find(b => b.id === lc.batch_id);
+      const subject = memoryStore.subjects.find(s => s.id === lc.subject_id);
+      return {
+        ...lc,
+        teacher_name: teacher?.full_name,
+        class_name: cls?.name,
+        batch_name: batch?.name,
+        subject_name: subject?.name
+      };
+    }).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  },
+
+  async getLiveClassById(id) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT lc.*, u.full_name as teacher_name, c.name as class_name, s.name as subject_name, b.name as batch_name
+         FROM live_class_sessions lc
+         JOIN users u ON lc.teacher_id = u.id
+         LEFT JOIN classes c ON lc.class_id = c.id
+         LEFT JOIN subjects s ON lc.subject_id = s.id
+         LEFT JOIN batches b ON lc.batch_id = b.id
+         WHERE lc.id = $1`,
+        [id]
+      );
+      return res.rows[0] || null;
+    }
+    const lc = (memoryStore.live_class_sessions || []).find(s => s.id === id);
+    if (!lc) return null;
+    const teacher = memoryStore.users.find(u => u.id === lc.teacher_id);
+    const cls = memoryStore.classes.find(c => c.id === lc.class_id);
+    const batch = (memoryStore.batches || []).find(b => b.id === lc.batch_id);
+    const subject = memoryStore.subjects.find(s => s.id === lc.subject_id);
+    return {
+      ...lc,
+      teacher_name: teacher?.full_name,
+      class_name: cls?.name,
+      batch_name: batch?.name,
+      subject_name: subject?.name
+    };
+  },
+
+  async createLiveClass({ title, description, teacherId, classId, batchId, subjectId, courseId, scheduledAt, meetingUrl, meetingProvider = 'livekit' }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO live_class_sessions (id, title, description, teacher_id, class_id, batch_id, subject_id, course_id, scheduled_at, meeting_url, meeting_provider, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'scheduled',$12) RETURNING *`,
+        [id, title, description || null, teacherId, classId || null, batchId || null, subjectId || null, courseId || null, scheduledAt, meetingUrl || null, meetingProvider || 'livekit', now]
+      );
+      return res.rows[0];
+    }
+    const session = { id, title, description: description || null, teacher_id: teacherId, class_id: classId || null, batch_id: batchId || null, subject_id: subjectId || null, course_id: courseId || null, scheduled_at: scheduledAt, started_at: null, ended_at: null, meeting_url: meetingUrl || null, meeting_provider: meetingProvider || 'livekit', status: 'scheduled', created_at: now };
+    if (!memoryStore.live_class_sessions) memoryStore.live_class_sessions = [];
+    memoryStore.live_class_sessions.push(session);
+    return session;
+  },
+
+  async updateLiveClass(id, updates) {
+    if (isPostgresConnected && pool) {
+      const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE live_class_sessions SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const session = (memoryStore.live_class_sessions || []).find(s => s.id === id);
+    if (!session) return null;
+    Object.assign(session, updates);
+    return session;
+  },
+
+  // ============================================================
+  // SYLLABUS
+  // ============================================================
+  async getSyllabus({ subjectId, classId, teacherId } = {}) {
+    if (isPostgresConnected && pool) {
+      let where = 'WHERE 1=1';
+      const params = [];
+      if (subjectId) { params.push(subjectId); where += ` AND st.subject_id = $${params.length}`; }
+      if (classId) { params.push(classId); where += ` AND st.class_id = $${params.length}`; }
+      if (teacherId) { params.push(teacherId); where += ` AND st.teacher_id = $${params.length}`; }
+      const res = await pool.query(
+        `SELECT st.*, s.name as subject_name FROM syllabus_topics st JOIN subjects s ON st.subject_id = s.id ${where} ORDER BY st.position`,
+        params
+      );
+      return res.rows;
+    }
+    let topics = [...memoryStore.syllabus_topics];
+    if (subjectId) topics = topics.filter(t => t.subject_id === subjectId);
+    if (classId) topics = topics.filter(t => t.class_id === classId);
+    if (teacherId) topics = topics.filter(t => t.teacher_id === teacherId);
+    return topics.map(t => {
+      const subject = memoryStore.subjects.find(s => s.id === t.subject_id);
+      return { ...t, subject_name: subject?.name };
+    }).sort((a, b) => a.position - b.position);
+  },
+
+  async updateSyllabusTopic(id, updates) {
+    if (isPostgresConnected && pool) {
+      const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      const values = [...Object.values(updates), id];
+      const res = await pool.query(`UPDATE syllabus_topics SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
+      return res.rows[0] || null;
+    }
+    const topic = memoryStore.syllabus_topics.find(t => t.id === id);
+    if (!topic) return null;
+    Object.assign(topic, updates);
+    return topic;
+  },
+
+  async createSyllabusTopic({ subjectId, classId, teacherId, chapter, topic, plannedDate, position }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `INSERT INTO syllabus_topics (id, subject_id, class_id, teacher_id, chapter, topic, planned_date, completed, position, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,false,$8,$9) RETURNING *`,
+        [id, subjectId, classId, teacherId || null, chapter, topic, plannedDate || null, position || 1, now]
+      );
+      return res.rows[0];
+    }
+    const st = { id, subject_id: subjectId, class_id: classId, teacher_id: teacherId || null, chapter, topic, planned_date: plannedDate || null, completed: false, completed_date: null, notes: null, position: position || 1, created_at: now };
+    memoryStore.syllabus_topics.push(st);
+    return st;
+  },
+
+  // ============================================================
+  // TEACHER PROFILES
+  // ============================================================
+  async getTeacherProfile(userId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM teacher_profiles WHERE user_id = $1', [userId]);
+      return res.rows[0] || null;
+    }
+    return memoryStore.teacher_profiles.find(p => p.user_id === userId) || null;
+  },
+
+  async upsertTeacherProfile(userId, { employeeId, department, qualification, specialization, joiningDate }) {
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const id = crypto.randomUUID();
+      const res = await pool.query(
+        `INSERT INTO teacher_profiles (id, user_id, employee_id, department, qualification, specialization, joining_date, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+         ON CONFLICT (user_id) DO UPDATE SET employee_id=EXCLUDED.employee_id, department=EXCLUDED.department, qualification=EXCLUDED.qualification, specialization=EXCLUDED.specialization, joining_date=EXCLUDED.joining_date, updated_at=$8
+         RETURNING *`,
+        [id, userId, employeeId || null, department || null, qualification || null, specialization || null, joiningDate || null, now]
+      );
+      return res.rows[0];
+    }
+    const existing = memoryStore.teacher_profiles.find(p => p.user_id === userId);
+    if (existing) {
+      if (employeeId !== undefined) existing.employee_id = employeeId;
+      if (department !== undefined) existing.department = department;
+      if (qualification !== undefined) existing.qualification = qualification;
+      if (specialization !== undefined) existing.specialization = specialization;
+      if (joiningDate !== undefined) existing.joining_date = joiningDate;
+      existing.updated_at = now;
+      return existing;
+    }
+    const profile = { id: crypto.randomUUID(), user_id: userId, employee_id: employeeId || null, department: department || null, qualification: qualification || null, specialization: specialization || null, joining_date: joiningDate || null, created_at: now, updated_at: now };
+    memoryStore.teacher_profiles.push(profile);
+    return profile;
+  },
+
+  // ============================================================
+  // STUDENT PROFILES
+  // ============================================================
+  async getStudentProfile(userId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM student_profiles WHERE user_id = $1', [userId]);
+      return res.rows[0] || null;
+    }
+    return memoryStore.student_profiles.find(p => p.user_id === userId) || null;
+  },
+
+  async upsertStudentProfile(userId, { enrollmentNumber, dateOfBirth, guardianName, guardianContact, address }) {
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      const id = crypto.randomUUID();
+      const res = await pool.query(
+        `INSERT INTO student_profiles (id, user_id, enrollment_number, date_of_birth, guardian_name, guardian_contact, address, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+         ON CONFLICT (user_id) DO UPDATE SET enrollment_number=EXCLUDED.enrollment_number, date_of_birth=EXCLUDED.date_of_birth, guardian_name=EXCLUDED.guardian_name, guardian_contact=EXCLUDED.guardian_contact, address=EXCLUDED.address, updated_at=$8
+         RETURNING *`,
+        [id, userId, enrollmentNumber || null, dateOfBirth || null, guardianName || null, guardianContact || null, address || null, now]
+      );
+      return res.rows[0];
+    }
+    const existing = memoryStore.student_profiles.find(p => p.user_id === userId);
+    if (existing) {
+      Object.assign(existing, { enrollment_number: enrollmentNumber, date_of_birth: dateOfBirth, guardian_name: guardianName, guardian_contact: guardianContact, address, updated_at: now });
+      return existing;
+    }
+    const profile = { id: crypto.randomUUID(), user_id: userId, enrollment_number: enrollmentNumber || null, date_of_birth: dateOfBirth || null, guardian_name: guardianName || null, guardian_contact: guardianContact || null, address: address || null, created_at: now, updated_at: now };
+    memoryStore.student_profiles.push(profile);
+    return profile;
+  }
+};

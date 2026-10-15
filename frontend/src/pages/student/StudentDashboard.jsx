@@ -11,7 +11,13 @@ import {
   ArrowRight,
   Clock,
   Play,
-  RotateCcw
+  RotateCcw,
+  Video,
+  Radio,
+  FileCheck2,
+  ShieldCheck,
+  Camera,
+  AlertTriangle
 } from 'lucide-react';
 import { StudentNav } from '../../components/student/StudentNav';
 
@@ -19,17 +25,23 @@ export function StudentDashboard() {
   const { user } = useAuth();
   const [enrolledCourses, setEnrolledCourses] = useState([]);
   const [quizAttempts, setQuizAttempts] = useState([]);
+  const [mockTests, setMockTests] = useState([]);
+  const [liveClasses, setLiveClasses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadDashboardData() {
       try {
-        const [courses, attempts] = await Promise.all([
+        const [courses, attempts, tests, lives] = await Promise.all([
           api.getMyCourses().catch(() => []),
-          api.getMyAttempts().catch(() => [])
+          api.getMyAttempts().catch(() => []),
+          api.getMockTests({ status: 'published' }).catch(() => []),
+          api.getStudentLiveClasses().catch(() => [])
         ]);
         setEnrolledCourses(courses || []);
         setQuizAttempts(attempts || []);
+        setMockTests(Array.isArray(tests) ? tests : []);
+        setLiveClasses(Array.isArray(lives) ? lives : []);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       } finally {
@@ -216,6 +228,327 @@ export function StudentDashboard() {
             </div>
           </div>
         )}
+
+        {/* Live Classes Alert Banner if any sessions are ongoing or scheduled */}
+        {liveClasses.length > 0 && (
+          <div
+            className="card"
+            style={{
+              padding: '1.25rem 1.5rem',
+              marginBottom: '2rem',
+              border: liveClasses.some(l => l.status === 'ongoing') ? '2px solid #16A34A' : '1px solid var(--color-border)',
+              background: liveClasses.some(l => l.status === 'ongoing') ? '#F0FDF4' : '#F8FAFC',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '1rem'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+              <div
+                style={{
+                  padding: '0.6rem',
+                  borderRadius: '10px',
+                  background: liveClasses.some(l => l.status === 'ongoing') ? '#DCFCE7' : '#EFF6FF',
+                  color: liveClasses.some(l => l.status === 'ongoing') ? '#16A34A' : '#2563EB'
+                }}
+              >
+                <Video size={22} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      padding: '0.15rem 0.5rem',
+                      borderRadius: '999px',
+                      background: liveClasses.some(l => l.status === 'ongoing') ? '#DCFCE7' : '#E0E7FF',
+                      color: liveClasses.some(l => l.status === 'ongoing') ? '#166534' : '#3730A3',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.3rem'
+                    }}
+                  >
+                    <Radio size={11} />
+                    {liveClasses.some(l => l.status === 'ongoing') ? 'Broadcast Live Now' : 'Scheduled Lectures'}
+                  </span>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A' }}>
+                    {liveClasses.length} Virtual Classroom Session{liveClasses.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748B' }}>
+                  Join interactive faculty lectures, doubt clearing workshops, and cohort seminar meetings.
+                </p>
+              </div>
+            </div>
+            <Link
+              to="/live-classes"
+              className="btn btn-sm btn-primary"
+              style={{
+                background: liveClasses.some(l => l.status === 'ongoing') ? '#16A34A' : undefined,
+                borderColor: liveClasses.some(l => l.status === 'ongoing') ? '#16A34A' : undefined,
+                fontWeight: 700
+              }}
+            >
+              <span>{liveClasses.some(l => l.status === 'ongoing') ? 'Join Live Room Now' : 'View Schedule'}</span>
+              <ArrowRight size={14} />
+            </Link>
+          </div>
+        )}
+
+        {/* Proctored Mock Tests & Examinations Section */}
+        <div style={{ marginBottom: '2.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    color: 'var(--color-orange-dark)',
+                    background: 'rgba(249, 115, 22, 0.1)',
+                    padding: '0.15rem 0.5rem',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(249, 115, 22, 0.25)'
+                  }}
+                >
+                  ASSESSMENTS & SCREENINGS
+                </span>
+              </div>
+              <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy)', margin: 0 }}>
+                Available Mock Tests & Examinations
+              </h2>
+            </div>
+            <Link
+              to="/mock-tests"
+              style={{
+                fontSize: '0.875rem',
+                color: 'var(--color-orange-dark)',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem'
+              }}
+            >
+              <span>View All Mock Tests ({mockTests.length})</span>
+              <ArrowRight size={14} />
+            </Link>
+          </div>
+
+          {mockTests.length === 0 ? (
+            <div className="card" style={{ padding: '2.5rem', textAlign: 'center' }}>
+              <FileCheck2 size={38} style={{ color: 'var(--color-text-muted)', margin: '0 auto 1rem' }} />
+              <h4 style={{ marginBottom: '0.4rem', color: 'var(--color-navy)' }}>No Mock Tests Currently Available</h4>
+              <p style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginBottom: '1.25rem' }}>
+                Your instructors have not published any examination assessments yet. They will appear here once released.
+              </p>
+              <Link to="/mock-tests" className="btn btn-outline btn-sm">
+                Explore Examination Portal
+              </Link>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                gap: '1.25rem'
+              }}
+            >
+              {mockTests.slice(0, 3).map((test) => {
+                const durationMinutes = test.duration_minutes ?? test.durationMinutes ?? 60;
+                const totalMarks = test.total_marks ?? test.totalMarks ?? 100;
+                const maxAttempts = test.max_attempts ?? test.maxAttempts ?? 3;
+                const attemptsUsed = test.attempts_used ?? test.attemptsUsed ?? 0;
+                const rawAttemptId = test.active_attempt_id || test.activeAttemptId;
+                const hasActiveAttempt = Boolean(rawAttemptId && rawAttemptId !== 'undefined' && rawAttemptId !== 'null' && String(rawAttemptId).trim());
+                const activeAttemptId = hasActiveAttempt ? rawAttemptId : null;
+                const canAttempt = test.can_attempt !== undefined
+                  ? Boolean(test.can_attempt)
+                  : (test.status === 'published' && (!maxAttempts || attemptsUsed < maxAttempts));
+                const isProctored = Boolean(test.proctoring_config?.webcam_required ?? test.proctoringConfig?.webcam_required);
+
+                return (
+                  <div
+                    key={test.id}
+                    className="card card-interactive"
+                    style={{
+                      padding: '1.35rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      border: '1px solid var(--color-border)'
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                        <span
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            color: 'var(--color-orange-dark)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em'
+                          }}
+                        >
+                          {test.subject || 'General'}
+                        </span>
+                        {isProctored ? (
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              background: '#FEE2E2',
+                              color: '#DC2626',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                          >
+                            <Camera size={11} />
+                            Proctored
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
+                              background: '#F1F5F9',
+                              color: '#64748B',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            Standard
+                          </span>
+                        )}
+                      </div>
+
+                      <h4 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '0.4rem', lineHeight: 1.35 }}>
+                        {test.title}
+                      </h4>
+
+                      {test.description && (
+                        <p
+                          style={{
+                            fontSize: '0.82rem',
+                            color: 'var(--color-text-secondary)',
+                            marginBottom: '1rem',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden'
+                          }}
+                        >
+                          {test.description}
+                        </p>
+                      )}
+
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr',
+                          gap: '0.4rem',
+                          background: '#F8FAFC',
+                          padding: '0.65rem 0.75rem',
+                          borderRadius: '6px',
+                          fontSize: '0.78rem',
+                          color: '#475569',
+                          marginBottom: '1.15rem'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Clock size={13} style={{ color: 'var(--color-orange)' }} />
+                          <span><strong>{durationMinutes}</strong> mins</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Award size={13} style={{ color: '#2563EB' }} />
+                          <span><strong>{totalMarks}</strong> Marks</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <RotateCcw size={13} style={{ color: '#7C3AED' }} />
+                          <span>Attempts: <strong>{attemptsUsed}/{maxAttempts}</strong></span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <CheckCircle2 size={13} style={{ color: '#16A34A' }} />
+                          <span>Pass: <strong>{test.pass_percentage ?? test.passPercentage ?? 40}%</strong></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                        {attemptsUsed > 0 ? `Completed (${attemptsUsed})` : 'Not attempted'}
+                      </span>
+
+                      {hasActiveAttempt ? (
+                        <Link
+                          to={`/mock-tests/${test.id}/runner/${activeAttemptId}`}
+                          className="btn btn-sm btn-warning"
+                          style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                        >
+                          <Play size={13} />
+                          <span>Resume Exam</span>
+                        </Link>
+                      ) : canAttempt ? (
+                        test.join_request_status === 'APPROVED' ? (
+                          <Link
+                            to={`/mock-tests/${test.id}/check`}
+                            className="btn btn-sm btn-primary"
+                            style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#16A34A', borderColor: '#16A34A' }}
+                          >
+                            <Play size={13} />
+                            <span>Start Mock Test</span>
+                          </Link>
+                        ) : test.join_request_status === 'PENDING' ? (
+                          <span
+                            className="badge"
+                            style={{ background: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D', padding: '0.35rem 0.6rem', fontSize: '0.75rem', fontWeight: 700 }}
+                          >
+                            Pending Approval
+                          </span>
+                        ) : test.join_request_status === 'REJECTED' ? (
+                          <Link
+                            to="/mock-tests"
+                            className="btn btn-sm btn-outline"
+                            style={{ fontWeight: 600, color: '#DC2626', borderColor: '#DC2626', padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                          >
+                            Request Again
+                          </Link>
+                        ) : (
+                          <Link
+                            to="/mock-tests"
+                            className="btn btn-sm btn-primary"
+                            style={{ fontWeight: 700, padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
+                          >
+                            Request to Join
+                          </Link>
+                        )
+                      ) : attemptsUsed > 0 ? (
+                        <Link
+                          to={`/mock-tests/history?test_id=${test.id}`}
+                          className="btn btn-sm btn-secondary"
+                          style={{ fontWeight: 600 }}
+                        >
+                          View Results
+                        </Link>
+                      ) : (
+                        <button disabled className="btn btn-sm btn-secondary" style={{ opacity: 0.6, cursor: 'not-allowed' }}>
+                          Unavailable
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         {/* Two-Column Grid: Enrolled Courses & Recent Quiz Scores */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '2.5rem' }}>

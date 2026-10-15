@@ -1,4 +1,4 @@
-import React, { lazy, Suspense } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
@@ -91,6 +91,18 @@ const QuestionBankPage = lazyNamed(() => import('./pages/questions/QuestionBankP
 function AppContent() {
   const location = useLocation();
   const isRunner = location.pathname.includes('/runner/');
+
+  // Scroll the document to top on route change, but only for routes that don't
+  // have their own layout scroll container (admin and teacher layouts handle
+  // their own scroll restoration via a ref on the <main> element).
+  useEffect(() => {
+    const isLayoutRoute =
+      location.pathname.startsWith('/admin') ||
+      location.pathname.startsWith('/teacher');
+    if (!isLayoutRoute) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+  }, [location.pathname]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -438,7 +450,7 @@ function AppContent() {
 
 export function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <ToastProvider>
           <AppContent />

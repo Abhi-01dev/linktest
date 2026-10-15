@@ -36,13 +36,9 @@ Thumbs.db
 *.sqlite3
 *.db
 
-# Java build artifacts
-backend-java/target/
-*.class
-
 # File uploads
-backend-java/uploads/*
-!backend-java/uploads/**/.gitkeep
+backend/uploads/*
+!backend/uploads/**/.gitkeep
 
 # Backups
 *.bak
