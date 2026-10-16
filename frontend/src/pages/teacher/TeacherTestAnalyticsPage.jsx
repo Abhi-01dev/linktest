@@ -33,6 +33,7 @@ export function TeacherTestAnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [releasing, setReleasing] = useState(false);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   const loadAnalytics = async () => {
     try {
@@ -61,6 +62,17 @@ export function TeacherTestAnalyticsPage() {
       alert(err.message || 'Failed to release results.');
     } finally {
       setReleasing(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setGeneratingPdf(true);
+    try {
+      await api.downloadTestResultsPdf(id);
+    } catch (err) {
+      alert(err.message || 'Failed to generate PDF report.');
+    } finally {
+      setGeneratingPdf(false);
     }
   };
 
@@ -120,15 +132,27 @@ export function TeacherTestAnalyticsPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleToggleRelease}
-            disabled={releasing}
-            className="btn btn-primary"
-            style={{ fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-          >
-            <Send size={15} />
-            <span>{releasing ? 'Releasing...' : 'Release Results to Students'}</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={handleDownloadPdf}
+              disabled={generatingPdf}
+              className="btn btn-secondary"
+              style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <Download size={15} />
+              <span>{generatingPdf ? 'Generating PDF...' : 'Generate Results PDF'}</span>
+            </button>
+
+            <button
+              onClick={handleToggleRelease}
+              disabled={releasing}
+              className="btn btn-primary"
+              style={{ fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: '#059669', borderColor: '#059669' }}
+            >
+              <Send size={15} />
+              <span>{releasing ? 'Releasing...' : 'Release Results to Students'}</span>
+            </button>
+          </div>
         </div>
       </div>
 

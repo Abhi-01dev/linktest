@@ -78,7 +78,7 @@ export function TeacherTestBuilderPage() {
   const [bankModalOpen, setBankModalOpen] = useState(false);
 
   // Manual Question Form State
-  const [newQ, setNewQ] = useState({
+  const initialNewQ = {
     question_text: '',
     question_type: 'mcq_single',
     options: ['Option A', 'Option B', 'Option C', 'Option D'],
@@ -88,8 +88,16 @@ export function TeacherTestBuilderPage() {
     explanation: '',
     topic: '',
     difficulty: 'medium',
-    case_passage: ''
-  });
+    case_passage: '',
+    expected_answer: '',
+    evaluation_criteria: 'Correct concept\nImportant terminology\nExplanation quality\nRelevant example',
+    programming_language: 'javascript',
+    starter_code: 'function solution() {\n  // write code\n}',
+    time_limit: 2.0,
+    memory_limit: 128,
+    test_cases: [{ input: '2 3', expected_output: '5', is_hidden: false }]
+  };
+  const [newQ, setNewQ] = useState(initialNewQ);
 
   // AI Generator Form State
   const [aiForm, setAiForm] = useState({
@@ -197,33 +205,29 @@ export function TeacherTestBuilderPage() {
     ]);
 
     setManualModalOpen(false);
-    // Reset form
-    setNewQ({
-      question_text: '',
-      question_type: 'mcq_single',
-      options: ['Option A', 'Option B', 'Option C', 'Option D'],
-      answer_key: { correct_index: 0 },
-      marks: 4,
-      negative_marks: 1,
-      explanation: '',
-      topic: formData.topic || '',
-      difficulty: 'medium',
-      case_passage: ''
-    });
+    setNewQ(initialNewQ);
   };
 
   const handleBulkImportSuccess = (importedList) => {
     if (Array.isArray(importedList) && importedList.length > 0) {
       const mapped = importedList.map(q => ({
+        ...q,
         question_text: q.question_text,
-        question_type: 'mcq_single',
+        question_type: q.question_type || q.questionType || 'mcq_single',
         options: Array.isArray(q.options) ? q.options : [],
-        answer_key: { correct_index: q.correct_option_index ?? 0 },
+        answer_key: q.answer_key || { correct_index: q.correct_option_index ?? 0 },
         marks: parseFloat(q.marks) || 4,
-        negative_marks: parseFloat(q.negative_marks) || 1,
+        negative_marks: parseFloat(q.negative_marks) || 0,
         explanation: q.explanation || '',
         topic: q.topic || '',
-        difficulty: (q.difficulty || 'medium').toLowerCase()
+        difficulty: (q.difficulty || 'medium').toLowerCase(),
+        expected_answer: q.expected_answer || q.expectedAnswer || null,
+        evaluation_criteria: q.evaluation_criteria || q.evaluationCriteria || null,
+        programming_language: q.programming_language || q.programmingLanguage || 'javascript',
+        starter_code: q.starter_code || q.starterCode || null,
+        time_limit: parseFloat(q.time_limit || q.timeLimit || 2.0),
+        memory_limit: parseInt(q.memory_limit || q.memoryLimit || 128, 10),
+        test_cases: q.test_cases || q.testCases || []
       }));
       setQuestions(prev => [...prev, ...mapped]);
     }
@@ -232,15 +236,23 @@ export function TeacherTestBuilderPage() {
   const handleBankSelect = (selectedList) => {
     if (Array.isArray(selectedList) && selectedList.length > 0) {
       const mapped = selectedList.map(q => ({
+        ...q,
         question_text: q.question_text,
-        question_type: 'mcq_single',
+        question_type: q.question_type || q.questionType || 'mcq_single',
         options: Array.isArray(q.options) ? q.options : [],
-        answer_key: { correct_index: q.correct_option_index ?? 0 },
+        answer_key: q.answer_key || { correct_index: q.correct_option_index ?? 0 },
         marks: parseFloat(q.marks) || 4,
-        negative_marks: parseFloat(q.negative_marks) || 1,
+        negative_marks: parseFloat(q.negative_marks) || 0,
         explanation: q.explanation || '',
         topic: q.topic || '',
-        difficulty: (q.difficulty || 'medium').toLowerCase()
+        difficulty: (q.difficulty || 'medium').toLowerCase(),
+        expected_answer: q.expected_answer || q.expectedAnswer || null,
+        evaluation_criteria: q.evaluation_criteria || q.evaluationCriteria || null,
+        programming_language: q.programming_language || q.programmingLanguage || 'javascript',
+        starter_code: q.starter_code || q.starterCode || null,
+        time_limit: parseFloat(q.time_limit || q.timeLimit || 2.0),
+        memory_limit: parseInt(q.memory_limit || q.memoryLimit || 128, 10),
+        test_cases: q.test_cases || q.testCases || []
       }));
       setQuestions(prev => [...prev, ...mapped]);
     }
@@ -1216,6 +1228,8 @@ export function TeacherTestBuilderPage() {
                   <option value="mcq_single">Single-Choice MCQ</option>
                   <option value="mcq_multiple">Multiple-Select MCQ</option>
                   <option value="true_false">True / False</option>
+                  <option value="long_answer">Long Answer</option>
+                  <option value="coding">Coding Question</option>
                   <option value="fill_blank">Fill in the Blanks</option>
                   <option value="numerical">Numerical Value</option>
                   <option value="short_answer">Short Answer</option>
@@ -1329,6 +1343,176 @@ export function TeacherTestBuilderPage() {
                       onChange={(e) => setNewQ({ ...newQ, answer_key: { ...newQ.answer_key, tolerance: parseFloat(e.target.value) } })}
                       style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
                     />
+                  </div>
+                </div>
+              )}
+
+              {/* Long Answer / Subjective Fields */}
+              {['long_answer', 'subjective'].includes(newQ.question_type) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                      Expected Answer (Teacher Reference Model)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={newQ.expected_answer || ''}
+                      onChange={(e) => setNewQ({ ...newQ, expected_answer: e.target.value })}
+                      placeholder="Outline expected key concepts, steps, or standard answer..."
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                      Evaluation Criteria (Grading Rubric)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={newQ.evaluation_criteria || ''}
+                      onChange={(e) => setNewQ({ ...newQ, evaluation_criteria: e.target.value })}
+                      placeholder="- Correct concept&#10;- Important terminology&#10;- Explanation quality&#10;- Relevant example"
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Coding Question Fields */}
+              {newQ.question_type === 'coding' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                        Programming Language
+                      </label>
+                      <select
+                        value={newQ.programming_language || 'javascript'}
+                        onChange={(e) => setNewQ({ ...newQ, programming_language: e.target.value })}
+                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
+                      >
+                        <option value="javascript">JavaScript</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                        Time Limit (s)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0.5"
+                        max="10"
+                        value={newQ.time_limit || 2.0}
+                        onChange={(e) => setNewQ({ ...newQ, time_limit: parseFloat(e.target.value) })}
+                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                        Memory Limit (MB)
+                      </label>
+                      <input
+                        type="number"
+                        step="16"
+                        min="32"
+                        max="512"
+                        value={newQ.memory_limit || 128}
+                        onChange={(e) => setNewQ({ ...newQ, memory_limit: parseInt(e.target.value, 10) })}
+                        style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+                      Starter Code *
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={newQ.starter_code || ''}
+                      onChange={(e) => setNewQ({ ...newQ, starter_code: e.target.value })}
+                      style={{ width: '100%', padding: '0.5rem', border: '1px solid #CBD5E1', borderRadius: '4px', fontFamily: 'monospace', background: '#F8FAFC' }}
+                    />
+                  </div>
+
+                  {/* Test Cases Builder */}
+                  <div style={{ border: '1px solid #CBD5E1', borderRadius: '6px', padding: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700 }}>
+                        Test Cases ({(newQ.test_cases || []).length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setNewQ({
+                          ...newQ,
+                          test_cases: [...(newQ.test_cases || []), { input: '', expected_output: '', is_hidden: false }]
+                        })}
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}
+                      >
+                        + Add Test Case
+                      </button>
+                    </div>
+
+                    {(newQ.test_cases || []).map((tc, tcIdx) => (
+                      <div key={tcIdx} style={{ background: tc.is_hidden ? '#FFFBEB' : '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '4px', padding: '0.5rem', marginBottom: '0.4rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
+                          <span style={{ fontWeight: 700 }}>#{tcIdx + 1} {tc.is_hidden ? '(Hidden from students)' : '(Public)'}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={tc.is_hidden}
+                                onChange={(e) => {
+                                  const updated = [...newQ.test_cases];
+                                  updated[tcIdx] = { ...updated[tcIdx], is_hidden: e.target.checked };
+                                  setNewQ({ ...newQ, test_cases: updated });
+                                }}
+                              />
+                              Hidden
+                            </label>
+                            {newQ.test_cases.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNewQ({
+                                    ...newQ,
+                                    test_cases: newQ.test_cases.filter((_, idx) => idx !== tcIdx)
+                                  });
+                                }}
+                                style={{ color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.75rem' }}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                          <input
+                            type="text"
+                            placeholder="Input (e.g. 2 3)"
+                            value={tc.input}
+                            onChange={(e) => {
+                              const updated = [...newQ.test_cases];
+                              updated[tcIdx] = { ...updated[tcIdx], input: e.target.value };
+                              setNewQ({ ...newQ, test_cases: updated });
+                            }}
+                            style={{ padding: '0.35rem', border: '1px solid #CBD5E1', borderRadius: '4px', fontSize: '0.8rem', fontFamily: 'monospace' }}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Expected Output (e.g. 5)"
+                            value={tc.expected_output}
+                            onChange={(e) => {
+                              const updated = [...newQ.test_cases];
+                              updated[tcIdx] = { ...updated[tcIdx], expected_output: e.target.value };
+                              setNewQ({ ...newQ, test_cases: updated });
+                            }}
+                            style={{ padding: '0.35rem', border: '1px solid #CBD5E1', borderRadius: '4px', fontSize: '0.8rem', fontFamily: 'monospace' }}
+                          />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

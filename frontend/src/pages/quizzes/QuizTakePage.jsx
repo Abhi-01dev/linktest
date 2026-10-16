@@ -10,7 +10,11 @@ import {
   AlertCircle,
   HelpCircle,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Code,
+  Play,
+  Terminal,
+  Lock
 } from 'lucide-react';
 
 export function QuizTakePage() {
@@ -21,7 +25,8 @@ export function QuizTakePage() {
   const [quiz, setQuiz] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState({}); // { [question_id]: selected_option_index }
+  const [selectedAnswers, setSelectedAnswers] = useState({}); // { [question_id]: selected_option_index | text | code }
+  const [codeExecution, setCodeExecution] = useState({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -59,10 +64,19 @@ export function QuizTakePage() {
     setSubmitting(true);
     try {
       // Build answers array matching the API contract
-      const answersPayload = questions.map(q => ({
-        question_id: q.id,
-        selected_option_index: selectedAnswers[q.id] !== undefined ? selectedAnswers[q.id] : -1
-      }));
+      const answersPayload = questions.map(q => {
+        const val = selectedAnswers[q.id];
+        const isCoding = q.question_type === 'coding';
+        const isLongAnswer = q.question_type === 'long_answer' || q.question_type === 'subjective';
+
+        return {
+          question_id: q.id,
+          selected_option_index: typeof val === 'number' ? val : -1,
+          response_text: typeof val === 'string' ? val : undefined,
+          code: isCoding && typeof val === 'string' ? val : undefined,
+          text: isLongAnswer && typeof val === 'string' ? val : undefined
+        };
+      });
 
       const result = await api.submitQuizAttempt(quizId, answersPayload);
       showToast('Assessment submitted & graded successfully!', 'success');
@@ -209,59 +223,165 @@ export function QuizTakePage() {
             {currentQuestion.question_text}
           </h3>
 
-          {/* Options Radio List */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {optionsList.map((opt, optIdx) => {
-              const isSelected = selectedAnswers[currentQuestion.id] === optIdx;
-              const optionLetters = ['A', 'B', 'C', 'D', 'E'];
-              return (
-                <div
-                  key={optIdx}
-                  onClick={() => handleSelectOption(currentQuestion.id, optIdx)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    padding: '1rem 1.25rem',
-                    borderRadius: 'var(--radius-md)',
-                    border: `2px solid ${isSelected ? 'var(--color-orange)' : 'var(--color-border)'}`,
-                    background: isSelected ? 'var(--color-orange-light)' : '#FFFFFF',
-                    cursor: 'pointer',
-                    transition: 'all var(--transition-fast)'
+          {/* Render by Question Type */}
+          {currentQuestion.question_type === 'long_answer' || currentQuestion.question_type === 'subjective' ? (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.82rem', color: '#64748B' }}>
+                <span>Write your detailed explanation below</span>
+                <span>Characters: {(selectedAnswers[currentQuestion.id] || '').length} / 2000</span>
+              </div>
+              <textarea
+                rows={8}
+                maxLength={2000}
+                placeholder="Type your answer here..."
+                value={selectedAnswers[currentQuestion.id] || ''}
+                onChange={(e) => setSelectedAnswers(prev => ({ ...prev, [currentQuestion.id]: e.target.value.slice(0, 2000) }))}
+                style={{
+                  width: '100%',
+                  padding: '1rem',
+                  fontSize: '0.95rem',
+                  lineHeight: 1.6,
+                  border: '2px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  outline: 'none',
+                  color: 'var(--color-navy)',
+                  fontFamily: 'inherit',
+                  resize: 'vertical'
+                }}
+              />
+              <div style={{ marginTop: '0.5rem', fontSize: '0.78rem', color: '#64748B' }}>
+                Evaluated manually by faculty.
+              </div>
+            </div>
+          ) : currentQuestion.question_type === 'coding' ? (
+            <div>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: '#0F172A',
+                color: '#F8FAFC',
+                padding: '0.5rem 0.85rem',
+                borderRadius: '8px 8px 0 0',
+                fontSize: '0.8rem'
+              }}>
+                <span style={{ fontWeight: 700, color: '#38BDF8', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <Code size={14} /> {(currentQuestion.programming_language || 'javascript').toUpperCase()}
+                </span>
+                <span style={{ color: '#94A3B8' }}>Time: {currentQuestion.time_limit || 2.0}s • Memory: {currentQuestion.memory_limit || 128}MB</span>
+              </div>
+              <textarea
+                rows={10}
+                value={selectedAnswers[currentQuestion.id] !== undefined ? selectedAnswers[currentQuestion.id] : (currentQuestion.starter_code || 'function solution() {\n  // your code\n}')}
+                onChange={(e) => setSelectedAnswers(prev => ({ ...prev, [currentQuestion.id]: e.target.value }))}
+                style={{
+                  width: '100%',
+                  padding: '0.85rem',
+                  fontFamily: 'monospace',
+                  fontSize: '0.88rem',
+                  background: '#020617',
+                  color: '#F8FAFC',
+                  border: '1px solid #1E293B',
+                  borderRadius: '0 0 8px 8px',
+                  outline: 'none'
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                <button
+                  type="button"
+                  disabled={codeExecution[currentQuestion.id]?.running}
+                  onClick={async () => {
+                    const qId = currentQuestion.id;
+                    const code = selectedAnswers[qId] !== undefined ? selectedAnswers[qId] : (currentQuestion.starter_code || '');
+                    setCodeExecution(prev => ({ ...prev, [qId]: { running: true, result: null, error: null } }));
+                    try {
+                      const res = await api.runCode({
+                        questionId: qId,
+                        code,
+                        language: currentQuestion.programming_language || 'javascript'
+                      });
+                      setCodeExecution(prev => ({ ...prev, [qId]: { running: false, result: res, error: null } }));
+                    } catch (err) {
+                      setCodeExecution(prev => ({ ...prev, [qId]: { running: false, result: null, error: err.message } }));
+                    }
                   }}
+                  className="btn btn-primary btn-sm"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: '#059669', borderColor: '#059669' }}
                 >
+                  <Play size={13} />
+                  <span>{codeExecution[currentQuestion.id]?.running ? 'Executing...' : 'Run Code'}</span>
+                </button>
+                <span style={{ fontSize: '0.78rem', color: '#64748B' }}>Hidden tests evaluated on submission</span>
+              </div>
+
+              {codeExecution[currentQuestion.id]?.result && (
+                <div style={{ marginTop: '0.75rem', background: '#F8FAFC', padding: '0.75rem', borderRadius: '6px', border: '1px solid #CBD5E1', fontSize: '0.82rem' }}>
+                  <div style={{ fontWeight: 700, marginBottom: '0.4rem', color: codeExecution[currentQuestion.id].result.passed ? '#059669' : '#DC2626' }}>
+                    {codeExecution[currentQuestion.id].result.passed ? 'Public Tests Passed ✓' : 'Public Tests Failed ✗'}
+                  </div>
+                  {codeExecution[currentQuestion.id].result.results?.map((r, rIdx) => (
+                    <div key={rIdx} style={{ fontSize: '0.78rem', fontFamily: 'monospace', marginTop: '0.2rem' }}>
+                      Test #{rIdx + 1}: {r.passed ? 'PASS' : 'FAIL'} • Expected: {r.expected_output} • Got: {String(r.actual_output ?? '')}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Options Radio List (MCQ & True/False) */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              {optionsList.map((opt, optIdx) => {
+                const isSelected = selectedAnswers[currentQuestion.id] === optIdx;
+                const optionLetters = ['A', 'B', 'C', 'D', 'E'];
+                return (
                   <div
+                    key={optIdx}
+                    onClick={() => handleSelectOption(currentQuestion.id, optIdx)}
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: '50%',
-                      background: isSelected ? 'var(--color-orange)' : 'var(--color-bg-alt)',
-                      color: isSelected ? '#FFFFFF' : 'var(--color-navy)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 700,
-                      fontSize: '0.8rem',
-                      flexShrink: 0
+                      gap: '1rem',
+                      padding: '1rem 1.25rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: `2px solid ${isSelected ? 'var(--color-orange)' : 'var(--color-border)'}`,
+                      background: isSelected ? 'var(--color-orange-light)' : '#FFFFFF',
+                      cursor: 'pointer',
+                      transition: 'all var(--transition-fast)'
                     }}
                   >
-                    {optionLetters[optIdx] || optIdx + 1}
-                  </div>
+                    <div
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: '50%',
+                        background: isSelected ? 'var(--color-orange)' : 'var(--color-bg-alt)',
+                        color: isSelected ? '#FFFFFF' : 'var(--color-navy)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 700,
+                        fontSize: '0.8rem',
+                        flexShrink: 0
+                      }}
+                    >
+                      {optionLetters[optIdx] || optIdx + 1}
+                    </div>
 
-                  <span
-                    style={{
-                      fontSize: '0.95rem',
-                      fontWeight: isSelected ? 600 : 400,
-                      color: isSelected ? '#9A3412' : 'var(--color-text-primary)',
-                      flex: 1
-                    }}
-                  >
-                    {opt}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+                    <span
+                      style={{
+                        fontSize: '0.95rem',
+                        fontWeight: isSelected ? 600 : 400,
+                        color: isSelected ? '#9A3412' : 'var(--color-text-primary)',
+                        flex: 1
+                      }}
+                    >
+                      {opt}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Bottom Pagination Controls */}

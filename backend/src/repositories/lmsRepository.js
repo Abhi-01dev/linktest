@@ -148,59 +148,184 @@ export const lmsRepository = {
   async getTeacherAssignments(teacherId) {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
-        `SELECT ta.*, c.name as class_name, b.name as batch_name, s.name as subject_name
+        `SELECT ta.*, c.name as class_name, b.name as batch_name, s.name as subject_name, s.code as subject_code
          FROM teacher_assignments ta
-         JOIN classes c ON ta.class_id = c.id
+         LEFT JOIN classes c ON ta.class_id = c.id
          LEFT JOIN batches b ON ta.batch_id = b.id
          JOIN subjects s ON ta.subject_id = s.id
-         WHERE ta.teacher_id = $1`,
+         WHERE ta.teacher_id = $1
+         ORDER BY ta.assigned_at DESC`,
         [teacherId]
       );
       return res.rows;
     }
-    return memoryStore.teacher_assignments
+    return (memoryStore.teacher_assignments || [])
       .filter(ta => ta.teacher_id === teacherId)
       .map(ta => {
-        const cls = memoryStore.classes.find(c => c.id === ta.class_id);
-        const batch = memoryStore.batches.find(b => b.id === ta.batch_id);
-        const subject = memoryStore.subjects.find(s => s.id === ta.subject_id);
-        return { ...ta, class_name: cls?.name, batch_name: batch?.name, subject_name: subject?.name };
+        const cls = (memoryStore.classes || []).find(c => c.id === ta.class_id);
+        const batch = (memoryStore.batches || []).find(b => b.id === ta.batch_id);
+        const subject = (memoryStore.subjects || []).find(s => s.id === ta.subject_id);
+        return { ...ta, class_name: cls?.name, batch_name: batch?.name, subject_name: subject?.name, subject_code: subject?.code };
       });
   },
 
-  async assignTeacher({ teacherId, classId, batchId, subjectId }) {
-    // Check if assignment already exists
+  async getAssignmentById(assignmentId) {
     if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT ta.*, c.name as class_name, b.name as batch_name, s.name as subject_name, s.code as subject_code,
+                u.full_name as teacher_name, u.email as teacher_email
+         FROM teacher_assignments ta
+         LEFT JOIN classes c ON ta.class_id = c.id
+         LEFT JOIN batches b ON ta.batch_id = b.id
+         JOIN subjects s ON ta.subject_id = s.id
+         JOIN users u ON ta.teacher_id = u.id
+         WHERE ta.id = $1`,
+        [assignmentId]
+      );
+      return res.rows[0] || null;
+    }
+    const ta = (memoryStore.teacher_assignments || []).find(a => a.id === assignmentId);
+    if (!ta) return null;
+    const cls = (memoryStore.classes || []).find(c => c.id === ta.class_id);
+    const batch = (memoryStore.batches || []).find(b => b.id === ta.batch_id);
+    const subject = (memoryStore.subjects || []).find(s => s.id === ta.subject_id);
+    const user = (memoryStore.users || []).find(u => u.id === ta.teacher_id);
+    return { ...ta, class_name: cls?.name, batch_name: batch?.name, subject_name: subject?.name, subject_code: subject?.code, teacher_name: user?.full_name, teacher_email: user?.email };
+  },
+
+  async getBatchAssignments(batchId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT ta.*, c.name as class_name, b.name as batch_name, b.code as batch_code,
+                s.name as subject_name, s.code as subject_code,
+                u.full_name as teacher_name, u.email as teacher_email, u.avatar_url as teacher_avatar
+         FROM teacher_assignments ta
+         LEFT JOIN classes c ON ta.class_id = c.id
+         LEFT JOIN batches b ON ta.batch_id = b.id
+         JOIN subjects s ON ta.subject_id = s.id
+         JOIN users u ON ta.teacher_id = u.id
+         WHERE ta.batch_id = $1
+         ORDER BY s.name ASC, ta.assigned_at DESC`,
+        [batchId]
+      );
+      return res.rows;
+    }
+    return (memoryStore.teacher_assignments || [])
+      .filter(ta => ta.batch_id === batchId)
+      .map(ta => {
+        const cls = (memoryStore.classes || []).find(c => c.id === ta.class_id);
+        const batch = (memoryStore.batches || []).find(b => b.id === ta.batch_id);
+        const subject = (memoryStore.subjects || []).find(s => s.id === ta.subject_id);
+        const user = (memoryStore.users || []).find(u => u.id === ta.teacher_id);
+        return {
+          ...ta,
+          class_name: cls?.name,
+          batch_name: batch?.name,
+          batch_code: batch?.code,
+          subject_name: subject?.name,
+          subject_code: subject?.code,
+          teacher_name: user?.full_name,
+          teacher_email: user?.email,
+          teacher_avatar: user?.avatar_url
+        };
+      });
+  },
+
+  async getAllTeacherAssignments() {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT ta.*, c.name as class_name, b.name as batch_name, b.code as batch_code,
+                s.name as subject_name, s.code as subject_code,
+                u.full_name as teacher_name, u.email as teacher_email
+         FROM teacher_assignments ta
+         LEFT JOIN classes c ON ta.class_id = c.id
+         LEFT JOIN batches b ON ta.batch_id = b.id
+         JOIN subjects s ON ta.subject_id = s.id
+         JOIN users u ON ta.teacher_id = u.id
+         ORDER BY ta.assigned_at DESC`
+      );
+      return res.rows;
+    }
+    return (memoryStore.teacher_assignments || []).map(ta => {
+      const cls = (memoryStore.classes || []).find(c => c.id === ta.class_id);
+      const batch = (memoryStore.batches || []).find(b => b.id === ta.batch_id);
+      const subject = (memoryStore.subjects || []).find(s => s.id === ta.subject_id);
+      const user = (memoryStore.users || []).find(u => u.id === ta.teacher_id);
+      return {
+        ...ta,
+        class_name: cls?.name,
+        batch_name: batch?.name,
+        batch_code: batch?.code,
+        subject_name: subject?.name,
+        subject_code: subject?.code,
+        teacher_name: user?.full_name,
+        teacher_email: user?.email
+      };
+    });
+  },
+
+  async assignTeacher({ teacherId, classId, batchId, subjectId }) {
+    if (isPostgresConnected && pool) {
+      // Check if duplicate assignment exists
       const exists = await pool.query(
         `SELECT id FROM teacher_assignments WHERE teacher_id=$1 AND class_id=$2 AND subject_id=$3 AND (batch_id=$4 OR (batch_id IS NULL AND $4 IS NULL))`,
         [teacherId, classId, subjectId, batchId || null]
       );
-      if (exists.rows.length > 0) return exists.rows[0];
+      if (exists.rows.length > 0) {
+        const err = new Error('This subject is already assigned to this teacher for the specified class/batch.');
+        err.statusCode = 409;
+        err.code = 'ALREADY_ASSIGNED';
+        throw err;
+      }
       const id = crypto.randomUUID();
-      const res = await pool.query(
-        `INSERT INTO teacher_assignments (id, teacher_id, class_id, batch_id, subject_id, assigned_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [id, teacherId, classId, batchId || null, subjectId, new Date().toISOString()]
+      const now = new Date().toISOString();
+      await pool.query(
+        `INSERT INTO teacher_assignments (id, teacher_id, class_id, batch_id, subject_id, assigned_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [id, teacherId, classId, batchId || null, subjectId, now]
       );
-      return res.rows[0];
+      return this.getAssignmentById(id);
     }
+    if (!memoryStore.teacher_assignments) memoryStore.teacher_assignments = [];
     const existing = memoryStore.teacher_assignments.find(
       ta => ta.teacher_id === teacherId && ta.class_id === classId && ta.subject_id === subjectId && ta.batch_id === (batchId || null)
     );
-    if (existing) return existing;
-    const ta = { id: crypto.randomUUID(), teacher_id: teacherId, class_id: classId, batch_id: batchId || null, subject_id: subjectId, assigned_at: new Date().toISOString() };
+    if (existing) {
+      const err = new Error('This subject is already assigned to this teacher for the specified class/batch.');
+      err.statusCode = 409;
+      err.code = 'ALREADY_ASSIGNED';
+      throw err;
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const ta = { id, teacher_id: teacherId, class_id: classId, batch_id: batchId || null, subject_id: subjectId, assigned_at: now };
     memoryStore.teacher_assignments.push(ta);
-    return ta;
+    return this.getAssignmentById(id);
+  },
+
+  async updateTeacherAssignment(assignmentId, { teacherId }) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `UPDATE teacher_assignments SET teacher_id = $1 WHERE id = $2 RETURNING *`,
+        [teacherId, assignmentId]
+      );
+      if (res.rows.length === 0) return null;
+      return this.getAssignmentById(assignmentId);
+    }
+    const ta = (memoryStore.teacher_assignments || []).find(a => a.id === assignmentId);
+    if (!ta) return null;
+    ta.teacher_id = teacherId;
+    return this.getAssignmentById(assignmentId);
   },
 
   async removeTeacherAssignment(assignmentId) {
     if (isPostgresConnected && pool) {
-      await pool.query('DELETE FROM teacher_assignments WHERE id = $1', [assignmentId]);
-      return true;
+      const res = await pool.query('DELETE FROM teacher_assignments WHERE id = $1 RETURNING *', [assignmentId]);
+      return res.rows[0] || null;
     }
-    const idx = memoryStore.teacher_assignments.findIndex(ta => ta.id === assignmentId);
-    if (idx === -1) return false;
-    memoryStore.teacher_assignments.splice(idx, 1);
-    return true;
+    const idx = (memoryStore.teacher_assignments || []).findIndex(ta => ta.id === assignmentId);
+    if (idx === -1) return null;
+    const deleted = memoryStore.teacher_assignments.splice(idx, 1)[0];
+    return deleted;
   },
 
   // ============================================================

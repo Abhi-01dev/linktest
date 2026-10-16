@@ -120,6 +120,8 @@ class InMemoryStore {
     this.mock_test_audit_logs = [];
     this.mock_test_join_requests = [];
     this.question_bank = [];
+    this.coding_test_cases = [];
+    this.coding_submissions = [];
   }
 }
 
@@ -163,7 +165,7 @@ export function getDbStatus() {
   return {
     isPostgres: isPostgresConnected,
     type: isPostgresConnected ? 'PostgreSQL' : 'InMemoryFallback',
-    databaseUrl: isPostgresConnected ? config.databaseUrl.replace(/:[^:]*@/, ':***@') : 'InMemoryStore',
+    connected: isPostgresConnected,
     persistent_storage_available: isPostgresConnected,
     warning: isPostgresConnected ? null : 'PostgreSQL is offline. Changes will not persist across restarts.'
   };

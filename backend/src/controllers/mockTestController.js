@@ -4,6 +4,7 @@
 import { mockTestService } from '../services/mockTestService.js';
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
+import { notificationService } from '../services/notificationService.js';
 
 export const mockTestController = {
   // ---------------------------------------------------------------------------
@@ -167,6 +168,35 @@ export const mockTestController = {
         reason: req.body.reason
       });
 
+      // Unified Notification Event
+      if (req.body.auto_submitted) {
+        notificationService.createNotification({
+          userId: req.user.id,
+          title: 'Examination Automatically Submitted',
+          message: `Your examination was automatically submitted due to an examination security violation${req.body.reason ? ` (${req.body.reason})` : ''}.`,
+          type: 'ERROR',
+          priority: 'CRITICAL',
+          actionUrl: `/mock-tests/attempts/${attemptId}/result`,
+          actionLabel: 'View Summary',
+          relatedEntityType: 'MOCK_TEST',
+          relatedEntityId: attemptId,
+          eventKey: `student:${req.user.id}:attempt:${attemptId}:AUTO_SUBMIT`
+        }).catch(() => {});
+      } else {
+        notificationService.createNotification({
+          userId: req.user.id,
+          title: 'Test Submission Successful',
+          message: 'Your examination answers have been submitted and evaluated successfully.',
+          type: 'SUCCESS',
+          priority: 'NORMAL',
+          actionUrl: `/mock-tests/attempts/${attemptId}/result`,
+          actionLabel: 'View Result',
+          relatedEntityType: 'MOCK_TEST',
+          relatedEntityId: attemptId,
+          eventKey: `student:${req.user.id}:attempt:${attemptId}:SUBMITTED`
+        }).catch(() => {});
+      }
+
       return res.status(200).json({
         success: true,
         data: result,
@@ -200,6 +230,15 @@ export const mockTestController = {
       const attempts = await mockTestRepository.getAttemptsByStudent(req.user.id, testId);
 
       return res.status(200).json({ success: true, data: { attempts } });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async getMyResults(req, res, next) {
+    try {
+      const results = await mockTestService.getMyResults(req.user);
+      return res.status(200).json({ success: true, data: { results } });
     } catch (err) {
       next(err);
     }
@@ -382,15 +421,45 @@ export const mockTestController = {
   async releaseResults(req, res, next) {
     try {
       const { id } = req.params;
-      const { results_published = true } = req.body;
-
-      const updated = await mockTestRepository.updateTest(id, { results_published });
+      const { batchId } = req.query;
+      const result = await mockTestService.releaseAllTestResults(id, req.user, batchId || null);
 
       return res.status(200).json({
         success: true,
-        data: { test: updated },
-        message: results_published ? 'Examination results released to candidates.' : 'Results unpublished.'
+        data: result,
+        message: 'Examination results released to candidates.'
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async releaseAttemptResult(req, res, next) {
+    try {
+      const { attemptId } = req.params;
+      const result = await mockTestService.releaseAttemptResult(attemptId, req.user);
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+        message: 'Examination result successfully released to candidate.'
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async generateResultsPdf(req, res, next) {
+    try {
+      const testId = req.params.testId || req.params.id;
+      const { batchId } = req.query;
+
+      const pdfBuffer = await mockTestService.generateResultsPdf(testId, req.user, batchId || null);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="linktest-results-${testId}.pdf"`);
+      res.setHeader('Content-Length', pdfBuffer.length);
+      return res.end(pdfBuffer);
     } catch (err) {
       next(err);
     }
@@ -542,6 +611,21 @@ export const mockTestController = {
         });
       }
 
+      if (test.created_by) {
+        notificationService.createNotification({
+          userId: test.created_by,
+          title: 'Student Requested Mock-Test Access',
+          message: `${req.user.full_name || 'A student'} requested entry approval for "${test.title}".`,
+          type: 'APPROVAL_REQUIRED',
+          priority: 'HIGH',
+          actionUrl: '/teacher',
+          actionLabel: 'Review Request',
+          relatedEntityType: 'MOCK_TEST_JOIN_REQUEST',
+          relatedEntityId: request.id,
+          eventKey: `teacher:${test.created_by}:request:${request.id}:APPROVAL_REQUIRED`
+        }).catch(() => {});
+      }
+
       return res.status(201).json({
         success: true,
         data: {
@@ -675,6 +759,20 @@ export const mockTestController = {
         details: { requestId, studentId: request.student_id }
       });
 
+      // Unified Notification Event: notify student of approval
+      notificationService.createNotification({
+        userId: request.student_id,
+        title: 'Teacher Approved Mock-Test Entry',
+        message: `Your access request for "${request.mock_test_title || 'Mock Examination'}" has been approved. You can now start the test.`,
+        type: 'SUCCESS',
+        priority: 'HIGH',
+        actionUrl: `/mock-tests/${request.mock_test_id}/check`,
+        actionLabel: 'Join Mock Test',
+        relatedEntityType: 'MOCK_TEST',
+        relatedEntityId: request.mock_test_id,
+        eventKey: `student:${request.student_id}:request:${request.id}:APPROVED`
+      }).catch(() => {});
+
       return res.status(200).json({
         success: true,
         data: { request: updated },
@@ -722,10 +820,59 @@ export const mockTestController = {
         details: { requestId, studentId: request.student_id, reason }
       });
 
+      // Unified Notification Event: notify student of rejection
+      notificationService.createNotification({
+        userId: request.student_id,
+        title: 'Teacher Rejected Mock-Test Entry',
+        message: `Your access request for "${request.mock_test_title || 'Mock Examination'}" was not approved${reason ? `: ${reason}` : '.'}`,
+        type: 'WARNING',
+        priority: 'NORMAL',
+        actionUrl: '/mock-tests',
+        actionLabel: 'View Examinations',
+        relatedEntityType: 'MOCK_TEST',
+        relatedEntityId: request.mock_test_id,
+        eventKey: `student:${request.student_id}:request:${request.id}:REJECTED`
+      }).catch(() => {});
+
       return res.status(200).json({
         success: true,
         data: { request: updated },
         message: `Rejected join request for ${request.student_name || 'student'}.`
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /**
+   * Teacher manual evaluation of a student's answer (Long Answer or override)
+   */
+  async evaluateResponse(req, res, next) {
+    try {
+      const { attemptId, questionId } = req.params;
+      const { score, comment } = req.body;
+
+      if (score === undefined || isNaN(parseFloat(score))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_SCORE', message: 'A numeric score must be provided.' }
+        });
+      }
+
+      const updatedAttempt = await mockTestRepository.manuallyEvaluateResponse(
+        attemptId,
+        questionId,
+        {
+          score: parseFloat(score),
+          comment: comment || '',
+          evaluatorId: req.user.id
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: { attempt: updatedAttempt },
+        message: 'Response evaluation saved successfully.'
       });
     } catch (err) {
       next(err);

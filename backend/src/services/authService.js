@@ -234,6 +234,17 @@ export const authService = {
       throw err;
     }
 
+    if (!user.password_hash) {
+      const err = new Error(
+        user.auth_provider === 'google'
+          ? 'This account was registered using Google Sign-In. Please click "Continue with Google" or reset your password to set a local password.'
+          : 'No password has been set for this account. Please use Google Sign-In or reset your password.'
+      );
+      err.statusCode = 400;
+      err.code = 'OAUTH_ACCOUNT_PASSWORD_NOT_SET';
+      throw err;
+    }
+
     const isValid = await bcrypt.compare(password, user.password_hash);
     if (!isValid) {
       const err = new Error('Invalid email or password.');
@@ -471,12 +482,14 @@ export const authService = {
       throw err;
     }
 
-    const isValid = await bcrypt.compare(currentPassword, user.password_hash);
-    if (!isValid) {
-      const err = new Error('Current password is incorrect.');
-      err.statusCode = 400;
-      err.code = 'INVALID_PASSWORD';
-      throw err;
+    if (user.password_hash) {
+      const isValid = await bcrypt.compare(currentPassword, user.password_hash);
+      if (!isValid) {
+        const err = new Error('Current password is incorrect.');
+        err.statusCode = 400;
+        err.code = 'INVALID_PASSWORD';
+        throw err;
+      }
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);

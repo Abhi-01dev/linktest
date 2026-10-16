@@ -21,7 +21,11 @@ import {
   X,
   FileCheck2,
   Check,
-  RotateCcw
+  RotateCcw,
+  BookOpen,
+  Layers,
+  Printer,
+  Download
 } from 'lucide-react';
 
 export function TeacherDashboard() {
@@ -33,8 +37,16 @@ export function TeacherDashboard() {
   const [joinRequests, setJoinRequests] = useState([]);
   const [loadingRequests, setLoadingRequests] = useState(false);
   const [requestFilter, setRequestFilter] = useState('PENDING'); // 'PENDING', 'APPROVED', 'REJECTED', 'ALL'
-  const [actionProcessingId, setActionProcessingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, request: null, reason: '' });
+  const [actionProcessingId, setActionProcessingId] = useState(null);
+
+  // PDF Report Generation Modal State
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [teacherTests, setTeacherTests] = useState([]);
+  const [teacherBatches, setTeacherBatches] = useState([]);
+  const [selectedPdfTest, setSelectedPdfTest] = useState('');
+  const [selectedPdfBatch, setSelectedPdfBatch] = useState('');
+  const [generatingPdf, setGeneratingPdf] = useState(false);
 
   const { showToast } = useToast();
 
@@ -76,6 +88,45 @@ export function TeacherDashboard() {
 
     return () => clearInterval(interval);
   }, [fetchJoinRequests, requestFilter]);
+
+  // Load tests and batches for PDF modal
+  useEffect(() => {
+    async function loadPdfOptions() {
+      try {
+        const [testsRes, batchesRes] = await Promise.all([
+          api.getMockTests().catch(() => []),
+          api.getBatches().catch(() => [])
+        ]);
+        const testsList = Array.isArray(testsRes) ? testsRes : (testsRes?.tests || []);
+        const batchesList = Array.isArray(batchesRes) ? batchesRes : (batchesRes?.batches || []);
+        setTeacherTests(testsList);
+        setTeacherBatches(batchesList);
+        if (testsList.length > 0 && !selectedPdfTest) {
+          setSelectedPdfTest(testsList[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to load PDF options:', err);
+      }
+    }
+    loadPdfOptions();
+  }, []);
+
+  const handleGeneratePdf = async () => {
+    if (!selectedPdfTest) {
+      showToast('Please select a test to generate results PDF.', 'warning');
+      return;
+    }
+    setGeneratingPdf(true);
+    try {
+      await api.downloadTestResultsPdf(selectedPdfTest, selectedPdfBatch || null);
+      showToast('Examination results PDF downloaded successfully.', 'success');
+      setPdfModalOpen(false);
+    } catch (err) {
+      showToast(err.message || 'Failed to generate PDF.', 'error');
+    } finally {
+      setGeneratingPdf(false);
+    }
+  };
 
   // Handle Approve
   const handleApprove = async (reqItem) => {
@@ -149,6 +200,35 @@ export function TeacherDashboard() {
   const upcomingLive = data?.upcoming_live_classes || [];
   const announcements = data?.recent_announcements || [];
 
+  const mySubjects = React.useMemo(() => {
+    const map = new Map();
+    for (const item of assignedClasses) {
+      if (item.subject_id && !map.has(item.subject_id)) {
+        map.set(item.subject_id, {
+          id: item.subject_id,
+          name: item.subject_name,
+          code: item.subject_code
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [assignedClasses]);
+
+  const myBatches = React.useMemo(() => {
+    const map = new Map();
+    for (const item of assignedClasses) {
+      const key = item.batch_id || item.batch_name;
+      if (key && !map.has(key)) {
+        map.set(key, {
+          id: item.batch_id,
+          name: item.batch_name || item.class_name,
+          className: item.class_name
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [assignedClasses]);
+
   return (
     <div>
       {/* Welcome Banner */}
@@ -182,6 +262,22 @@ export function TeacherDashboard() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setPdfModalOpen(true)}
+            className="btn btn-outline"
+            style={{
+              background: '#FFFFFF',
+              color: '#1E3A8A',
+              borderColor: '#FFFFFF',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              fontWeight: 700
+            }}
+          >
+            <Printer size={16} />
+            <span>Generate Results PDF</span>
+          </button>
           <Link to="/teacher/attendance" className="btn btn-outline" style={{ background: '#FFFFFF', color: '#1E3A8A', borderColor: '#FFFFFF' }}>
             <ClipboardCheck size={16} />
             <span>Mark Roll Call</span>
@@ -505,6 +601,112 @@ export function TeacherDashboard() {
         )}
       </div>
 
+      {/* Faculty Allocation: My Subjects & My Batches */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+        {/* My Subjects Card */}
+        <div className="card" style={{ padding: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+              <BookOpen size={18} style={{ color: '#2563EB' }} />
+              <span>My Subjects</span>
+            </h3>
+            <span style={{ fontSize: '0.8rem', color: '#1E40AF', fontWeight: 700, background: '#DBEAFE', padding: '0.2rem 0.65rem', borderRadius: '999px' }}>
+              {mySubjects.length} Assigned
+            </span>
+          </div>
+
+          {mySubjects.length === 0 ? (
+            <p style={{ color: '#64748B', fontSize: '0.875rem', textAlign: 'center', padding: '1.5rem 0' }}>
+              No subjects assigned to you yet. Contact administrator.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {mySubjects.map((sub) => (
+                <div
+                  key={sub.id}
+                  style={{
+                    padding: '0.85rem 1rem',
+                    background: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.92rem' }}>
+                      {sub.name}
+                    </div>
+                    {sub.code && (
+                      <div style={{ fontSize: '0.78rem', color: '#64748B', marginTop: '0.15rem' }}>
+                        Code: {sub.code}
+                      </div>
+                    )}
+                  </div>
+                  <span style={{ padding: '0.2rem 0.55rem', background: '#DCFCE7', color: '#15803D', border: '1px solid #86EFAC', borderRadius: '4px', fontSize: '0.74rem', fontWeight: 700 }}>
+                    Active
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* My Batches Card */}
+        <div className="card" style={{ padding: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+              <Layers size={18} style={{ color: '#16A34A' }} />
+              <span>My Batches</span>
+            </h3>
+            <span style={{ fontSize: '0.8rem', color: '#166534', fontWeight: 700, background: '#DCFCE7', padding: '0.2rem 0.65rem', borderRadius: '999px' }}>
+              {myBatches.length} Batches
+            </span>
+          </div>
+
+          {myBatches.length === 0 ? (
+            <p style={{ color: '#64748B', fontSize: '0.875rem', textAlign: 'center', padding: '1.5rem 0' }}>
+              No batches assigned to you yet. Contact administrator.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {myBatches.map((b) => (
+                <div
+                  key={b.id || b.name}
+                  style={{
+                    padding: '0.85rem 1rem',
+                    background: '#F0FDF4',
+                    border: '1px solid #BBF7D0',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#166534', fontSize: '0.92rem' }}>
+                      {b.name}
+                    </div>
+                    {b.className && b.className !== b.name && (
+                      <div style={{ fontSize: '0.78rem', color: '#15803D', marginTop: '0.15rem' }}>
+                        Class: {b.className}
+                      </div>
+                    )}
+                  </div>
+                  <Link
+                    to="/teacher/classes"
+                    style={{ fontSize: '0.78rem', color: '#166534', fontWeight: 600, textDecoration: 'none' }}
+                  >
+                    View Roster →
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Main Grid: Today's Schedule & Live Classes */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
         {/* Today's Schedule */}
@@ -709,6 +911,148 @@ export function TeacherDashboard() {
                 }}
               >
                 {actionProcessingId === rejectModal.request?.id ? 'Rejecting...' : 'Reject Request'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Generate Results PDF Modal */}
+      {pdfModalOpen && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: '12px',
+            width: '100%',
+            maxWidth: '520px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+            border: '1px solid #E2E8F0',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              padding: '1.25rem 1.5rem',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: '#F8FAFC'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Printer size={18} color="#2563EB" />
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)' }}>
+                  Generate Results PDF
+                </h3>
+              </div>
+              <button
+                onClick={() => setPdfModalOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer', padding: '0.2rem' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <p style={{ margin: 0, fontSize: '0.88rem', color: '#64748B', lineHeight: 1.5 }}>
+                Generate ONE consolidated PDF report containing scores, percentages, and breakdowns for all authorized students in the selected test.
+              </p>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.35rem' }}>
+                  Select Examination Test *
+                </label>
+                <select
+                  value={selectedPdfTest}
+                  onChange={(e) => setSelectedPdfTest(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.85rem',
+                    borderRadius: '6px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '0.9rem',
+                    background: '#FFFFFF',
+                    color: '#0F172A',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="">-- Choose Mock Test --</option>
+                  {teacherTests.map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.title} ({t.subject || 'General'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.35rem' }}>
+                  Select Batch (Optional)
+                </label>
+                <select
+                  value={selectedPdfBatch}
+                  onChange={(e) => setSelectedPdfBatch(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.85rem',
+                    borderRadius: '6px',
+                    border: '1px solid #CBD5E1',
+                    fontSize: '0.9rem',
+                    background: '#FFFFFF',
+                    color: '#0F172A',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="">All Enrolled Batches</option>
+                  {teacherBatches.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.course_title || b.course_id || 'Batch'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div style={{
+              padding: '1rem 1.5rem',
+              background: '#F8FAFC',
+              borderTop: '1px solid #E2E8F0',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '0.75rem'
+            }}>
+              <button
+                onClick={() => setPdfModalOpen(false)}
+                className="btn btn-secondary"
+                style={{ padding: '0.45rem 1rem', fontSize: '0.84rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleGeneratePdf}
+                disabled={generatingPdf || !selectedPdfTest}
+                className="btn btn-primary"
+                style={{
+                  padding: '0.45rem 1.25rem',
+                  fontSize: '0.84rem',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  background: '#2563EB',
+                  borderColor: '#2563EB'
+                }}
+              >
+                <Download size={14} />
+                <span>{generatingPdf ? 'Generating PDF Report...' : 'Download PDF Report'}</span>
               </button>
             </div>
           </div>

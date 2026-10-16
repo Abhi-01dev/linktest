@@ -143,6 +143,9 @@ export function QuizResultPage() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
             {results.map((r, idx) => {
+              const isLongAnswer = r.question_type === 'long_answer' || r.question_type === 'subjective';
+              const isCoding = r.question_type === 'coding';
+              const isPendingReview = isLongAnswer && Boolean(r.is_pending_review);
               const options = typeof r.options === 'string' ? JSON.parse(r.options) : r.options || [];
               const isCorrect = r.is_correct;
 
@@ -152,18 +155,22 @@ export function QuizResultPage() {
                   className="card"
                   style={{
                     padding: '2rem',
-                    borderLeft: `5px solid ${isCorrect ? 'var(--color-success)' : 'var(--color-danger)'}`
+                    borderLeft: `5px solid ${isPendingReview ? '#F59E0B' : isCorrect ? 'var(--color-success)' : 'var(--color-danger)'}`
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                     <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>
-                      Question {idx + 1}
+                      Question {idx + 1} {isCoding ? '• Coding' : isLongAnswer ? '• Long Answer' : ''}
                     </span>
                     <span
-                      className={`badge ${isCorrect ? 'badge-success' : 'badge-warning'}`}
-                      style={{ fontSize: '0.75rem' }}
+                      className={`badge ${isPendingReview ? 'badge-warning' : isCorrect ? 'badge-success' : 'badge-warning'}`}
+                      style={{
+                        fontSize: '0.75rem',
+                        background: isPendingReview ? '#FEF3C7' : undefined,
+                        color: isPendingReview ? '#B45309' : undefined
+                      }}
                     >
-                      {isCorrect ? 'Correct ✓' : 'Incorrect ✗'}
+                      {isPendingReview ? 'Pending Evaluation' : isCoding ? (isCorrect ? 'All Tests Passed ✓' : 'Tests Failed ✗') : isCorrect ? 'Correct ✓' : 'Incorrect ✗'}
                     </span>
                   </div>
 
@@ -171,65 +178,93 @@ export function QuizResultPage() {
                     {r.question_text}
                   </h3>
 
-                  {/* Options List with Highlight */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
-                    {options.map((opt, optIdx) => {
-                      const isUserSelection = r.selected_option_index === optIdx;
-                      const isTheCorrectOption = r.correct_option_index === optIdx;
-
-                      let borderColor = 'var(--color-border)';
-                      let bgColor = '#FFFFFF';
-                      let labelColor = 'var(--color-text-primary)';
-
-                      if (isTheCorrectOption) {
-                        borderColor = '#10B981';
-                        bgColor = '#ECFDF5';
-                        labelColor = '#065F46';
-                      } else if (isUserSelection && !isCorrect) {
-                        borderColor = '#EF4444';
-                        bgColor = '#FEF2F2';
-                        labelColor = '#991B1B';
-                      }
-
-                      return (
-                        <div
-                          key={optIdx}
-                          style={{
-                            padding: '0.75rem 1rem',
-                            borderRadius: 'var(--radius-md)',
-                            border: `1.5px solid ${borderColor}`,
-                            background: bgColor,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            fontSize: '0.9rem'
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                            <span style={{ fontWeight: 700, color: labelColor }}>
-                              {String.fromCharCode(65 + optIdx)}.
-                            </span>
-                            <span style={{ color: labelColor, fontWeight: isTheCorrectOption ? 600 : 400 }}>
-                              {opt}
-                            </span>
-                          </div>
-
-                          <div style={{ fontSize: '0.75rem', fontWeight: 700 }}>
-                            {isTheCorrectOption && (
-                              <span style={{ color: '#059669', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                <Check size={14} /> Correct Answer
-                              </span>
-                            )}
-                            {isUserSelection && !isCorrect && (
-                              <span style={{ color: '#DC2626', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                                <X size={14} /> Your Choice
-                              </span>
-                            )}
-                          </div>
+                  {/* Long Answer Display */}
+                  {isLongAnswer ? (
+                    <div style={{ background: '#F8FAFC', padding: '1rem', borderRadius: '8px', marginBottom: '1.25rem', border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#64748B', marginBottom: '0.35rem' }}>Your Answer:</div>
+                      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5, fontSize: '0.9rem' }}>
+                        {r.response_text || r.text || '(No answer provided)'}
+                      </div>
+                      {r.evaluation_comment && (
+                        <div style={{ marginTop: '0.5rem', background: '#EFF6FF', padding: '0.5rem 0.75rem', borderRadius: '4px', color: '#1D4ED8', fontSize: '0.82rem' }}>
+                          <strong>Teacher Feedback:</strong> {r.evaluation_comment}
                         </div>
-                      );
-                    })}
-                  </div>
+                      )}
+                    </div>
+                  ) : isCoding ? (
+                    /* Coding Question Display */
+                    <div style={{ background: '#0F172A', color: '#F8FAFC', padding: '1rem', borderRadius: '8px', marginBottom: '1.25rem' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: '0.35rem' }}>Your Submitted Code:</div>
+                      <pre style={{ margin: 0, fontFamily: 'monospace', fontSize: '0.82rem', overflowX: 'auto' }}>
+                        {r.response_text || r.code || '(No code submitted)'}
+                      </pre>
+                      {r.execution_results && (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#38BDF8' }}>
+                          Tests Passed: {r.execution_results.test_cases_passed || 0} / {r.execution_results.total_test_cases || 0}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Options List with Highlight (MCQ / True False) */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                      {options.map((opt, optIdx) => {
+                        const isUserSelection = r.selected_option_index === optIdx;
+                        const isTheCorrectOption = r.correct_option_index === optIdx;
+
+                        let borderColor = 'var(--color-border)';
+                        let bgColor = '#FFFFFF';
+                        let labelColor = 'var(--color-text-primary)';
+
+                        if (isTheCorrectOption) {
+                          borderColor = '#10B981';
+                          bgColor = '#ECFDF5';
+                          labelColor = '#065F46';
+                        } else if (isUserSelection && !isCorrect) {
+                          borderColor = '#EF4444';
+                          bgColor = '#FEF2F2';
+                          labelColor = '#991B1B';
+                        }
+
+                        return (
+                          <div
+                            key={optIdx}
+                            style={{
+                              padding: '0.75rem 1rem',
+                              borderRadius: 'var(--radius-md)',
+                              border: `1.5px solid ${borderColor}`,
+                              background: bgColor,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              fontSize: '0.9rem'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                              <span style={{ fontWeight: 700, color: labelColor }}>
+                                {String.fromCharCode(65 + optIdx)}.
+                              </span>
+                              <span style={{ color: labelColor, fontWeight: isTheCorrectOption ? 600 : 400 }}>
+                                {opt}
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                              {isTheCorrectOption && (
+                                <span style={{ color: '#059669', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <Check size={14} /> Correct Answer
+                                </span>
+                              )}
+                              {isUserSelection && !isCorrect && (
+                                <span style={{ color: '#DC2626', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                  <X size={14} /> Your Choice
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Educational Server Explanation */}
                   {r.explanation && (

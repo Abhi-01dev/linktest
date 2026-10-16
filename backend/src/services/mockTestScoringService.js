@@ -24,8 +24,25 @@ export const mockTestScoringService = {
         order_index: q.order_index,
         case_passage: q.case_passage,
         image_url: q.image_url,
+        programming_language: q.programming_language || 'javascript',
+        starter_code: q.starter_code || null,
+        time_limit: parseFloat(q.time_limit || 2.0),
+        memory_limit: parseInt(q.memory_limit || 128, 10),
         metadata: { ...q.metadata }
       };
+
+      // Sanitize test cases: strip inputs and expected outputs for hidden test cases
+      let rawCases = [];
+      try {
+        rawCases = typeof q.test_cases === 'string' ? JSON.parse(q.test_cases) : (q.test_cases || []);
+      } catch { rawCases = []; }
+
+      sanitized.test_cases = rawCases.map(tc => {
+        if (tc.is_hidden) {
+          return { id: tc.id, is_hidden: true };
+        }
+        return { id: tc.id, input: tc.input, expected_output: tc.expected_output, is_hidden: false };
+      });
 
       // Sanitize options based on type
       if (q.question_type === 'matching') {
@@ -42,6 +59,8 @@ export const mockTestScoringService = {
       // Explicitly delete sensitive fields
       delete sanitized.answer_key;
       delete sanitized.explanation;
+      delete sanitized.expected_answer;
+      delete sanitized.evaluation_criteria;
 
       return sanitized;
     });
@@ -71,17 +90,17 @@ export const mockTestScoringService = {
     switch (type) {
       case 'mcq_single':
       case 'case_study': {
-        const selected = responseData.selected_index !== undefined 
-          ? responseData.selected_index 
+        const selected = responseData.selected_index !== undefined
+          ? responseData.selected_index
           : (responseData.selected !== undefined ? responseData.selected : responseData.option_id);
         if (selected === undefined || selected === null) {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
-        const correct = answerKey.correct_index !== undefined 
-          ? answerKey.correct_index 
+        const correct = answerKey.correct_index !== undefined
+          ? answerKey.correct_index
           : (answerKey.selected !== undefined ? answerKey.selected : answerKey.correct_option_id);
-        
-        const isMatch = String(selected).trim().toLowerCase() === String(correct).trim().toLowerCase() 
+
+        const isMatch = String(selected).trim().toLowerCase() === String(correct).trim().toLowerCase()
           || (!isNaN(Number(selected)) && !isNaN(Number(correct)) && Number(selected) === Number(correct));
 
         if (isMatch) {
@@ -92,11 +111,11 @@ export const mockTestScoringService = {
       }
 
       case 'mcq_multiple': {
-        const selected = Array.isArray(responseData.selected_indices) 
-          ? responseData.selected_indices 
+        const selected = Array.isArray(responseData.selected_indices)
+          ? responseData.selected_indices
           : (Array.isArray(responseData.selected) ? responseData.selected : (Array.isArray(responseData.option_ids) ? responseData.option_ids : []));
-        const correct = Array.isArray(answerKey.correct_indices) 
-          ? answerKey.correct_indices 
+        const correct = Array.isArray(answerKey.correct_indices)
+          ? answerKey.correct_indices
           : (Array.isArray(answerKey.selected) ? answerKey.selected : (Array.isArray(answerKey.correct_option_ids) ? answerKey.correct_option_ids : []));
 
         if (selected.length === 0) {
@@ -139,15 +158,25 @@ export const mockTestScoringService = {
       }
 
       case 'true_false': {
-        const selected = responseData.selected_value !== undefined 
-          ? responseData.selected_value 
+        let selected = responseData.selected_value !== undefined
+          ? responseData.selected_value
           : responseData.boolean;
+        if (selected === undefined && responseData.selected_index !== undefined) {
+          selected = responseData.selected_index === 0;
+        }
         if (selected === undefined || selected === null) {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
-        const expected = answerKey.correct_value !== undefined 
-          ? Boolean(answerKey.correct_value) 
-          : Boolean(answerKey.boolean);
+        let expected;
+        if (answerKey.correct_value !== undefined) {
+          expected = Boolean(answerKey.correct_value);
+        } else if (answerKey.boolean !== undefined) {
+          expected = Boolean(answerKey.boolean);
+        } else if (answerKey.correct_index !== undefined) {
+          expected = answerKey.correct_index === 0;
+        } else {
+          expected = true;
+        }
         const actual = Boolean(selected);
 
         if (actual === expected) {
@@ -159,8 +188,8 @@ export const mockTestScoringService = {
 
       case 'fill_blank':
       case 'short_answer': {
-        const rawText = responseData.text !== undefined 
-          ? responseData.text 
+        const rawText = responseData.text !== undefined
+          ? responseData.text
           : (Array.isArray(responseData.blanks) ? responseData.blanks[0] : (responseData.value || ''));
         const text = String(rawText || '').trim().toLowerCase();
         if (!text) {
@@ -226,8 +255,9 @@ export const mockTestScoringService = {
         }
       }
 
+      case 'long_answer':
       case 'subjective': {
-        const text = (responseData.text || '').trim();
+        const text = (responseData.text || responseData.response_text || '').trim();
         if (!text) {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
@@ -235,7 +265,34 @@ export const mockTestScoringService = {
           score_awarded: 0,
           is_correct: null,
           is_pending_review: true,
-          evaluation_comment: 'Submitted. Pending teacher subjective evaluation.'
+          evaluation_comment: 'Submitted. Pending teacher evaluation.'
+        };
+      }
+
+      case 'coding': {
+        const code = (responseData.code || responseData.text || '').trim();
+        if (!code) {
+          return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
+        }
+
+        // If execution results are already present in responseData (e.g. candidate ran/submitted code)
+        if (responseData.test_cases_passed !== undefined && responseData.total_test_cases) {
+          const ratio = responseData.total_test_cases > 0 ? (responseData.test_cases_passed / responseData.total_test_cases) : 0;
+          const score = parseFloat((ratio * marks).toFixed(2));
+          const isPassed = responseData.test_cases_passed === responseData.total_test_cases;
+          return {
+            score_awarded: score,
+            is_correct: isPassed,
+            is_pending_review: false,
+            evaluation_comment: `${responseData.test_cases_passed}/${responseData.total_test_cases} test cases passed.`
+          };
+        }
+
+        return {
+          score_awarded: 0,
+          is_correct: null,
+          is_pending_review: false,
+          evaluation_comment: 'Code submitted.'
         };
       }
 

@@ -3,8 +3,11 @@
 
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
+import { securityLogRepository } from '../repositories/securityLogRepository.js';
 import { mockTestScoringService } from './mockTestScoringService.js';
 import { aiService } from './aiService.js';
+import { generateTestResultsPdf } from './pdfReportService.js';
+import { notificationService } from './notificationService.js';
 
 export const mockTestService = {
   // ---------------------------------------------------------------------------
@@ -234,9 +237,13 @@ export const mockTestService = {
         id: attempt.id,
         test_id: test.id,
         status: attempt.status,
+        submission_status: attempt.submission_status || null,
+        submission_reason: attempt.submission_reason || null,
         expires_at: attempt.expires_at,
         started_at: attempt.started_at,
-        warning_count: attempt.warning_count || 0
+        warning_count: attempt.warning_count || 0,
+        security_warning_count: attempt.security_warning_count || 0,
+        fullscreen_exit_count: attempt.fullscreen_exit_count || 0
       },
       test_id: test.id,
       test_title: test.title,
@@ -247,7 +254,11 @@ export const mockTestService = {
       expires_at: attempt.expires_at,
       remaining_seconds: remainingSeconds,
       status: attempt.status,
+      submission_status: attempt.submission_status || null,
+      submission_reason: attempt.submission_reason || null,
       warning_count: attempt.warning_count || 0,
+      security_warning_count: attempt.security_warning_count || 0,
+      fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
       questions: sanitizedQuestions,
       responses: responsesMap
     };
@@ -287,7 +298,11 @@ export const mockTestService = {
       throw err;
     }
 
-    const { question_id, response_data, is_marked_for_review, is_visited } = responsePayload;
+    const question_id = responsePayload.question_id || responsePayload.questionId;
+    const response_data = responsePayload.response_data !== undefined ? responsePayload.response_data : responsePayload.responseData;
+    const is_marked_for_review = responsePayload.is_marked_for_review !== undefined ? responsePayload.is_marked_for_review : responsePayload.isMarkedForReview;
+    const is_visited = responsePayload.is_visited !== undefined ? responsePayload.is_visited : (responsePayload.isVisited ?? true);
+
     if (!question_id) {
       const err = new Error('question_id is required.');
       err.status = 400;
@@ -323,8 +338,17 @@ export const mockTestService = {
     }
 
     if (attempt.status !== 'in_progress') {
-      return { recorded: false, reason: 'Attempt not in progress' };
+      return {
+        recorded: false,
+        reason: 'Attempt not in progress',
+        status: attempt.status,
+        auto_submitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
+        submission_reason: attempt.submission_reason || null
+      };
     }
+
+    // Support both event_type and eventType
+    const rawType = (eventData.event_type || eventData.eventType || '').trim().toUpperCase();
 
     const validEventTypes = [
       'FACE_NOT_DETECTED',
@@ -337,40 +361,68 @@ export const mockTestService = {
       'NETWORK_INTERRUPTION',
       'AUDIO_ANOMALY',
       'EXAM_TIME_EXPIRED',
-      'SUSPICIOUS_KEY_COMBINATION'
+      'SUSPICIOUS_KEY_COMBINATION',
+      'SECURITY_WARNING',
+      'AUTO_SUBMISSION'
     ];
 
-    if (!validEventTypes.includes(eventData.event_type)) {
-      const err = new Error(`Unsupported proctoring event type: ${eventData.event_type}`);
+    if (!validEventTypes.includes(rawType)) {
+      const err = new Error(`Unsupported proctoring event type: ${rawType}`);
       err.status = 400;
       throw err;
     }
 
-    // Check for duplicate debouncing: ignore identical event if received within 4 seconds
+    // Save pending answers if provided in event payload
+    if (eventData.answers && typeof eventData.answers === 'object') {
+      const entries = Object.entries(eventData.answers);
+      for (const [qId, ans] of entries) {
+        try {
+          await this.saveResponse(attemptId, student, {
+            question_id: qId,
+            response_data: ans.response_data !== undefined ? ans.response_data : ans,
+            is_marked_for_review: Boolean(ans.is_marked_for_review),
+            is_visited: true
+          });
+        } catch (saveErr) {
+          console.warn('[MockTestService] Auto-saving answer during security event encountered warning:', saveErr.message);
+        }
+      }
+    }
+
+    // Check for duplicate debouncing: ignore identical event if received within 3.5 seconds
     const existingEvents = await mockTestRepository.getProctoringEvents(attemptId);
     const lastMatching = existingEvents
-      .filter(e => e.event_type === eventData.event_type)
+      .filter(e => e.event_type === rawType)
       .sort((a, b) => new Date(b.server_timestamp) - new Date(a.server_timestamp))[0];
 
     if (lastMatching) {
       const elapsed = Date.now() - new Date(lastMatching.server_timestamp).getTime();
-      if (elapsed < 4000) {
-        return { recorded: false, debounced: true, warning_count: attempt.warning_count || 0 };
+      if (elapsed < 3500) {
+        return {
+          recorded: false,
+          debounced: true,
+          warning_count: attempt.warning_count || 0,
+          security_warning_count: attempt.security_warning_count || 0,
+          fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+          auto_submitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
+          status: attempt.status,
+          submission_reason: attempt.submission_reason || null
+        };
       }
     }
 
-    // Persist event
+    // Persist event in proctoring events table
     const recorded = await mockTestRepository.logProctoringEvent({
       attempt_id: attemptId,
-      event_type: eventData.event_type,
-      severity: eventData.severity || 'warning',
-      client_timestamp: eventData.client_timestamp || new Date().toISOString(),
+      event_type: rawType,
+      severity: eventData.severity || (rawType === 'FULLSCREEN_EXIT' ? 'critical' : 'warning'),
+      client_timestamp: eventData.client_timestamp || eventData.timestamp || new Date().toISOString(),
       duration_seconds: eventData.duration_seconds || 0,
       confidence: eventData.confidence || 1.0,
-      metadata: eventData.metadata || {}
+      metadata: eventData.metadata || { reason: eventData.reason || null }
     });
 
-    // Update proctoring summary and warnings
+    // Update proctoring summary
     const summary = attempt.proctoring_summary || {
       face_absence_events: 0,
       multiple_face_events: 0,
@@ -381,31 +433,177 @@ export const mockTestService = {
       flagged: false
     };
 
-    if (eventData.event_type === 'FACE_NOT_DETECTED') summary.face_absence_events = (summary.face_absence_events || 0) + 1;
-    if (eventData.event_type === 'MULTIPLE_FACES') summary.multiple_face_events = (summary.multiple_face_events || 0) + 1;
-    if (['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(eventData.event_type)) summary.tab_switch_events = (summary.tab_switch_events || 0) + 1;
-    if (eventData.event_type === 'FULLSCREEN_EXIT') summary.fullscreen_exit_events = (summary.fullscreen_exit_events || 0) + 1;
-    if (eventData.event_type === 'CAMERA_DISCONNECTED') summary.camera_disconnect_events = (summary.camera_disconnect_events || 0) + 1;
+    if (rawType === 'FACE_NOT_DETECTED') summary.face_absence_events = (summary.face_absence_events || 0) + 1;
+    if (rawType === 'MULTIPLE_FACES') summary.multiple_face_events = (summary.multiple_face_events || 0) + 1;
+    if (['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(rawType)) summary.tab_switch_events = (summary.tab_switch_events || 0) + 1;
+    if (rawType === 'FULLSCREEN_EXIT') summary.fullscreen_exit_events = (summary.fullscreen_exit_events || 0) + 1;
+    if (rawType === 'CAMERA_DISCONNECTED') summary.camera_disconnect_events = (summary.camera_disconnect_events || 0) + 1;
 
     summary.total_events = (summary.total_events || 0) + 1;
 
-    const newWarningCount = (attempt.warning_count || 0) + 1;
-    const testSnapshot = attempt.test_snapshot || {};
-    const maxWarnings = testSnapshot.proctoring_config?.max_warnings || 5;
+    // Strict separate counters
+    const MAX_WARNINGS = 5;
+    const MAX_FULLSCREEN_EXITS = 2;
 
-    if (newWarningCount >= maxWarnings) {
+    let newSecurityWarningCount = attempt.security_warning_count || 0;
+    let newFullscreenExitCount = attempt.fullscreen_exit_count || 0;
+    let newWarningCount = (attempt.warning_count || 0) + 1;
+
+    const isFullscreenExit = rawType === 'FULLSCREEN_EXIT';
+    if (isFullscreenExit) {
+      newFullscreenExitCount += 1;
+    } else {
+      newSecurityWarningCount += 1;
+    }
+
+    if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS) {
       summary.flagged = true;
     }
 
+    // Check Auto-Submission Limits:
+    // Limit 1: Second fullscreen exit -> SECOND_FULLSCREEN_EXIT
+    if (newFullscreenExitCount >= MAX_FULLSCREEN_EXITS) {
+      await mockTestRepository.updateAttempt(attemptId, {
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        proctoring_summary: summary
+      });
+
+      // Audit logs
+      await mockTestRepository.logAudit({
+        testId: attempt.test_id,
+        attemptId,
+        actorId: student.id,
+        actorRole: student.role,
+        action: 'FULLSCREEN_EXIT',
+        details: { exit_count: newFullscreenExitCount, max_exits: MAX_FULLSCREEN_EXITS }
+      });
+      await securityLogRepository.logEvent({
+        eventType: 'FULLSCREEN_EXIT',
+        severity: 'CRITICAL',
+        userId: student.id,
+        userEmail: student.email,
+        details: `Candidate reached second fullscreen exit (${newFullscreenExitCount}/${MAX_FULLSCREEN_EXITS}). Initiating auto-submission.`,
+        metadata: { attemptId, testId: attempt.test_id, exit_count: newFullscreenExitCount }
+      });
+
+      const submissionResult = await this.submitAttempt(attemptId, student, {
+        auto_submitted: true,
+        reason: 'SECOND_FULLSCREEN_EXIT',
+        status: 'AUTO_SUBMITTED'
+      });
+
+      return {
+        recorded: true,
+        event_id: recorded.id,
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        auto_submitted: true,
+        status: 'AUTO_SUBMITTED',
+        submission_reason: 'SECOND_FULLSCREEN_EXIT',
+        result: submissionResult
+      };
+    }
+
+    // Limit 2: Fifth security warning -> MAX_SECURITY_WARNINGS
+    if (newSecurityWarningCount >= MAX_WARNINGS) {
+      await mockTestRepository.updateAttempt(attemptId, {
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        proctoring_summary: summary
+      });
+
+      // Audit logs
+      await mockTestRepository.logAudit({
+        testId: attempt.test_id,
+        attemptId,
+        actorId: student.id,
+        actorRole: student.role,
+        action: 'MOCK_TEST_WARNING',
+        details: {
+          warning_count: newSecurityWarningCount,
+          max_warnings: MAX_WARNINGS,
+          reason: eventData.reason || rawType
+        }
+      });
+      await securityLogRepository.logEvent({
+        eventType: 'MOCK_TEST_WARNING',
+        severity: 'CRITICAL',
+        userId: student.id,
+        userEmail: student.email,
+        details: `Candidate reached maximum security warnings (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
+        metadata: { attemptId, testId: attempt.test_id, warning_count: newSecurityWarningCount }
+      });
+
+      const submissionResult = await this.submitAttempt(attemptId, student, {
+        auto_submitted: true,
+        reason: 'MAX_SECURITY_WARNINGS',
+        status: 'AUTO_SUBMITTED'
+      });
+
+      return {
+        recorded: true,
+        event_id: recorded.id,
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        auto_submitted: true,
+        status: 'AUTO_SUBMITTED',
+        submission_reason: 'MAX_SECURITY_WARNINGS',
+        result: submissionResult
+      };
+    }
+
+    // Normal warning / fullscreen exit (no limit reached yet)
     await mockTestRepository.updateAttempt(attemptId, {
       warning_count: newWarningCount,
+      security_warning_count: newSecurityWarningCount,
+      fullscreen_exit_count: newFullscreenExitCount,
       proctoring_summary: summary
+    });
+
+    await mockTestRepository.logAudit({
+      testId: attempt.test_id,
+      attemptId,
+      actorId: student.id,
+      actorRole: student.role,
+      action: isFullscreenExit ? 'FULLSCREEN_EXIT' : 'MOCK_TEST_WARNING',
+      details: {
+        eventType: rawType,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        reason: eventData.reason || rawType
+      }
+    });
+
+    await securityLogRepository.logEvent({
+      eventType: isFullscreenExit ? 'FULLSCREEN_EXIT' : 'MOCK_TEST_WARNING',
+      severity: 'WARNING',
+      userId: student.id,
+      userEmail: student.email,
+      details: isFullscreenExit
+        ? `Fullscreen exit 1/${MAX_FULLSCREEN_EXITS} recorded.`
+        : `Security warning ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
+      metadata: {
+        attemptId,
+        testId: attempt.test_id,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount
+      }
     });
 
     return {
       recorded: true,
       event_id: recorded.id,
       warning_count: newWarningCount,
+      security_warning_count: newSecurityWarningCount,
+      fullscreen_exit_count: newFullscreenExitCount,
+      auto_submitted: false,
+      status: attempt.status,
+      submission_reason: null,
       flagged: summary.flagged
     };
   },
@@ -428,8 +626,8 @@ export const mockTestService = {
       throw err;
     }
 
-    // Idempotency: If already evaluated or submitted, return existing result
-    if (['submitted', 'evaluated'].includes(attempt.status)) {
+    // Idempotency: If already evaluated or submitted or AUTO_SUBMITTED, return existing result
+    if (['submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status)) {
       return this.getAttemptResult(attemptId, student);
     }
 
@@ -453,11 +651,33 @@ export const mockTestService = {
     // Update evaluated responses in DB
     await mockTestRepository.updateEvaluatedResponses(attemptId, evaluation.evaluated_responses);
 
+    // Determine final status, result lifecycle state, and reason
+    const isAutoSubmitted = Boolean(options.auto_submitted) || options.status === 'AUTO_SUBMITTED';
+    const submissionReason = options.reason || (isAutoSubmitted ? 'MAX_SECURITY_WARNINGS' : 'Normal candidate submission');
+    const finalStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : (evaluation.pending_review_count > 0 ? 'submitted' : 'evaluated');
+    const submissionStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : 'SUBMITTED';
+
+    let resultStatus = 'READY';
+    let releasedAt = null;
+    let releasedBy = null;
+
+    if (evaluation.pending_review_count > 0) {
+      resultStatus = 'PENDING_EVALUATION';
+    } else if (test.results_published || test.allow_instant_result) {
+      resultStatus = 'RELEASED';
+      releasedAt = new Date().toISOString();
+      releasedBy = test.created_by || null;
+    }
+
     // Finalize attempt
-    const newStatus = evaluation.pending_review_count > 0 ? 'submitted' : 'evaluated';
     const updatedAttempt = await mockTestRepository.updateAttempt(attemptId, {
       submitted_at: new Date().toISOString(),
-      status: newStatus,
+      status: finalStatus,
+      submission_status: submissionStatus,
+      submission_reason: submissionReason,
+      result_status: resultStatus,
+      released_at: releasedAt,
+      released_by: releasedBy,
       total_score: evaluation.total_score,
       max_score: evaluation.max_score,
       percentage: evaluation.percentage,
@@ -474,12 +694,31 @@ export const mockTestService = {
       attemptId,
       actorId: student.id,
       actorRole: student.role,
-      action: 'EXAM_SUBMITTED',
+      action: isAutoSubmitted ? 'AUTO_SUBMISSION' : 'EXAM_SUBMITTED',
       details: {
-        auto_submitted: Boolean(options.auto_submitted),
-        reason: options.reason || 'Normal candidate submission',
+        auto_submitted: isAutoSubmitted,
+        reason: submissionReason,
         score: evaluation.total_score,
-        percentage: evaluation.percentage
+        percentage: evaluation.percentage,
+        result_status: resultStatus
+      }
+    });
+
+    // Central security log
+    await securityLogRepository.logEvent({
+      eventType: isAutoSubmitted ? 'AUTO_SUBMISSION' : 'MOCK_TEST_SUBMITTED',
+      severity: isAutoSubmitted ? 'WARNING' : 'INFO',
+      userId: student.id,
+      userEmail: student.email,
+      details: `Mock test "${test.title}" attempt (${attemptId}) finalized: ${submissionReason} [${resultStatus}]`,
+      metadata: {
+        attemptId,
+        testId: test.id,
+        auto_submitted: isAutoSubmitted,
+        reason: submissionReason,
+        score: evaluation.total_score,
+        percentage: evaluation.percentage,
+        result_status: resultStatus
       }
     });
 
@@ -492,47 +731,65 @@ export const mockTestService = {
   async getAttemptResult(attemptId, student) {
     const attempt = await mockTestRepository.getAttemptById(attemptId);
     if (!attempt) {
-      const err = new Error('Attempt not found.');
+      const err = new Error('Result not found.');
       err.status = 404;
       throw err;
     }
 
+    // Critical Security: Student can ONLY view their own attempt result
     if (student.role === 'STUDENT' && attempt.student_id !== student.id) {
-      const err = new Error('Unauthorized.');
+      const err = new Error('You are not authorized to view this result.');
       err.status = 403;
       throw err;
     }
 
     const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Associated examination record not found.');
+      err.status = 404;
+      throw err;
+    }
+
     const questions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
     const responses = attempt.responses || [];
 
     const isTeacherOrAdmin = ['TEACHER', 'ADMIN'].includes(student.role);
-    const resultsReleased = test.results_published || test.allow_instant_result || isTeacherOrAdmin;
+    const isPending = attempt.result_status === 'PENDING_EVALUATION';
+    const isReleased = attempt.result_status === 'RELEASED' || (!isPending && (test.results_published || test.allow_instant_result));
+    const resultsReleased = Boolean(isTeacherOrAdmin || isReleased);
 
-    // Build question reviews
+    // Build question reviews with safe handling for every field
     const questionReviews = questions.map(q => {
       const r = responses.find(resp => resp.question_id === q.id) || null;
       return {
         id: q.id,
-        question_text: q.question_text,
-        question_type: q.question_type,
-        marks: parseFloat(q.marks),
-        negative_marks: parseFloat(q.negative_marks),
-        options: q.options,
-        topic: q.topic,
-        difficulty: q.difficulty,
-        case_passage: q.case_passage,
+        question_text: q.question_text || 'Assessment Question',
+        question_type: q.question_type || 'mcq_single',
+        marks: parseFloat(q.marks || 0),
+        negative_marks: parseFloat(q.negative_marks || 0),
+        options: Array.isArray(q.options) ? q.options : [],
+        topic: q.topic || '',
+        difficulty: q.difficulty || 'medium',
+        case_passage: q.case_passage || null,
+        programming_language: q.programming_language || 'javascript',
+        starter_code: q.starter_code || null,
+        time_limit: parseFloat(q.time_limit || 2.0),
+        memory_limit: parseInt(q.memory_limit || 128, 10),
+        test_cases: resultsReleased ? (Array.isArray(q.test_cases) ? q.test_cases : []) : [],
         // Only disclose answers and explanations if results are published or teacher
-        answer_key: resultsReleased ? q.answer_key : null,
-        explanation: resultsReleased && test.show_explanations ? q.explanation : null,
+        answer_key: resultsReleased ? (q.answer_key || null) : null,
+        explanation: resultsReleased && test.show_explanations ? (q.explanation || null) : null,
         candidate_response: r ? r.response_data : null,
-        is_marked_for_review: r ? r.is_marked_for_review : false,
-        score_awarded: r ? parseFloat(r.score_awarded) : 0,
+        is_marked_for_review: r ? Boolean(r.is_marked_for_review) : false,
+        score_awarded: r ? parseFloat(r.score_awarded || 0) : 0,
         is_correct: r ? r.is_correct : null,
-        evaluation_comment: r ? r.evaluation_comment : 'Unanswered'
+        is_pending_review: r ? Boolean(r.is_pending_review) : false,
+        execution_results: r ? (r.execution_results || (r.response_data && r.response_data.execution_results) || null) : null,
+        evaluation_comment: resultsReleased ? (r ? r.evaluation_comment : null) : null
       };
     });
+
+    const finalResultStatus = attempt.result_status || (isReleased ? 'RELEASED' : 'PENDING_EVALUATION');
 
     return {
       id: attempt.id,
@@ -542,19 +799,33 @@ export const mockTestService = {
         id: attempt.id,
         test_id: test.id,
         status: attempt.status,
+        result_status: finalResultStatus,
+        released_at: attempt.released_at || null,
+        released_by: attempt.released_by || null,
+        submission_status: attempt.submission_status || null,
+        submission_reason: attempt.submission_reason || null,
+        security_warning_count: attempt.security_warning_count || 0,
+        fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
         submitted_at: attempt.submitted_at,
         started_at: attempt.started_at
       },
       test_id: test.id,
-      test_title: test.title,
-      subject: test.subject,
+      test_title: test.title || 'Examination',
+      subject: test.subject || 'General',
       results_released: resultsReleased,
+      result_status: finalResultStatus,
+      released_at: attempt.released_at || null,
+      released_by: attempt.released_by || null,
       status: attempt.status,
+      submission_status: attempt.submission_status || null,
+      submission_reason: attempt.submission_reason || null,
+      security_warning_count: attempt.security_warning_count || 0,
+      fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
       started_at: attempt.started_at,
       submitted_at: attempt.submitted_at,
-      time_spent_seconds: attempt.time_spent_seconds,
+      time_spent_seconds: attempt.time_spent_seconds || 0,
       total_score: parseFloat(attempt.total_score || 0),
-      max_score: parseFloat(attempt.max_score || 0),
+      max_score: parseFloat(attempt.max_score || test.total_marks || 100),
       percentage: parseFloat(attempt.percentage || 0),
       passed: Boolean(attempt.passed),
       pass_percentage: parseFloat(test.pass_percentage || 40),
@@ -565,6 +836,167 @@ export const mockTestService = {
       proctoring_summary: attempt.proctoring_summary || {},
       questions: questionReviews
     };
+  },
+
+  /**
+   * Releases an individual attempt result to the student
+   */
+  async releaseAttemptResult(attemptId, teacher) {
+    const attempt = await mockTestRepository.getAttemptById(attemptId);
+    if (!attempt) {
+      const err = new Error('Attempt not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Test not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (teacher.role === 'TEACHER' && test.created_by && test.created_by !== teacher.id) {
+      // Allow teacher if authorized
+    }
+
+    await mockTestRepository.releaseAttemptResult(attemptId, teacher.id);
+
+    await mockTestRepository.logAudit({
+      testId: test.id,
+      attemptId,
+      actorId: teacher.id,
+      actorRole: teacher.role,
+      action: 'RESULT_RELEASED',
+      details: { attemptId, studentId: attempt.student_id }
+    });
+
+    // Unified Notification Event: Notify student of result publication
+    if (attempt.student_id) {
+      notificationService.createNotification({
+        userId: attempt.student_id,
+        title: 'Examination Result Published',
+        message: `Your result for "${test.title}" has been released by your instructor.`,
+        type: 'RESULT_PUBLISHED',
+        priority: 'NORMAL',
+        actionUrl: `/mock-tests/attempts/${attemptId}/result`,
+        actionLabel: 'View Result',
+        relatedEntityType: 'MOCK_TEST_RESULT',
+        relatedEntityId: attemptId,
+        eventKey: `student:${attempt.student_id}:attempt:${attemptId}:RESULT_RELEASED`
+      }).catch(() => {});
+    }
+
+    return this.getAttemptResult(attemptId, teacher);
+  },
+
+  /**
+   * Releases all results for a test (and optional batch)
+   */
+  async releaseAllTestResults(testId, teacher, batchId = null) {
+    const test = await mockTestRepository.getTestById(testId);
+    if (!test) {
+      const err = new Error('Test not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    await mockTestRepository.releaseAllResultsForTest(testId, teacher.id, batchId);
+
+    // Also mark test results_published true
+    await mockTestRepository.updateTest(testId, { results_published: true });
+
+    await mockTestRepository.logAudit({
+      testId,
+      actorId: teacher.id,
+      actorRole: teacher.role,
+      action: 'ALL_RESULTS_RELEASED',
+      details: { testId, batchId }
+    });
+
+    // Unified Notification Event: Notify all students whose results were released
+    (async () => {
+      try {
+        const attempts = await mockTestRepository.getAttemptsForTest(testId, batchId);
+        for (const att of attempts) {
+          if (att.student_id) {
+            notificationService.createNotification({
+              userId: att.student_id,
+              title: 'Examination Result Published',
+              message: `Your result for "${test.title}" has been released.`,
+              type: 'RESULT_PUBLISHED',
+              priority: 'NORMAL',
+              actionUrl: `/mock-tests/attempts/${att.id}/result`,
+              actionLabel: 'View Result',
+              relatedEntityType: 'MOCK_TEST_RESULT',
+              relatedEntityId: att.id,
+              eventKey: `student:${att.student_id}:attempt:${att.id}:RESULT_RELEASED`
+            }).catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.warn('[Notification] Failed to batch notify students of released results:', e.message);
+      }
+    })();
+
+    return { success: true, message: 'All results successfully released to candidates.' };
+  },
+
+  /**
+   * Retrieves results belonging ONLY to the authenticated student
+   */
+  async getMyResults(student) {
+    const rawAttempts = await mockTestRepository.getAttemptsByStudent(student.id);
+
+    // Map attempts into consistent, safe scorecard cards
+    return rawAttempts.map(att => {
+      const isReleased = att.result_status === 'RELEASED' || att.results_published;
+      const statusLabel = att.result_status || (isReleased ? 'RELEASED' : 'PENDING_EVALUATION');
+
+      return {
+        id: att.id,
+        attempt_id: att.id,
+        test_id: att.test_id,
+        test_title: att.test_title || 'Mock Examination',
+        subject: att.subject || 'General',
+        total_score: parseFloat(att.total_score || 0),
+        max_score: parseFloat(att.max_score || 100),
+        percentage: parseFloat(att.percentage || 0),
+        passed: Boolean(att.passed),
+        status: att.status,
+        result_status: statusLabel,
+        is_released: Boolean(isReleased),
+        released_at: att.released_at,
+        submitted_at: att.submitted_at || att.created_at,
+        time_spent_seconds: att.time_spent_seconds || 0
+      };
+    });
+  },
+
+  /**
+   * Generates a single unified PDF containing all authorized students' results
+   */
+  async generateResultsPdf(testId, teacher, batchId = null) {
+    const test = await mockTestRepository.getTestById(testId);
+    if (!test) {
+      const err = new Error('Test not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    const attempts = await mockTestRepository.getDetailedAttemptsForReport(testId, batchId);
+
+    let batch = null;
+    if (batchId) {
+      batch = { id: batchId, name: `Batch #${batchId}` };
+    }
+
+    return generateTestResultsPdf({
+      test,
+      batch,
+      teacher,
+      attempts
+    });
   },
 
   // ---------------------------------------------------------------------------
@@ -708,7 +1140,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
         // Normalize options
         let normalizedOptions = [];
         if (Array.isArray(q.options)) {
-          normalizedOptions = q.options.map(opt => 
+          normalizedOptions = q.options.map(opt =>
             (typeof opt === 'object' && opt !== null ? (opt.text || opt.label || JSON.stringify(opt)) : String(opt)).trim()
           );
         } else if (q.options && typeof q.options === 'object') {

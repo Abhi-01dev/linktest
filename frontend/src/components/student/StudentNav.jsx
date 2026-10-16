@@ -23,22 +23,27 @@ export function StudentNav() {
     { label: 'Materials', to: '/materials', icon: BookOpen },
     { label: 'Live Classes', to: '/live-classes', icon: Video },
     { label: 'Announcements', to: '/announcements', icon: Megaphone },
-    { label: 'Progress', to: '/progress', icon: Award },
+    { label: 'My Progress', to: '/progress', icon: Award },
     { label: 'Support', to: '/support', icon: HelpCircle }
   ];
 
   return (
-    <div
+    <nav
+      aria-label="Student portal tabs"
       style={{
         display: 'flex',
-        gap: '0.5rem',
+        alignItems: 'center',
+        gap: '0.35rem',
         overflowX: 'auto',
-        padding: '0.5rem 0',
-        marginBottom: '2rem',
-        borderBottom: '1px solid var(--color-border)'
+        padding: '0.35rem 0 0.85rem',
+        marginBottom: '1.75rem',
+        borderBottom: '1px solid var(--color-border)',
+        scrollbarWidth: 'none',
+        msOverflowStyle: 'none'
       }}
+      className="student-subnav-strip"
     >
-      {items.map(item => {
+      {items.map((item) => {
         const Icon = item.icon;
         return (
           <NavLink
@@ -46,26 +51,28 @@ export function StudentNav() {
             to={item.to}
             end={item.to === '/dashboard'}
             style={({ isActive }) => ({
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
               gap: '0.45rem',
-              padding: '0.5rem 0.9rem',
-              borderRadius: '999px',
+              padding: '0.45rem 0.85rem',
+              borderRadius: 'var(--radius-sm)',
               fontSize: '0.84rem',
-              fontWeight: 600,
+              fontWeight: isActive ? 600 : 500,
               textDecoration: 'none',
               whiteSpace: 'nowrap',
-              background: isActive ? 'var(--color-navy)' : 'var(--color-bg-alt)',
+              background: isActive ? 'var(--color-navy)' : 'transparent',
               color: isActive ? '#FFFFFF' : 'var(--color-text-secondary)',
+              border: isActive ? '1px solid var(--color-navy)' : '1px solid transparent',
               transition: 'all var(--transition-fast)'
             })}
           >
-            <Icon size={15} />
+            <Icon size={14} style={{ opacity: 0.85 }} />
             <span>{item.label}</span>
           </NavLink>
         );
       })}
-    </div>
+    </nav>
   );
 }
+
 export default StudentNav;

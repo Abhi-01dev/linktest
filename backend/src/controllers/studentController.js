@@ -2,6 +2,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { progressRepository } from '../repositories/progressRepository.js';
 import { quizRepository } from '../repositories/quizRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
+import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
 
 const submitAssignmentSchema = z.object({
@@ -34,8 +35,8 @@ export const studentController = {
         lmsRepository.getAttendance({ studentId }),
         classId ? lmsRepository.getLiveClasses({ classId, status: 'scheduled' }) : [],
         lmsRepository.getAnnouncements({ limit: 5 }),
-        progressRepository.getOverallProgress(studentId),
-        quizRepository.getAttemptsByUser(studentId)
+        progressRepository.getUserProgressSummary(studentId),
+        quizRepository.getUserAttempts(studentId)
       ]);
 
       // Calculate attendance percentage
@@ -212,8 +213,11 @@ export const studentController = {
   async getNotifications(req, res, next) {
     try {
       const { unreadOnly } = req.query;
-      const notifs = await lmsRepository.getNotifications(req.user.id, unreadOnly === 'true');
-      res.status(200).json({ success: true, data: notifs });
+      const data = await notificationService.getNotifications(req.user.id, {
+        unreadOnly: unreadOnly === 'true'
+      });
+      // Maintain backwards compatibility: data can be array or object
+      res.status(200).json({ success: true, data: data.notifications, unread_count: data.unread_count });
     } catch (err) {
       next(err);
     }
@@ -222,7 +226,7 @@ export const studentController = {
   async markNotificationsRead(req, res, next) {
     try {
       const { ids } = req.body;
-      const updated = await lmsRepository.markNotificationsRead(req.user.id, ids || null);
+      const updated = await notificationService.markAsRead(req.user.id, ids || null);
       res.status(200).json({ success: true, data: updated, message: 'Notifications marked as read.' });
     } catch (err) {
       next(err);

@@ -10,7 +10,7 @@ export const progressRepository = {
       await pool.query(
         `INSERT INTO lesson_progress (id, user_id, lesson_id, completed, updated_at)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id, lesson_id) 
+         ON CONFLICT (user_id, lesson_id)
          DO UPDATE SET completed = $4, updated_at = $5`,
         [id, userId, lessonId, completed, now]
       );
@@ -119,5 +119,9 @@ export const progressRepository = {
       quiz_attempts: userAttempts.length,
       avg_quiz_score: avgScore
     };
+  },
+
+  async getOverallProgress(userId) {
+    return this.getUserProgressSummary(userId);
   }
 };

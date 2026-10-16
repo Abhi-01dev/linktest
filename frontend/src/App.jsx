@@ -124,28 +124,32 @@ function AppContent() {
                 {/* AI Tutor */}
                 <Route path="/ai-tutor" element={<AITutorPage />} />
 
-                {/* Student Protected Routes */}
-                <Route path="/dashboard" element={<ProtectedRoute><StudentDashboard /></ProtectedRoute>} />
-                <Route path="/timetable" element={<ProtectedRoute><StudentTimetablePage /></ProtectedRoute>} />
-                <Route path="/attendance" element={<ProtectedRoute><StudentAttendancePage /></ProtectedRoute>} />
-                <Route path="/assignments" element={<ProtectedRoute><StudentAssignmentsPage /></ProtectedRoute>} />
-                <Route path="/materials" element={<ProtectedRoute><StudentMaterialsPage /></ProtectedRoute>} />
-                <Route path="/live-classes" element={<ProtectedRoute><StudentLiveClassesPage /></ProtectedRoute>} />
-                <Route path="/announcements" element={<ProtectedRoute><StudentAnnouncementsPage /></ProtectedRoute>} />
-                <Route path="/support" element={<ProtectedRoute><StudentSupportTicketsPage /></ProtectedRoute>} />
-                <Route path="/progress" element={<ProtectedRoute><StudentProgressPage /></ProtectedRoute>} />
+                {/* Student Protected Routes (Strictly Isolated to STUDENT role) */}
+                <Route path="/dashboard" element={<ProtectedRoute requiredRole="STUDENT"><StudentDashboard /></ProtectedRoute>} />
+                <Route path="/student/dashboard" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/student" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/student/results" element={<Navigate to="/mock-tests" replace />} />
+                <Route path="/timetable" element={<ProtectedRoute requiredRole="STUDENT"><StudentTimetablePage /></ProtectedRoute>} />
+                <Route path="/attendance" element={<ProtectedRoute requiredRole="STUDENT"><StudentAttendancePage /></ProtectedRoute>} />
+                <Route path="/assignments" element={<ProtectedRoute requiredRole="STUDENT"><StudentAssignmentsPage /></ProtectedRoute>} />
+                <Route path="/materials" element={<ProtectedRoute requiredRole="STUDENT"><StudentMaterialsPage /></ProtectedRoute>} />
+                <Route path="/live-classes" element={<ProtectedRoute requiredRole="STUDENT"><StudentLiveClassesPage /></ProtectedRoute>} />
+                <Route path="/announcements" element={<ProtectedRoute requiredRole="STUDENT"><StudentAnnouncementsPage /></ProtectedRoute>} />
+                <Route path="/support" element={<ProtectedRoute requiredRole="STUDENT"><StudentSupportTicketsPage /></ProtectedRoute>} />
+                <Route path="/progress" element={<ProtectedRoute requiredRole="STUDENT"><StudentProgressPage /></ProtectedRoute>} />
                 <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-                <Route path="/courses/:courseId/lessons/:lessonId" element={<ProtectedRoute><LessonViewerPage /></ProtectedRoute>} />
-                <Route path="/quiz/:quizId" element={<ProtectedRoute><QuizTakePage /></ProtectedRoute>} />
-                <Route path="/quiz/results/:attemptId" element={<ProtectedRoute><QuizResultPage /></ProtectedRoute>} />
+                <Route path="/courses/:courseId/lessons/:lessonId" element={<ProtectedRoute requiredRole="STUDENT"><LessonViewerPage /></ProtectedRoute>} />
+                <Route path="/quiz/:quizId" element={<ProtectedRoute requiredRole="STUDENT"><QuizTakePage /></ProtectedRoute>} />
+                <Route path="/quiz/results/:attemptId" element={<ProtectedRoute requiredRole="STUDENT"><QuizResultPage /></ProtectedRoute>} />
 
                 {/* Mock Tests (Student & Public Catalog) */}
                 <Route path="/mock-tests" element={<MockTestDashboard />} />
-                <Route path="/mock-tests/:id/check" element={<ProtectedRoute><MockTestPreCheckPage /></ProtectedRoute>} />
-                <Route path="/mock-tests/:id/runner/:attemptId" element={<ProtectedRoute><MockTestRunnerPage /></ProtectedRoute>} />
+                <Route path="/mock-tests/:id/check" element={<ProtectedRoute requiredRole="STUDENT"><MockTestPreCheckPage /></ProtectedRoute>} />
+                <Route path="/mock-tests/:id/runner/:attemptId" element={<ProtectedRoute requiredRole="STUDENT"><MockTestRunnerPage /></ProtectedRoute>} />
                 <Route path="/mock-tests/attempts/:attemptId/result" element={<ProtectedRoute><MockTestResultPage /></ProtectedRoute>} />
 
                 {/* Teacher Protected Routes with TeacherLayout */}
+                <Route path="/teacher/dashboard" element={<Navigate to="/teacher" replace />} />
                 <Route
                   path="/teacher"
                   element={
@@ -284,6 +288,7 @@ function AppContent() {
                 />
 
                 {/* Admin Protected Routes with AdminLayout */}
+                <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
                 <Route
                   path="/admin"
                   element={

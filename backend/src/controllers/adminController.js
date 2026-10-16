@@ -21,9 +21,10 @@ const updateStatusSchema = z.object({
 });
 
 const assignTeacherSchema = z.object({
-  class_id: z.string(),
+  teacher_id: z.string().min(1, 'teacher_id is required').optional(),
+  class_id: z.string().optional().nullable(),
   batch_id: z.string().optional().nullable(),
-  subject_id: z.string()
+  subject_id: z.string().min(1, 'subject_id is required')
 });
 
 export const adminController = {
@@ -298,17 +299,213 @@ export const adminController = {
 
   async assignTeacher(req, res, next) {
     try {
-      const teacherId = req.params.id || req.body.teacher_id;
-      if (!teacherId) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'teacher_id is required.' } });
-      const { class_id, batch_id, subject_id } = assignTeacherSchema.parse({
-        class_id: req.body.class_id,
-        batch_id: req.body.batch_id,
-        subject_id: req.body.subject_id
+      const teacherId = req.params.id || req.body.teacher_id || req.body.teacherId;
+      if (!teacherId) {
+        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'teacher_id is required.' } });
+      }
+
+      const parsed = assignTeacherSchema.parse({
+        teacher_id: teacherId,
+        class_id: req.body.class_id || req.body.classId || null,
+        batch_id: req.body.batch_id || req.body.batchId || null,
+        subject_id: req.body.subject_id || req.body.subjectId
       });
-      const assignment = await lmsRepository.assignTeacher({ teacherId, classId: class_id, batchId: batch_id, subjectId: subject_id });
-      await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'TEACHER_ASSIGNED', resourceType: 'teacher_assignment', resourceId: assignment.id, summary: `Teacher ${teacherId} assigned to class ${class_id}` });
-      return res.status(200).json({ success: true, data: { assignment }, message: 'Teacher assignment created.' });
-    } catch (err) { next(err); }
+
+      // 1. Validate Teacher
+      const teacher = await userRepository.findById(teacherId);
+      if (!teacher || !['TEACHER', 'ADMIN'].includes(teacher.role)) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_TEACHER', message: 'Selected faculty member does not exist or is not a teacher.' } });
+      }
+
+      // 2. Validate Subject
+      let subject = null;
+      if (isPostgresConnected && pool) {
+        const sRes = await pool.query('SELECT * FROM subjects WHERE id = $1', [parsed.subject_id]);
+        subject = sRes.rows[0];
+      } else {
+        subject = (memoryStore.subjects || []).find(s => s.id === parsed.subject_id);
+      }
+      if (!subject) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_SUBJECT', message: `Selected subject (${parsed.subject_id}) does not exist.` } });
+      }
+
+      // 3. Resolve Batch & Class
+      let classId = parsed.class_id;
+      let batch = null;
+
+      if (parsed.batch_id) {
+        batch = await batchRepository.getBatchById(parsed.batch_id);
+        if (!batch) {
+          return res.status(400).json({ success: false, error: { code: 'INVALID_BATCH', message: `Selected batch (${parsed.batch_id}) does not exist.` } });
+        }
+        if (!classId) {
+          classId = batch.class_id;
+        }
+      }
+
+      // If classId is still not resolved, attempt to use the first class in the system
+      if (!classId) {
+        if (isPostgresConnected && pool) {
+          const clsRes = await pool.query('SELECT id FROM classes ORDER BY created_at ASC LIMIT 1');
+          if (clsRes.rows.length > 0) {
+            classId = clsRes.rows[0].id;
+            if (parsed.batch_id) {
+              await pool.query('UPDATE batches SET class_id = $1 WHERE id = $2', [classId, parsed.batch_id]);
+            }
+          }
+        } else {
+          classId = memoryStore.classes?.[0]?.id || null;
+        }
+      }
+
+      if (!classId) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_CLASS', message: 'class_id is required or batch must be linked to a class.' } });
+      }
+
+      // 4. Create Subject-Teacher Assignment
+      let assignment;
+      try {
+        assignment = await lmsRepository.assignTeacher({
+          teacherId,
+          classId,
+          batchId: parsed.batch_id || null,
+          subjectId: parsed.subject_id
+        });
+      } catch (assignErr) {
+        if (assignErr.code === 'ALREADY_ASSIGNED' || assignErr.statusCode === 409) {
+          return res.status(409).json({
+            success: false,
+            error: {
+              code: 'ALREADY_ASSIGNED',
+              message: 'This subject is already assigned to this teacher for the specified cohort.'
+            }
+          });
+        }
+        throw assignErr;
+      }
+
+      // 5. Synchronize with batch_teachers table
+      if (parsed.batch_id) {
+        await batchRepository.assignTeacherToBatch({
+          batchId: parsed.batch_id,
+          teacherId,
+          assignedBy: req.user.id
+        }).catch(() => {});
+      }
+
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'TEACHER_ASSIGNED',
+        resourceType: 'teacher_assignment',
+        resourceId: assignment.id,
+        summary: `Admin assigned teacher ${teacher.full_name} to subject '${subject.name}' (${batch ? `Batch: ${batch.name}` : `Class ID: ${classId}`})`
+      });
+
+      return res.status(201).json({
+        success: true,
+        data: { assignment },
+        message: `Subject '${subject.name}' assigned to ${teacher.full_name} successfully.`
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async updateTeacherAssignment(req, res, next) {
+    try {
+      const assignmentId = req.params.id || req.params.assignmentId;
+      const { teacher_id } = z.object({
+        teacher_id: z.string().min(1, 'teacher_id is required')
+      }).parse(req.body);
+
+      const existing = await lmsRepository.getAssignmentById(assignmentId);
+      if (!existing) {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Subject assignment not found.' } });
+      }
+
+      const newTeacher = await userRepository.findById(teacher_id);
+      if (!newTeacher || !['TEACHER', 'ADMIN'].includes(newTeacher.role)) {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_TEACHER', message: 'Selected replacement faculty member does not exist or is not a teacher.' } });
+      }
+
+      const updated = await lmsRepository.updateTeacherAssignment(assignmentId, { teacherId: teacher_id });
+
+      // Synchronize batch_teachers
+      if (existing.batch_id) {
+        await batchRepository.assignTeacherToBatch({
+          batchId: existing.batch_id,
+          teacherId: teacher_id,
+          assignedBy: req.user.id
+        }).catch(() => {});
+      }
+
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'TEACHER_ASSIGNMENT_UPDATED',
+        resourceType: 'teacher_assignment',
+        resourceId: assignmentId,
+        summary: `Admin changed teacher for assignment '${existing.subject_name}' from ${existing.teacher_name} to ${newTeacher.full_name}`
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: { assignment: updated },
+        message: `Assigned teacher updated to ${newTeacher.full_name} successfully.`
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async removeTeacherAssignment(req, res, next) {
+    try {
+      const assignmentId = req.params.id || req.params.assignmentId;
+      const removed = await lmsRepository.removeTeacherAssignment(assignmentId);
+      if (!removed) {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Subject assignment not found.' } });
+      }
+
+      // Check if teacher has other assignments for this batch; if none, clean up batch_teachers
+      if (removed.batch_id && removed.teacher_id) {
+        const remaining = (await lmsRepository.getTeacherAssignments(removed.teacher_id))
+          .filter(a => a.batch_id === removed.batch_id);
+        if (remaining.length === 0) {
+          await batchRepository.removeTeacherFromBatch(removed.batch_id, removed.teacher_id).catch(() => {});
+        }
+      }
+
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'TEACHER_ASSIGNMENT_REMOVED',
+        resourceType: 'teacher_assignment',
+        resourceId: assignmentId,
+        summary: `Admin removed subject assignment (${assignmentId})`
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Subject assignment removed successfully.'
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  async getBatchAssignments(req, res, next) {
+    try {
+      const batchId = req.params.batchId || req.params.id;
+      const assignments = await lmsRepository.getBatchAssignments(batchId);
+      return res.status(200).json({
+        success: true,
+        data: { assignments },
+        message: 'Batch subject assignments retrieved.'
+      });
+    } catch (err) {
+      next(err);
+    }
   },
 
   async getTeacherAssignments(req, res, next) {

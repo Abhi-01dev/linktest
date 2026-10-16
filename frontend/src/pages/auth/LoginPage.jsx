@@ -21,6 +21,26 @@ export function LoginPage() {
 
   const [unverifiedEmail, setUnverifiedEmail] = useState('');
 
+  const navigateByRole = (user, fromPath) => {
+    const role = String(user.role || '').toUpperCase();
+    let defaultDest = '/dashboard';
+    if (role === 'ADMIN') defaultDest = '/admin/dashboard';
+    else if (role === 'TEACHER') defaultDest = '/teacher/dashboard';
+    else defaultDest = '/student/dashboard';
+
+    if (fromPath && typeof fromPath === 'string' && fromPath !== '/' && fromPath !== '/login' && fromPath !== '/register') {
+      const isTargetAdmin = fromPath.startsWith('/admin');
+      const isTargetTeacher = fromPath.startsWith('/teacher');
+      const isTargetStudent = !isTargetAdmin && !isTargetTeacher;
+
+      if (role === 'ADMIN' && isTargetAdmin) return navigate(fromPath, { replace: true });
+      if (role === 'TEACHER' && isTargetTeacher) return navigate(fromPath, { replace: true });
+      if (role === 'STUDENT' && isTargetStudent) return navigate(fromPath, { replace: true });
+    }
+
+    return navigate(defaultDest, { replace: true });
+  };
+
   const handleGoogleSuccess = async (credential) => {
     setError('');
     setUnverifiedEmail('');
@@ -29,17 +49,7 @@ export function LoginPage() {
     try {
       const user = await loginWithGoogle(credential);
       showToast(`Welcome back, ${user.full_name}! Signed in with Google.`, 'success');
-      if (from === '/dashboard') {
-        if (user.role === 'ADMIN') {
-          navigate('/admin');
-        } else if (user.role === 'TEACHER') {
-          navigate('/teacher');
-        } else {
-          navigate('/dashboard');
-        }
-      } else {
-        navigate(from, { replace: true });
-      }
+      navigateByRole(user, from);
     } catch (err) {
       setError(err.message || 'Google Sign-In failed. Please try again or use your email & password.');
     } finally {
@@ -60,17 +70,7 @@ export function LoginPage() {
     try {
       const user = await login(email, password);
       showToast(`Welcome back, ${user.full_name}!`, 'success');
-      if (from === '/dashboard') {
-        if (user.role === 'ADMIN') {
-          navigate('/admin');
-        } else if (user.role === 'TEACHER') {
-          navigate('/teacher');
-        } else {
-          navigate('/dashboard');
-        }
-      } else {
-        navigate(from, { replace: true });
-      }
+      navigateByRole(user, from);
     } catch (err) {
       if (err.code === 'EMAIL_NOT_VERIFIED') {
         setUnverifiedEmail(err.details?.email || email);

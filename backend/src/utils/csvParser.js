@@ -1,6 +1,6 @@
 /**
  * RFC 4180 Compliant CSV Parser and Generator Utility
- * 
+ *
  * Supports:
  * - UTF-8 character encoding with or without BOM (\uFEFF)
  * - CRLF (\r\n) and LF (\n) line breaks
@@ -163,12 +163,40 @@ const HEADER_KEY_MAP = {
   'negativemarks': 'negativeMarks',
   'negative_marks': 'negativeMarks',
   'penaltymarks': 'negativeMarks',
-  'penalty': 'negativeMarks'
+  'penalty': 'negativeMarks',
+
+  'questiontype': 'questionType',
+  'question_type': 'questionType',
+  'qtype': 'questionType',
+  'type': 'questionType',
+
+  'expectedanswer': 'expectedAnswer',
+  'expected_answer': 'expectedAnswer',
+  'modelanswer': 'expectedAnswer',
+
+  'evaluationcriteria': 'evaluationCriteria',
+  'evaluation_criteria': 'evaluationCriteria',
+  'rubric': 'evaluationCriteria',
+
+  'programminglanguage': 'programmingLanguage',
+  'programming_language': 'programmingLanguage',
+  'language': 'programmingLanguage',
+  'lang': 'programmingLanguage',
+
+  'startercode': 'starterCode',
+  'starter_code': 'starterCode',
+  'boilerplate': 'starterCode',
+
+  'timelimit': 'timeLimit',
+  'time_limit': 'timeLimit',
+
+  'memorylimit': 'memoryLimit',
+  'memory_limit': 'memoryLimit'
 };
 
 /**
  * Normalizes a header cell to recognized field key
- * @param {string} header 
+ * @param {string} header
  * @returns {string} Normalized key or original trimmed lower
  */
 export function normalizeHeader(header) {
@@ -179,8 +207,8 @@ export function normalizeHeader(header) {
 
 /**
  * Parses CSV text into array of structured row objects with line tracking
- * @param {string} csvText 
- * @returns {{ headers: string[], rows: Array<{ rowNumber: number, data: Object, raw: string[] }>, error?: string }}
+ * @param {string} csvText
+ * @returns {{ headers: string[], rows: Array<{ rowNumber: number, data: Object, raw: string[] }>, error?: string, missingHeaders?: string[] }}
  */
 export function parseCSVToObjects(csvText) {
   const rawRows = parseRawCSV(csvText);
@@ -197,8 +225,13 @@ export function parseCSVToObjects(csvText) {
   const headerCells = rawRows[0];
   const mappedHeaders = headerCells.map(h => normalizeHeader(h));
 
-  // Check required minimum columns
-  const requiredFields = ['question', 'optionA', 'optionB', 'optionC', 'optionD', 'correctAnswer', 'subject', 'topic'];
+  // Determine required minimum columns:
+  // If questionType is present in headers, only universal fields are required at header level.
+  // Otherwise, default to legacy MCQ required fields.
+  const hasQuestionType = mappedHeaders.includes('questionType');
+  const requiredFields = hasQuestionType
+    ? ['question', 'subject', 'topic']
+    : ['question', 'optionA', 'optionB', 'optionC', 'optionD', 'correctAnswer', 'subject', 'topic'];
   const missingHeaders = requiredFields.filter(req => !mappedHeaders.includes(req));
 
   const rows = [];
@@ -234,7 +267,7 @@ export function parseCSVToObjects(csvText) {
 
 /**
  * Escapes a cell value for RFC 4180 CSV export
- * @param {any} value 
+ * @param {any} value
  * @returns {string}
  */
 export function escapeCSVCell(value) {

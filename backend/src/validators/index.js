@@ -49,7 +49,10 @@ export const submitQuizAttemptSchema = z.object({
   answers: z.array(
     z.object({
       question_id: z.string().min(1, 'question_id is required'),
-      selected_option_index: z.number().int().min(0, 'selected_option_index must be >= 0')
+      selected_option_index: z.number().int().optional().default(-1),
+      response_text: z.string().optional(),
+      text: z.string().optional(),
+      code: z.string().optional()
     })
   ).min(1, 'At least one answer must be provided')
 });

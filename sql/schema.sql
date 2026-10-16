@@ -716,12 +716,14 @@ CREATE TABLE mock_test_attempts (
     started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     submitted_at TIMESTAMP WITH TIME ZONE NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'in_progress' CHECK (status IN (
+    status VARCHAR(50) NOT NULL DEFAULT 'in_progress' CHECK (status IN (
         'in_progress',
         'submitted',
         'evaluated',
         'flagged_for_review',
-        'cancelled'
+        'cancelled',
+        'AUTO_SUBMITTED',
+        'auto_submitted'
     )),
     total_score NUMERIC(8,2) DEFAULT 0.00,
     max_score NUMERIC(8,2) DEFAULT 0.00,
@@ -732,6 +734,13 @@ CREATE TABLE mock_test_attempts (
     unanswered_count INTEGER DEFAULT 0,
     time_spent_seconds INTEGER DEFAULT 0,
     warning_count INTEGER DEFAULT 0,
+    security_warning_count INTEGER DEFAULT 0,
+    fullscreen_exit_count INTEGER DEFAULT 0,
+    submission_status VARCHAR(50) DEFAULT NULL,
+    submission_reason VARCHAR(100) DEFAULT NULL,
+    result_status VARCHAR(50) DEFAULT 'PENDING_EVALUATION',
+    released_at TIMESTAMP WITH TIME ZONE NULL,
+    released_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     test_snapshot JSONB NOT NULL,
     proctoring_summary JSONB DEFAULT '{
         "face_absence_events": 0,
@@ -752,6 +761,9 @@ CREATE TABLE mock_test_attempts (
 CREATE INDEX idx_mock_attempts_test ON mock_test_attempts(test_id);
 CREATE INDEX idx_mock_attempts_student ON mock_test_attempts(student_id);
 CREATE INDEX idx_mock_attempts_status ON mock_test_attempts(status);
+CREATE INDEX idx_mock_attempts_student_result ON mock_test_attempts(student_id, result_status);
+CREATE INDEX idx_mock_attempts_test_result ON mock_test_attempts(test_id, result_status);
+CREATE INDEX idx_mock_attempts_released_at ON mock_test_attempts(released_at);
 
 -- 39. MOCK TEST RESPONSES
 CREATE TABLE mock_test_responses (
@@ -763,6 +775,8 @@ CREATE TABLE mock_test_responses (
     is_visited BOOLEAN NOT NULL DEFAULT true,
     score_awarded NUMERIC(6,2) DEFAULT 0.00,
     is_correct BOOLEAN NULL,
+    is_pending_review BOOLEAN DEFAULT false,
+    execution_results JSONB DEFAULT NULL,
     evaluation_comment TEXT NULL,
     evaluated_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     evaluated_at TIMESTAMP WITH TIME ZONE NULL,
@@ -771,12 +785,13 @@ CREATE TABLE mock_test_responses (
 );
 
 CREATE INDEX idx_mock_responses_attempt ON mock_test_responses(attempt_id);
+CREATE INDEX idx_mock_responses_pending ON mock_test_responses(attempt_id, is_pending_review);
 
 -- 40. MOCK TEST PROCTORING EVENTS
 CREATE TABLE mock_test_proctoring_events (
     id VARCHAR(64) PRIMARY KEY,
     attempt_id VARCHAR(64) NOT NULL REFERENCES mock_test_attempts(id) ON DELETE CASCADE,
-    event_type VARCHAR(50) NOT NULL CHECK (event_type IN (
+    event_type VARCHAR(64) NOT NULL CHECK (event_type IN (
         'FACE_NOT_DETECTED',
         'MULTIPLE_FACES',
         'CAMERA_DISCONNECTED',
@@ -787,7 +802,9 @@ CREATE TABLE mock_test_proctoring_events (
         'NETWORK_INTERRUPTION',
         'AUDIO_ANOMALY',
         'EXAM_TIME_EXPIRED',
-        'SUSPICIOUS_KEY_COMBINATION'
+        'SUSPICIOUS_KEY_COMBINATION',
+        'SECURITY_WARNING',
+        'AUTO_SUBMISSION'
     )),
     severity VARCHAR(20) NOT NULL DEFAULT 'warning' CHECK (severity IN ('info', 'warning', 'critical')),
     client_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,

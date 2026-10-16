@@ -4,25 +4,25 @@
   --color-navy: #0F172A;
   --color-navy-light: #1E293B;
   --color-navy-subtle: #334155;
-  
+
   --color-orange: #F97316;
   --color-orange-dark: #EA580C;
   --color-orange-light: #FFEDD5;
   --color-orange-gradient: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
-  
+
   --color-bg-main: #F8FAFC;
   --color-bg-card: #FFFFFF;
   --color-bg-alt: #F1F5F9;
-  
+
   --color-text-primary: #0F172A;
   --color-text-secondary: #475569;
   --color-text-muted: #64748B;
   --color-text-light: #94A3B8;
-  
+
   --color-border: #E2E8F0;
   --color-border-hover: #CBD5E1;
   --color-border-focus: #F97316;
-  
+
   --color-success: #10B981;
   --color-success-bg: #ECFDF5;
   --color-warning: #F59E0B;
@@ -31,25 +31,25 @@
   --color-danger-bg: #FEF2F2;
   --color-info: #0284C7;
   --color-info-bg: #F0F9FF;
-  
+
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.07), 0 2px 4px -2px rgba(15, 23, 42, 0.05);
   --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
   --shadow-xl: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.05);
   --shadow-glow: 0 0 20px rgba(249, 115, 22, 0.25);
-  
+
   /* Typography */
   --font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  
+
   /* Border Radius */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
   --radius-xl: 24px;
   --radius-full: 9999px;
-  
+
   /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -342,4 +342,121 @@ input, textarea, select {
 @keyframes scaleUp {
   from { transform: scale(0.95); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
+}
+
+/* ==========================================================================
+   Professional SaaS Navigation & Sidebar Design System Tokens
+   ========================================================================== */
+
+/* User Menu Dropdown */
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.user-menu-item:hover {
+  background: var(--color-bg-alt);
+  color: var(--color-navy);
+}
+
+.user-menu-item.logout:hover {
+  background: #FEF2F2 !important;
+  color: #DC2626 !important;
+}
+
+/* Sidebar Links (Admin & Teacher) */
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  color: #94A3B8;
+  font-size: 0.84rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  position: relative;
+  white-space: nowrap;
+}
+
+.sidebar-link:hover {
+  color: #F1F5F9;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-link.active {
+  color: #FFFFFF !important;
+  background: #2563EB !important;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+}
+
+.admin-desktop-sidebar.collapsed .sidebar-link,
+.teacher-sidebar.collapsed .sidebar-link {
+  justify-content: center;
+  padding: 0.6rem 0;
+  width: 100%;
+}
+
+.sidebar-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: #FFFFFF !important;
+  border-color: #475569 !important;
+}
+
+/* Navigation Links (Header) */
+.nav-link-item:hover {
+  color: var(--color-navy) !important;
+  background: var(--color-bg-alt);
+}
+
+.more-dropdown-item:hover {
+  background: var(--color-bg-alt) !important;
+  color: var(--color-navy) !important;
+}
+
+.header-icon-btn:hover {
+  background: var(--color-bg-alt);
+  border-color: var(--color-border-hover);
+  color: var(--color-navy) !important;
+}
+
+/* Clean Custom Scrollbars for Sidebars */
+.admin-desktop-sidebar::-webkit-scrollbar,
+.teacher-sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.admin-desktop-sidebar::-webkit-scrollbar-track,
+.teacher-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.admin-desktop-sidebar::-webkit-scrollbar-thumb,
+.teacher-sidebar::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+.admin-desktop-sidebar::-webkit-scrollbar-thumb:hover,
+.teacher-sidebar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
 }

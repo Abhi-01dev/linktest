@@ -35,7 +35,15 @@ router.put('/teachers/:id', adminController.updateTeacher);
 router.post('/teachers/:id/status', adminController.updateUserStatus);
 router.post('/teachers/:id/assign', adminController.assignTeacher);
 router.post('/teachers/assign', adminController.assignTeacher);
+router.post('/teachers/assignments', adminController.assignTeacher);
 router.get('/teachers/:id/assignments', adminController.getTeacherAssignments);
+router.put('/teachers/assignments/:id', adminController.updateTeacherAssignment);
+router.delete('/teachers/assignments/:id', adminController.removeTeacherAssignment);
+router.post('/assignments', adminController.assignTeacher);
+router.put('/assignments/:id', adminController.updateTeacherAssignment);
+router.delete('/assignments/:id', adminController.removeTeacherAssignment);
+router.get('/batches/:batchId/assignments', adminController.getBatchAssignments);
+router.post('/batches/:batchId/assignments', adminController.assignTeacher);
 
 // ── Classes & Batches ──────────────────────────────────────
 router.get('/classes', adminController.getClasses);

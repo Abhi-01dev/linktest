@@ -164,6 +164,12 @@ Test-Step 11 "POST /mock-tests" {
 $studentLogin = Invoke-RestMethod -Uri "$baseUrl/auth/login" -Method Post -Body (@{ email = "student@linktest.io"; password = "Student123!" } | ConvertTo-Json) -ContentType "application/json"
 $studentToken = $studentLogin.data.token
 
+# Student requests join and Admin/Teacher approves (Phase 10 Join Approval Requirement)
+$null = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testExamId/join-request" -Method Post -Headers @{ Authorization = "Bearer $studentToken" }
+$testJoinRequests = Invoke-RestMethod -Uri "$baseUrl/mock-tests/$testExamId/join-requests" -Method Get -Headers @{ Authorization = "Bearer $adminToken" }
+$reqId = $testJoinRequests.data.requests[0].id
+$null = Invoke-RestMethod -Uri "$baseUrl/mock-tests/join-requests/$reqId/approve" -Method Post -Headers @{ Authorization = "Bearer $adminToken" }
+
 $attemptId = ""
 $questionId = ""
 # 12. Start attempt

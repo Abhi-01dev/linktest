@@ -3,6 +3,7 @@ import { userRepository } from '../repositories/userRepository.js';
 import { courseRepository } from '../repositories/courseRepository.js';
 import { lmsRepository } from '../repositories/lmsRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
+import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
 
 const sanitizeOptionalString = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -439,6 +440,20 @@ export const batchController = {
         resourceId: allocation.id,
         summary: `Admin assigned teacher ${teacher.full_name} (${teacher.email}) to batch '${batch.name}'`
       });
+
+      // Unified Notification Event: Notify teacher of batch assignment
+      notificationService.createNotification({
+        userId: teacher_id,
+        title: 'New Batch Assigned',
+        message: `You have been allocated to teach academic batch "${batch.name}".`,
+        type: 'INFO',
+        priority: 'NORMAL',
+        actionUrl: '/teacher/classes',
+        actionLabel: 'View Batches',
+        relatedEntityType: 'BATCH',
+        relatedEntityId: batchId,
+        eventKey: `teacher:${teacher_id}:batch:${batchId}:ASSIGNED`
+      }).catch(() => {});
 
       return res.status(201).json({
         success: true,

@@ -65,13 +65,18 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  const normalizedUser = user ? {
+    ...user,
+    role: String(user.role || '').toUpperCase()
+  } : null;
+
   const value = {
-    user,
+    user: normalizedUser,
     loading,
-    isAuthenticated: !!user,
-    isAdmin: user?.role === 'ADMIN',
-    isTeacher: user?.role === 'TEACHER',
-    isStudent: user?.role === 'STUDENT',
+    isAuthenticated: !!normalizedUser,
+    isAdmin: normalizedUser?.role === 'ADMIN',
+    isTeacher: normalizedUser?.role === 'TEACHER',
+    isStudent: normalizedUser?.role === 'STUDENT',
     login,
     register,
     verifyEmail,

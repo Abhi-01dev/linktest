@@ -112,6 +112,16 @@ export function AdminTeachersPage() {
     }
   };
 
+  const handleRemoveAssignment = async (assignmentId) => {
+    try {
+      await api.removeTeacherAssignment(assignmentId);
+      showToast('Assignment removed successfully', 'success');
+      loadData();
+    } catch (err) {
+      showToast(err.message || 'Failed to remove assignment', 'error');
+    }
+  };
+
   const filteredTeachers = teachers.filter(t =>
     t.full_name?.toLowerCase().includes(search.toLowerCase()) ||
     t.email?.toLowerCase().includes(search.toLowerCase()) ||
@@ -194,8 +204,39 @@ export function AdminTeachersPage() {
                       {teacher.assignments && teacher.assignments.length > 0 ? (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
                           {teacher.assignments.map((asgn, i) => (
-                            <span key={i} style={{ padding: '0.2rem 0.5rem', background: '#F0FDF4', color: '#166534', border: '1px solid #BBF7D0', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>
-                              {asgn.subject_name || 'Subject'} ({asgn.class_name || 'Class'})
+                            <span
+                              key={asgn.id || i}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                padding: '0.2rem 0.55rem',
+                                background: '#F0FDF4',
+                                color: '#166534',
+                                border: '1px solid #BBF7D0',
+                                borderRadius: '4px',
+                                fontSize: '0.75rem',
+                                fontWeight: 600
+                              }}
+                            >
+                              <span>{asgn.subject_name || 'Subject'} ({asgn.batch_name || asgn.class_name || 'Cohort'})</span>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveAssignment(asgn.id)}
+                                title="Remove assignment"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  color: '#DC2626',
+                                  fontSize: '0.85rem',
+                                  lineHeight: 1,
+                                  padding: 0,
+                                  fontWeight: 700
+                                }}
+                              >
+                                ×
+                              </button>
                             </span>
                           ))}
                         </div>

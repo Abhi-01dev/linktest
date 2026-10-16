@@ -1,358 +1,235 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useNotifications } from '../../context/NotificationContext';
 import { LinkTestLogo } from './LinkTestLogo';
+import { DesktopNavigation } from './DesktopNavigation';
+import { MobileNavigation } from './MobileNavigation';
+import { UserMenu } from './UserMenu';
+import { NotificationCenter } from './NotificationCenter';
 import {
-  BookOpen,
-  Sparkles,
-  LayoutDashboard,
-  Award,
-  ShieldAlert,
-  LogOut,
-  User,
   Menu,
-  X,
-  GraduationCap,
-  FileCheck2
+  Bell,
+  Sparkles
 } from 'lucide-react';
 
 export function Navbar() {
-  const { user, isAuthenticated, isAdmin, isTeacher, logout } = useAuth();
+  const { user, isAuthenticated, logout } = useAuth();
+  const { unreadCount } = useNotifications();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
-    setMobileMenuOpen(false);
-  };
+  const role = String(user?.role || '').toUpperCase();
+  const isAdmin = role === 'ADMIN';
+  const isTeacher = role === 'TEACHER';
+  const isStudent = role === 'STUDENT';
 
-  const isActive = (path) => location.pathname === path;
+  // Role-specific brand logo destination
+  const brandDestination = isAdmin ? '/admin' : isTeacher ? '/teacher' : isStudent ? '/dashboard' : '/';
+
+  // Role indicator badge configuration
+  const roleBadge = isAdmin
+    ? { text: 'ADMIN', bg: '#FEF2F2', color: '#991B1B', border: '#FECACA' }
+    : isTeacher
+    ? { text: 'TEACHER', bg: '#EFF6FF', color: '#1E40AF', border: '#BFDBFE' }
+    : { text: 'STUDENT', bg: '#F0FDF4', color: '#166534', border: '#BBF7D0' };
 
   return (
     <header
+      className="app-header"
       style={{
-        background: '#FFFFFF',
+        background: 'rgba(255, 255, 255, 0.96)',
+        backdropFilter: 'blur(8px)',
         borderBottom: '1px solid var(--color-border)',
         position: 'sticky',
         top: 0,
         zIndex: 50,
-        boxShadow: 'var(--shadow-sm)'
+        height: '64px',
+        boxShadow: '0 1px 2px 0 rgba(15, 23, 42, 0.03)'
       }}
     >
-      <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '70px' }}>
-        {/* Brand Logo */}
-        <LinkTestLogo size="md" />
-
-        {/* Desktop Navigation Links */}
-        <nav style={{ display: 'none', alignItems: 'center', gap: '1.75rem' }} className="desktop-nav">
-          <Link
-            to="/courses"
+      <div
+        className="container"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          height: '100%',
+          maxWidth: '1440px'
+        }}
+      >
+        {/* 1. LEFT: Mobile Toggle + Brand Logo + Subtle Role Badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          {/* Mobile Menu Trigger */}
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            className="mobile-hamburger-btn"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              fontWeight: 600,
-              fontSize: '0.92rem',
-              color: isActive('/courses') ? 'var(--color-orange-dark)' : 'var(--color-text-secondary)',
-              transition: 'color var(--transition-fast)'
+              display: 'none',
+              padding: '0.4rem',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--color-navy)',
+              cursor: 'pointer',
+              borderRadius: 'var(--radius-sm)'
             }}
+            aria-label="Open navigation menu"
           >
-            <BookOpen size={17} />
-            <span>Courses</span>
+            <Menu size={22} />
+          </button>
+
+          {/* Logo with strict Role-based link */}
+          <Link
+            to={brandDestination}
+            style={{ textDecoration: 'none', display: 'flex', alignItems: 'center' }}
+            title="LinkTest Platform"
+          >
+            <LinkTestLogo size="md" />
           </Link>
 
-          <Link
-            to="/ai-tutor"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              fontWeight: 600,
-              fontSize: '0.92rem',
-              color: isActive('/ai-tutor') ? 'var(--color-orange-dark)' : 'var(--color-text-secondary)',
-              transition: 'color var(--transition-fast)'
-            }}
-          >
-            <Sparkles size={17} style={{ color: 'var(--color-orange)' }} />
-            <span>AI Tutor</span>
-          </Link>
-
-          <Link
-            to="/mock-tests"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              fontWeight: 600,
-              fontSize: '0.92rem',
-              color: isActive('/mock-tests') ? 'var(--color-orange-dark)' : 'var(--color-text-secondary)',
-              transition: 'color var(--transition-fast)'
-            }}
-          >
-            <FileCheck2 size={17} style={{ color: 'var(--color-orange)' }} />
-            <span>Mock Tests</span>
-          </Link>
-
+          {/* Subtle Role Indicator (Desktop) */}
           {isAuthenticated && (
-            <>
-              <Link
-                to="/dashboard"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  fontWeight: 600,
-                  fontSize: '0.92rem',
-                  color: isActive('/dashboard') ? 'var(--color-orange-dark)' : 'var(--color-text-secondary)',
-                  transition: 'color var(--transition-fast)'
-                }}
-              >
-                <LayoutDashboard size={17} />
-                <span>Dashboard</span>
-              </Link>
-
-              <Link
-                to="/progress"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  fontWeight: 600,
-                  fontSize: '0.92rem',
-                  color: isActive('/progress') ? 'var(--color-orange-dark)' : 'var(--color-text-secondary)',
-                  transition: 'color var(--transition-fast)'
-                }}
-              >
-                <Award size={17} />
-                <span>My Progress</span>
-              </Link>
-            </>
-          )}
-
-          {isTeacher && (
-            <Link
-              to="/teacher"
+            <span
+              className="desktop-role-tag"
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
+                fontSize: '0.68rem',
                 fontWeight: 700,
-                fontSize: '0.92rem',
-                color: '#2563EB',
-                background: '#EFF6FF',
-                padding: '0.35rem 0.75rem',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid #BFDBFE'
+                letterSpacing: '0.06em',
+                padding: '0.15rem 0.5rem',
+                borderRadius: '4px',
+                background: roleBadge.bg,
+                color: roleBadge.color,
+                border: `1px solid ${roleBadge.border}`,
+                lineHeight: 1.2
               }}
             >
-              <GraduationCap size={16} />
-              <span>Teacher Portal</span>
-            </Link>
-          )}
-
-          {isAdmin && (
-            <Link
-              to="/admin"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                fontWeight: 700,
-                fontSize: '0.92rem',
-                color: '#DC2626',
-                background: '#FEF2F2',
-                padding: '0.35rem 0.75rem',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid #FCA5A5'
-              }}
-            >
-              <ShieldAlert size={16} />
-              <span>Admin Portal</span>
-            </Link>
-          )}
-        </nav>
-
-        {/* Right CTA / User Session Actions */}
-        <div style={{ display: 'none', alignItems: 'center', gap: '0.85rem' }} className="desktop-actions">
-          {isAuthenticated ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <Link
-                to="/profile"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.4rem 0.8rem',
-                  background: 'var(--color-bg-alt)',
-                  borderRadius: 'var(--radius-full)',
-                  border: '1px solid var(--color-border)',
-                  color: 'var(--color-navy)'
-                }}
-              >
-                <div
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: '50%',
-                    background: 'var(--color-navy)',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '0.8rem',
-                    fontWeight: 700
-                  }}
-                >
-                  {user.full_name?.charAt(0) || 'U'}
-                </div>
-                <span style={{ fontSize: '0.875rem', fontWeight: 600, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {user.full_name?.split(' ')[0]}
-                </span>
-                <span className="badge badge-orange" style={{ fontSize: '0.65rem' }}>
-                  {user.role}
-                </span>
-              </Link>
-
-              <button
-                onClick={handleLogout}
-                className="btn btn-ghost btn-sm"
-                title="Log Out"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                <LogOut size={16} />
-              </button>
-            </div>
-          ) : (
-            <>
-              <Link to="/login" className="btn btn-outline btn-sm">
-                Log In
-              </Link>
-              <Link to="/register" className="btn btn-primary btn-sm">
-                Get Started
-              </Link>
-            </>
+              {roleBadge.text}
+            </span>
           )}
         </div>
 
-        {/* Mobile Toggle Button */}
-        <button
-          className="mobile-toggle"
-          onClick={() => setMobileMenuOpen(prev => !prev)}
-          style={{ display: 'flex', padding: '0.5rem', color: 'var(--color-navy)' }}
-          aria-label="Toggle menu"
-        >
-          {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
-      </div>
+        {/* 2. CENTER: Clean Desktop Primary Navigation with More Dropdown */}
+        <div className="header-nav-center" style={{ display: 'flex', alignItems: 'center', height: '100%' }}>
+          <DesktopNavigation role={role} />
+        </div>
 
-      {/* Mobile Drawer */}
-      {mobileMenuOpen && (
-        <div
-          style={{
-            background: '#FFFFFF',
-            borderTop: '1px solid var(--color-border)',
-            padding: '1.25rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1rem'
-          }}
-        >
-          <Link
-            to="/courses"
-            onClick={() => setMobileMenuOpen(false)}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, padding: '0.5rem 0' }}
-          >
-            <BookOpen size={18} /> Courses
-          </Link>
-          <Link
-            to="/ai-tutor"
-            onClick={() => setMobileMenuOpen(false)}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, padding: '0.5rem 0' }}
-          >
-            <Sparkles size={18} style={{ color: 'var(--color-orange)' }} /> AI Tutor
-          </Link>
-          <Link
-            to="/mock-tests"
-            onClick={() => setMobileMenuOpen(false)}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, padding: '0.5rem 0' }}
-          >
-            <FileCheck2 size={18} style={{ color: 'var(--color-orange)' }} /> Mock Tests
-          </Link>
+        {/* 3. RIGHT: Notifications + User Profile Menu / Auth Buttons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
           {isAuthenticated ? (
-            <>
-              <Link
-                to="/dashboard"
-                onClick={() => setMobileMenuOpen(false)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, padding: '0.5rem 0' }}
-              >
-                <LayoutDashboard size={18} /> Student Dashboard
-              </Link>
-              <Link
-                to="/progress"
-                onClick={() => setMobileMenuOpen(false)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, padding: '0.5rem 0' }}
-              >
-                <Award size={18} /> Learning Progress
-              </Link>
-              {isTeacher && (
-                <Link
-                  to="/teacher"
-                  onClick={() => setMobileMenuOpen(false)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: '#2563EB', padding: '0.5rem 0' }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              {/* Interactive Unified Notification Bell & Center */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setNotificationCenterOpen(prev => !prev)}
+                  className="header-icon-btn"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: notificationCenterOpen ? 'var(--color-primary)' : 'var(--color-text-secondary)',
+                    border: '1px solid var(--color-border)',
+                    background: notificationCenterOpen ? '#EFF6FF' : 'transparent',
+                    position: 'relative',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="LinkTest Task Notifications"
+                  aria-label="Notifications"
                 >
-                  <GraduationCap size={18} /> Teacher Portal
-                </Link>
-              )}
-              {isAdmin && (
-                <Link
-                  to="/admin"
-                  onClick={() => setMobileMenuOpen(false)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: '#DC2626', padding: '0.5rem 0' }}
-                >
-                  <ShieldAlert size={18} /> Admin Portal
-                </Link>
-              )}
-              <button
-                onClick={handleLogout}
-                className="btn btn-outline btn-sm"
-                style={{ width: '100%', marginTop: '0.5rem' }}
-              >
-                <LogOut size={16} /> Log Out ({user.full_name})
-              </button>
-            </>
+                  <Bell size={16} />
+                  {unreadCount > 0 && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: -3,
+                        right: -3,
+                        minWidth: 17,
+                        height: 17,
+                        padding: '0 4px',
+                        borderRadius: 10,
+                        background: '#EF4444',
+                        color: '#FFFFFF',
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid #FFFFFF',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                      }}
+                    >
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                <NotificationCenter
+                  isOpen={notificationCenterOpen}
+                  onClose={() => setNotificationCenterOpen(false)}
+                />
+              </div>
+
+              {/* Compact User Profile Menu */}
+              <UserMenu user={user} logout={logout} />
+            </div>
           ) : (
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <Link
                 to="/login"
-                onClick={() => setMobileMenuOpen(false)}
-                className="btn btn-outline"
-                style={{ flex: 1 }}
+                className="btn btn-outline btn-sm"
+                style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem', fontWeight: 600 }}
               >
                 Log In
               </Link>
               <Link
                 to="/register"
-                onClick={() => setMobileMenuOpen(false)}
-                className="btn btn-primary"
-                style={{ flex: 1 }}
+                className="btn btn-primary btn-sm"
+                style={{ padding: '0.4rem 0.95rem', fontSize: '0.85rem', fontWeight: 600 }}
               >
                 Get Started
               </Link>
             </div>
           )}
         </div>
-      )}
+      </div>
 
-      {/* Responsive media query styling */}
+      {/* Responsive Drawer for Tablet & Mobile (< 1024px) */}
+      <MobileNavigation
+        isOpen={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+        user={user}
+        role={role}
+        logout={logout}
+      />
+
+      {/* Header CSS Responsive Rules */}
       <style>{`
-        @media (min-width: 768px) {
-          .desktop-nav { display: flex !important; }
-          .desktop-actions { display: flex !important; }
-          .mobile-toggle { display: none !important; }
+        @media (max-width: 1023px) {
+          .header-nav-center {
+            display: none !important;
+          }
+          .desktop-role-tag {
+            display: none !important;
+          }
+          .mobile-hamburger-btn {
+            display: flex !important;
+          }
+          .user-menu-info {
+            display: none !important;
+          }
+          .user-menu-trigger {
+            padding: 0 !important;
+            border: none !important;
+          }
         }
       `}</style>
     </header>
   );
 }
+
+export default Navbar;

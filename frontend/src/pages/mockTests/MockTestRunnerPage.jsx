@@ -25,7 +25,12 @@ import {
   Send,
   Camera,
   X,
-  AlertCircle
+  AlertCircle,
+  Code,
+  Play,
+  Terminal,
+  Lock,
+  FileText
 } from 'lucide-react';
 
 export function MockTestRunnerPage() {
@@ -50,53 +55,111 @@ export function MockTestRunnerPage() {
   const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [timerWarning, setTimerWarning] = useState(null); // 'warning_5m', 'critical_1m', null
 
-  // Proctoring & Modals
+  // Security, Fullscreen & Proctoring State (Requirements 1, 2, 3, 4, 5, 14)
+  const [isFullscreenActive, setIsFullscreenActive] = useState(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+  const [securityWarningCount, setSecurityWarningCount] = useState(0);
+  const [fullscreenExitCount, setFullscreenExitCount] = useState(0);
+  const [autoSubmittedState, setAutoSubmittedState] = useState(null); // { submitted: true, reason: string, message: string }
   const [warningCount, setWarningCount] = useState(0);
   const [activeWarningModal, setActiveWarningModal] = useState(null);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [cameraDocked, setCameraDocked] = useState(true);
+  const [codeExecution, setCodeExecution] = useState({}); // { [qId]: { running: bool, result: Object, error: string } }
+  const [manualSaveSuccess, setManualSaveSuccess] = useState(false);
 
   // References
   const timerIntervalRef = useRef(null);
   const lastSyncTimeRef = useRef(Date.now());
   const pendingSyncRef = useRef({});
+  const lastFullscreenExitRef = useRef(0);
+  const responsesRef = useRef({});
+
+  // Sync ref with state
+  useEffect(() => {
+    responsesRef.current = responses;
+  }, [responses]);
+
+  // Request browser Fullscreen via user gesture
+  const requestBrowserFullscreen = async () => {
+    try {
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        await docEl.requestFullscreen();
+      } else if (docEl.webkitRequestFullscreen) {
+        await docEl.webkitRequestFullscreen();
+      } else if (docEl.msRequestFullscreen) {
+        await docEl.msRequestFullscreen();
+      }
+      setIsFullscreenActive(true);
+    } catch (err) {
+      console.warn('[Runner] Fullscreen request error:', err.message);
+    }
+  };
 
   // ---------------------------------------------------------------------------
-  // 1. WEBCAM PROCTORING INTEGRATION
+  // 1. WEBCAM PROCTORING INTEGRATION & SECURITY EVENTS
   // ---------------------------------------------------------------------------
 
   const handleProctorEvent = useCallback(async (eventPayload) => {
     try {
-      const res = await api.logMockTestProctoringEvent(attemptId, eventPayload);
-      if (res && res.warning_count !== undefined) {
-        setWarningCount(res.warning_count);
-      }
+      const payloadType = (eventPayload.event_type || eventPayload.eventType || '').toUpperCase();
 
-      // Show non-accusatory warning modal
-      if (eventPayload.event_type === 'TAB_HIDDEN' || eventPayload.event_type === 'WINDOW_BLURRED') {
-        setActiveWarningModal({
-          title: 'Exam Window Focus Notice',
-          message: 'You navigated away from the examination window. Please stay on this tab to maintain exam session integrity.',
-          type: 'warning'
-        });
-      } else if (eventPayload.event_type === 'FULLSCREEN_EXIT') {
-        setActiveWarningModal({
-          title: 'Fullscreen Mode Exited',
-          message: 'Fullscreen was exited. Please re-enter fullscreen mode to continue.',
-          type: 'warning'
-        });
-      } else if (eventPayload.event_type === 'MULTIPLE_FACES') {
-        setActiveWarningModal({
-          title: 'Multiple Faces Detected',
-          message: 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.',
-          type: 'warning'
-        });
+      // Fullscreen exit is strictly handled by dedicated handleFullscreenChange
+      if (payloadType === 'FULLSCREEN_EXIT') return;
+
+      const res = await api.logMockTestSecurityEvent(attemptId, {
+        ...eventPayload,
+        eventType: payloadType,
+        event_type: payloadType,
+        answers: responsesRef.current
+      });
+
+      if (res) {
+        if (res.security_warning_count !== undefined) {
+          setSecurityWarningCount(res.security_warning_count);
+        }
+        if (res.warning_count !== undefined) {
+          setWarningCount(res.warning_count);
+        }
+        if (res.fullscreen_exit_count !== undefined) {
+          setFullscreenExitCount(res.fullscreen_exit_count);
+        }
+
+        if (res.auto_submitted) {
+          const reasonCode = res.submission_reason || 'MAX_SECURITY_WARNINGS';
+          const msg = reasonCode === 'SECOND_FULLSCREEN_EXIT'
+            ? 'Your test has been automatically submitted because you exited full-screen mode twice.'
+            : 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+          setAutoSubmittedState({
+            submitted: true,
+            reason: reasonCode,
+            message: msg
+          });
+          return;
+        }
+
+        if (!res.debounced) {
+          const currentCount = res.security_warning_count ?? (securityWarningCount + 1);
+          let warningMsg = 'Please follow the test rules and remain on the exam screen.';
+          if (payloadType === 'TAB_HIDDEN' || payloadType === 'WINDOW_BLURRED') {
+            warningMsg = 'You navigated away from the examination window. Please stay on this tab to maintain exam session integrity.';
+          } else if (payloadType === 'MULTIPLE_FACES') {
+            warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
+          }
+
+          setActiveWarningModal({
+            title: `Security Warning ${currentCount}/5`,
+            message: warningMsg,
+            count: currentCount,
+            type: 'warning'
+          });
+        }
       }
     } catch (err) {
       console.warn('[Runner] Failed to log proctoring event:', err);
     }
-  }, [attemptId]);
+  }, [attemptId, securityWarningCount]);
 
   const {
     videoRef,
@@ -131,6 +194,22 @@ export function MockTestRunnerPage() {
         setExamData(data);
 
         const attemptStatus = data?.status || data?.attempt?.status;
+        const subReason = data?.submission_reason || data?.attempt?.submission_reason;
+
+        // Auto-submitted restore check (Requirement 16)
+        if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') {
+          setAutoSubmittedState({
+            submitted: true,
+            reason: subReason || 'AUTO_SUBMITTED',
+            message: subReason === 'SECOND_FULLSCREEN_EXIT'
+              ? 'Your test has been automatically submitted because you exited full-screen mode twice.'
+              : 'Your test has been automatically submitted because the maximum number of security warnings was reached.'
+          });
+          setRemainingSeconds(0);
+          setLoading(false);
+          return;
+        }
+
         if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed') {
           setRemainingSeconds(0);
           setLoading(false);
@@ -149,7 +228,11 @@ export function MockTestRunnerPage() {
           }
         }
         setRemainingSeconds(remaining);
+
+        // Restore authoritative counters from backend
         setWarningCount(data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0);
+        setSecurityWarningCount(data.security_warning_count ?? data.attempt?.security_warning_count ?? 0);
+        setFullscreenExitCount(data.fullscreen_exit_count ?? data.attempt?.fullscreen_exit_count ?? 0);
 
         // Preload saved answers
         if (data.responses) {
@@ -162,16 +245,9 @@ export function MockTestRunnerPage() {
           startCamera();
         }
 
-        // Request fullscreen if required
-        if (proctorConfig?.fullscreen_required) {
-          try {
-            if (!document.fullscreenElement) {
-              await document.documentElement.requestFullscreen();
-            }
-          } catch (e) {
-            console.warn('Fullscreen request bypassed:', e.message);
-          }
-        }
+        // Check initial fullscreen state
+        const isCurrentlyFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+        setIsFullscreenActive(isCurrentlyFullscreen);
       } catch (err) {
         console.error('Failed to load examination:', err);
         setInitError(err.message || 'Unable to load examination attempt.');
@@ -193,7 +269,7 @@ export function MockTestRunnerPage() {
   useEffect(() => {
     if (loading || !examData) return;
     const attemptStatus = examData?.status || examData?.attempt?.status;
-    if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed') return;
+    if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed' || attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') return;
 
     timerIntervalRef.current = setInterval(() => {
       setRemainingSeconds(prev => {
@@ -217,7 +293,7 @@ export function MockTestRunnerPage() {
   }, [loading, examData]);
 
   // ---------------------------------------------------------------------------
-  // 4. BROWSER VISIBILITY & FULLSCREEN LISTENERS
+  // 4. BROWSER VISIBILITY & FULLSCREEN LISTENERS (Requirements 2, 3, 4, 9, 11)
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
@@ -241,13 +317,50 @@ export function MockTestRunnerPage() {
       });
     };
 
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && examData.proctoring_config?.fullscreen_required) {
-        handleProctorEvent({
-          event_type: 'FULLSCREEN_EXIT',
-          severity: 'warning',
-          client_timestamp: new Date().toISOString()
-        });
+    const handleFullscreenChange = async () => {
+      const isNowFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreenActive(isNowFullscreen);
+
+      if (!isNowFullscreen) {
+        // Debounce rapid duplicate events (e.g. 2.5s) to prevent 1 exit counting as multiple (Requirement 9)
+        const now = Date.now();
+        if (now - lastFullscreenExitRef.current < 2500) {
+          return;
+        }
+        lastFullscreenExitRef.current = now;
+
+        try {
+          const res = await api.logMockTestSecurityEvent(attemptId, {
+            eventType: 'FULLSCREEN_EXIT',
+            event_type: 'FULLSCREEN_EXIT',
+            client_timestamp: new Date().toISOString(),
+            answers: responsesRef.current
+          });
+
+          if (res) {
+            if (res.fullscreen_exit_count !== undefined) {
+              setFullscreenExitCount(res.fullscreen_exit_count);
+            }
+            if (res.security_warning_count !== undefined) {
+              setSecurityWarningCount(res.security_warning_count);
+            }
+            if (res.warning_count !== undefined) {
+              setWarningCount(res.warning_count);
+            }
+
+            if (res.auto_submitted || (res.fullscreen_exit_count && res.fullscreen_exit_count >= 2)) {
+              setAutoSubmittedState({
+                submitted: true,
+                reason: 'SECOND_FULLSCREEN_EXIT',
+                message: 'Your test has been automatically submitted because you exited full-screen mode twice.'
+              });
+              stopCamera();
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn('[Runner] Fullscreen exit notification failed:', err.message);
+        }
       }
     };
 
@@ -257,6 +370,7 @@ export function MockTestRunnerPage() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
@@ -264,10 +378,11 @@ export function MockTestRunnerPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [examData, handleProctorEvent]);
+  }, [examData, attemptId, handleProctorEvent, stopCamera]);
 
   // ---------------------------------------------------------------------------
   // 5. ANSWER STATE PERSISTENCE
@@ -290,6 +405,7 @@ export function MockTestRunnerPage() {
   }, [attemptId]);
 
   const handleUpdateAnswer = (responseData) => {
+    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -310,7 +426,40 @@ export function MockTestRunnerPage() {
     saveAnswerToServer(activeQuestion.id, responseData, Boolean(updated.is_marked_for_review), true);
   };
 
+  const handleRunCode = async (question) => {
+    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    const qId = question.id;
+    const currentCode = responses[qId]?.response_data?.code !== undefined
+      ? responses[qId].response_data.code
+      : (question.starter_code || '');
+
+    setCodeExecution(prev => ({
+      ...prev,
+      [qId]: { running: true, result: null, error: null }
+    }));
+
+    try {
+      const publicCases = (question.test_cases || []).filter(tc => !tc.is_hidden);
+      const res = await api.runCode({
+        questionId: qId,
+        code: currentCode,
+        language: question.programming_language || 'javascript',
+        customTestCases: publicCases
+      });
+      setCodeExecution(prev => ({
+        ...prev,
+        [qId]: { running: false, result: res, error: null }
+      }));
+    } catch (err) {
+      setCodeExecution(prev => ({
+        ...prev,
+        [qId]: { running: false, result: null, error: err.message || 'Execution failed' }
+      }));
+    }
+  };
+
   const handleToggleMarkForReview = () => {
+    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -333,6 +482,7 @@ export function MockTestRunnerPage() {
   };
 
   const handleClearAnswer = () => {
+    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -357,6 +507,7 @@ export function MockTestRunnerPage() {
   // ---------------------------------------------------------------------------
 
   const handleNavigate = (index) => {
+    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
     if (index >= 0 && index < (examData?.questions?.length || 0)) {
       const targetQuestion = examData.questions[index];
       // Mark target as visited if not already
@@ -482,38 +633,101 @@ export function MockTestRunnerPage() {
   }
 
   const attemptStatus = examData?.status || examData?.attempt?.status;
-  const isCompleted = attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
+  const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
+  const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
 
   if (isCompleted) {
+    const subReason = autoSubmittedState?.reason || examData?.submission_reason || examData?.attempt?.submission_reason;
+    const isFullscreenExitAuto = subReason === 'SECOND_FULLSCREEN_EXIT' || autoSubmittedState?.reason === 'SECOND_FULLSCREEN_EXIT';
+    const isMaxWarningsAuto = subReason === 'MAX_SECURITY_WARNINGS' || autoSubmittedState?.reason === 'MAX_SECURITY_WARNINGS';
+
+    let autoSubmitReasonTitle = 'Examination Automatically Submitted';
+    let autoSubmitReasonDesc = 'Your test has been automatically submitted due to security policy violations.';
+    if (isFullscreenExitAuto) {
+      autoSubmitReasonTitle = 'Test Automatically Submitted';
+      autoSubmitReasonDesc = 'Your test has been automatically submitted because you exited full-screen mode twice.';
+    } else if (isMaxWarningsAuto) {
+      autoSubmitReasonTitle = 'Test Automatically Submitted';
+      autoSubmitReasonDesc = 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+    }
+
     return (
-      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '600px' }}>
+      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '640px' }}>
         <div style={{
-          background: 'var(--color-surface, #FFFFFF)',
-          border: '1px solid var(--color-border, #E2E8F0)',
+          background: '#FFFFFF',
+          border: `1px solid ${isAutoSubmitted ? '#EF4444' : 'var(--color-border, #E2E8F0)'}`,
           padding: '2.5rem',
-          borderRadius: 'var(--radius-lg, 12px)',
+          borderRadius: '16px',
           textAlign: 'center',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
+          boxShadow: isAutoSubmitted ? '0 10px 30px -5px rgba(239, 68, 68, 0.15)' : '0 4px 12px rgba(0,0,0,0.06)'
         }}>
-          <CheckCircle2 size={48} style={{ color: '#16A34A', margin: '0 auto 1rem' }} />
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--color-navy, #0F172A)' }}>
-            Examination Completed
+          {isAutoSubmitted ? (
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              background: '#FEF2F2',
+              color: '#DC2626',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 1.25rem'
+            }}>
+              <ShieldAlert size={36} />
+            </div>
+          ) : (
+            <CheckCircle2 size={48} style={{ color: '#16A34A', margin: '0 auto 1rem' }} />
+          )}
+
+          <h2 style={{
+            fontSize: '1.45rem',
+            fontWeight: 800,
+            marginBottom: '0.5rem',
+            color: isAutoSubmitted ? '#DC2626' : 'var(--color-navy, #0F172A)'
+          }}>
+            {isAutoSubmitted ? autoSubmitReasonTitle : 'Examination Completed'}
           </h2>
-          <p style={{ color: '#64748B', marginBottom: '1.75rem', lineHeight: 1.6 }}>
-            This examination attempt has already been submitted and finalized. Further responses cannot be recorded.
+
+          <p style={{ color: '#64748B', marginBottom: '1.5rem', lineHeight: 1.6, fontSize: '0.98rem' }}>
+            {isAutoSubmitted ? autoSubmitReasonDesc : 'This examination attempt has already been submitted and finalized. Further responses cannot be recorded.'}
           </p>
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+
+          {isAutoSubmitted && (
+            <div style={{
+              background: '#FEF2F2',
+              border: '1px solid #FCA5A5',
+              borderRadius: '10px',
+              padding: '0.85rem 1.25rem',
+              marginBottom: '1.75rem',
+              textAlign: 'left'
+            }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#991B1B', textTransform: 'uppercase' }}>
+                SECURITY ENFORCEMENT SUMMARY
+              </div>
+              <div style={{ fontSize: '0.9rem', color: '#1E293B', fontWeight: 600, marginTop: '0.3rem' }}>
+                Status: <span style={{ color: '#DC2626', fontWeight: 800 }}>AUTO_SUBMITTED</span>
+              </div>
+              <div style={{ fontSize: '0.9rem', color: '#1E293B', fontWeight: 600, marginTop: '0.2rem' }}>
+                Reason: <strong>{subReason || 'SECURITY_POLICY_VIOLATION'}</strong>
+              </div>
+              <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.25rem' }}>
+                Security Warnings: {securityWarningCount}/5 • Fullscreen Exits: {fullscreenExitCount}/2
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
               onClick={() => navigate(`/mock-tests/attempts/${attemptId}/result`)}
               className="btn btn-primary"
-              style={{ fontWeight: 700 }}
+              style={{ fontWeight: 700, padding: '0.65rem 1.5rem' }}
             >
               View Scorecard & Results
             </button>
             <button
               onClick={() => navigate('/mock-tests')}
               className="btn btn-secondary"
-              style={{ fontWeight: 600 }}
+              style={{ fontWeight: 600, padding: '0.65rem 1.25rem' }}
             >
               Back to Catalog
             </button>
@@ -533,8 +747,110 @@ export function MockTestRunnerPage() {
       display: 'flex',
       flexDirection: 'column',
       background: '#F1F5F9',
-      fontFamily: 'var(--font-body)'
+      fontFamily: 'var(--font-body)',
+      position: 'relative'
     }}>
+      {/* ---------------------------------------------------------------------
+          BLOCKING FULL-SCREEN OVERLAY (REQUIREMENTS 2, 3, 10, 11)
+      --------------------------------------------------------------------- */}
+      {!isFullscreenActive && !isCompleted && (
+        <div
+          id="fullscreen-blocking-overlay"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 999,
+            background: 'rgba(15, 23, 42, 0.88)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+            color: '#FFFFFF'
+          }}
+        >
+          <div style={{
+            maxWidth: '520px',
+            width: '100%',
+            background: '#1E293B',
+            border: `1px solid ${fullscreenExitCount > 0 ? '#EF4444' : '#3B82F6'}`,
+            borderRadius: '20px',
+            padding: '2.5rem 2rem',
+            textAlign: 'center',
+            boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.8)'
+          }}>
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              background: fullscreenExitCount > 0 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+              color: fullscreenExitCount > 0 ? '#EF4444' : '#3B82F6',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 1.5rem'
+            }}>
+              {fullscreenExitCount > 0 ? <AlertTriangle size={32} /> : <Maximize2 size={32} />}
+            </div>
+
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#FFFFFF', marginBottom: '0.75rem' }}>
+              {fullscreenExitCount > 0
+                ? 'Full-screen mode is required to continue this test.'
+                : 'FULL SCREEN REQUIRED'}
+            </h2>
+
+            <p style={{ color: '#94A3B8', fontSize: '0.96rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+              {fullscreenExitCount > 0
+                ? 'Please return to full-screen mode to continue. All test inputs and navigation remain locked while outside full-screen.'
+                : 'You must enter full-screen mode before answering questions to guarantee assessment session integrity.'}
+            </p>
+
+            {fullscreenExitCount > 0 && (
+              <div style={{
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                color: '#FCA5A5',
+                padding: '0.75rem 1rem',
+                borderRadius: '10px',
+                fontWeight: 700,
+                fontSize: '0.88rem',
+                marginBottom: '1.75rem'
+              }}>
+                Fullscreen exited: {fullscreenExitCount} / 2
+                <div style={{ fontSize: '0.78rem', fontWeight: 500, marginTop: '0.25rem', color: '#FECACA' }}>
+                  A second exit will automatically submit the test.
+                </div>
+              </div>
+            )}
+
+            <button
+              id="enter-fullscreen-action-btn"
+              onClick={requestBrowserFullscreen}
+              style={{
+                background: '#2563EB',
+                color: '#FFFFFF',
+                border: 'none',
+                padding: '0.85rem 2.25rem',
+                borderRadius: '12px',
+                fontSize: '1.05rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                boxShadow: '0 10px 25px -5px rgba(37, 99, 235, 0.5)',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={e => e.currentTarget.style.background = '#1D4ED8'}
+              onMouseOut={e => e.currentTarget.style.background = '#2563EB'}
+            >
+              <Maximize2 size={18} />
+              <span>{fullscreenExitCount > 0 ? 'Return to Full Screen' : 'Enter Full Screen'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ---------------------------------------------------------------------
           EXAM HEADER BAR
       --------------------------------------------------------------------- */}
@@ -562,8 +878,9 @@ export function MockTestRunnerPage() {
           </div>
         </div>
 
-        {/* Center: Server-Authoritative Timer */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+        {/* Center: Server-Authoritative Timer & Security Indicators */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+          {/* Authoritative Timer */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -592,9 +909,54 @@ export function MockTestRunnerPage() {
             <Clock size={16} />
             <span>{formatTime(remainingSeconds)}</span>
           </div>
+
+          {/* Security & Fullscreen Counters Pill (Prompt Requirement 14) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {/* Security Warnings */}
+            <div
+              id="security-warnings-indicator"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: securityWarningCount > 0 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(30, 41, 59, 0.8)',
+                color: securityWarningCount > 0 ? '#F87171' : '#94A3B8',
+                border: `1px solid ${securityWarningCount > 0 ? '#EF4444' : '#334155'}`,
+                padding: '0.35rem 0.75rem',
+                borderRadius: '999px',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                letterSpacing: '0.02em'
+              }}
+            >
+              <ShieldAlert size={14} />
+              <span>Security Warnings: {securityWarningCount} / 5</span>
+            </div>
+
+            {/* Fullscreen Exits */}
+            <div
+              id="fullscreen-exits-indicator"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                background: fullscreenExitCount > 0 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(30, 41, 59, 0.8)',
+                color: fullscreenExitCount > 0 ? '#FBBF24' : '#94A3B8',
+                border: `1px solid ${fullscreenExitCount > 0 ? '#F59E0B' : '#334155'}`,
+                padding: '0.35rem 0.75rem',
+                borderRadius: '999px',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                letterSpacing: '0.02em'
+              }}
+            >
+              <Maximize2 size={14} />
+              <span>Fullscreen Exits: {fullscreenExitCount} / 2</span>
+            </div>
+          </div>
         </div>
 
-        {/* Right: Sync & Connection Status */}
+        {/* Right: Sync, Network & Submit Action */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {/* Sync indicator */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.75rem' }}>
@@ -614,34 +976,19 @@ export function MockTestRunnerPage() {
             {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />}
           </div>
 
-          {/* Warnings Pill */}
-          {examData.proctoring_config?.webcam_required && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-              background: warningCount > 0 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-              color: warningCount > 0 ? '#EF4444' : '#10B981',
-              padding: '0.25rem 0.6rem',
-              borderRadius: '999px',
-              fontSize: '0.72rem',
-              fontWeight: 700
-            }}>
-              <ShieldAlert size={13} />
-              <span>Warnings: {warningCount}</span>
-            </div>
-          )}
-
           {/* Submit Action */}
           <button
             onClick={() => setSubmitConfirmOpen(true)}
+            disabled={!isFullscreenActive || isCompleted}
             className="btn btn-primary"
             style={{
               padding: '0.4rem 1rem',
               fontSize: '0.84rem',
               fontWeight: 800,
               background: '#10B981',
-              borderColor: '#10B981'
+              borderColor: '#10B981',
+              opacity: !isFullscreenActive || isCompleted ? 0.6 : 1,
+              cursor: !isFullscreenActive || isCompleted ? 'not-allowed' : 'pointer'
             }}
           >
             Submit Test
@@ -652,7 +999,15 @@ export function MockTestRunnerPage() {
       {/* ---------------------------------------------------------------------
           MAIN EXAMINATION WORKSPACE
       --------------------------------------------------------------------- */}
-      <div style={{ display: 'flex', flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div style={{
+        display: 'flex',
+        flex: 1,
+        position: 'relative',
+        overflow: 'hidden',
+        pointerEvents: (!isFullscreenActive || isCompleted) ? 'none' : 'auto',
+        filter: (!isFullscreenActive && !isCompleted) ? 'blur(1px)' : 'none',
+        userSelect: (!isFullscreenActive || isCompleted) ? 'none' : 'auto'
+      }}>
         {/* Left / Center: Question Paper Pane */}
         <main style={{
           flex: 1,
@@ -979,14 +1334,37 @@ export function MockTestRunnerPage() {
                   </div>
                 )}
 
-                {/* 7. Subjective / Descriptive */}
-                {activeQuestion.question_type === 'subjective' && (
+                {/* 7. Long Answer / Subjective */}
+                {['long_answer', 'subjective'].includes(activeQuestion.question_type) && (
                   <div>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem',
+                      fontSize: '0.82rem',
+                      color: '#64748B'
+                    }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-navy)' }}>
+                        Detailed Answer Submission (Max 2000 characters)
+                      </span>
+                      <span style={{
+                        fontWeight: 700,
+                        color: (activeResponse?.text || '').length > 1900 ? '#DC2626' : '#64748B'
+                      }}>
+                        Characters: {(activeResponse?.text || '').length} / 2000
+                      </span>
+                    </div>
+
                     <textarea
-                      rows={6}
-                      placeholder="Write your explanation or code solution here..."
+                      rows={8}
+                      maxLength={2000}
+                      placeholder="Type your explanation or answer here..."
                       value={activeResponse?.text || ''}
-                      onChange={(e) => handleUpdateAnswer({ text: e.target.value })}
+                      onChange={(e) => {
+                        const val = e.target.value.slice(0, 2000);
+                        handleUpdateAnswer({ text: val });
+                      }}
                       style={{
                         width: '100%',
                         padding: '1rem',
@@ -996,13 +1374,220 @@ export function MockTestRunnerPage() {
                         borderRadius: 'var(--radius-md)',
                         outline: 'none',
                         color: 'var(--color-navy)',
-                        fontFamily: 'inherit'
+                        fontFamily: 'inherit',
+                        resize: 'vertical',
+                        background: '#FFFFFF'
                       }}
                     />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.4rem', fontSize: '0.75rem', color: '#64748B' }}>
-                      <span>Word count: {(activeResponse?.text || '').trim().split(/\s+/).filter(Boolean).length}</span>
-                      <span>Evaluated manually by faculty</span>
+
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '0.75rem',
+                      flexWrap: 'wrap',
+                      gap: '0.5rem'
+                    }}>
+                      <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                        Evaluated manually by faculty. Expected answers are withheld prior to submission.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdateAnswer({ text: activeResponse?.text || '' });
+                          setManualSaveSuccess(true);
+                          setTimeout(() => setManualSaveSuccess(false), 2500);
+                        }}
+                        className="btn btn-secondary btn-sm"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 700 }}
+                      >
+                        <Check size={14} color={manualSaveSuccess ? '#10B981' : '#64748B'} />
+                        <span>{manualSaveSuccess ? 'Answer Saved!' : 'Save Answer'}</span>
+                      </button>
                     </div>
+                  </div>
+                )}
+
+                {/* 8. Coding Question */}
+                {activeQuestion.question_type === 'coding' && (
+                  <div>
+                    {/* Language & Sandbox Info Header */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#0F172A',
+                      color: '#F8FAFC',
+                      padding: '0.6rem 1rem',
+                      borderRadius: '8px 8px 0 0',
+                      borderBottom: '1px solid #1E293B',
+                      fontSize: '0.8rem'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Code size={15} color="#38BDF8" />
+                        <span style={{ fontWeight: 700, color: '#38BDF8' }}>
+                          {(activeQuestion.programming_language || 'javascript').toUpperCase()}
+                        </span>
+                        <span style={{ color: '#64748B' }}>• Isolated Sandbox</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '1rem', color: '#94A3B8' }}>
+                        <span>Limit: {activeQuestion.time_limit || 2.0}s</span>
+                        <span>Memory: {activeQuestion.memory_limit || 128}MB</span>
+                      </div>
+                    </div>
+
+                    {/* Code Editor Textarea */}
+                    <textarea
+                      rows={12}
+                      value={activeResponse?.code !== undefined ? activeResponse.code : (activeQuestion.starter_code || 'function solution() {\n  // write code\n}')}
+                      onChange={(e) => handleUpdateAnswer({ code: e.target.value })}
+                      placeholder="Write your code solution here..."
+                      spellCheck={false}
+                      style={{
+                        width: '100%',
+                        padding: '1rem',
+                        fontSize: '0.9rem',
+                        lineHeight: 1.5,
+                        fontFamily: 'monospace',
+                        background: '#020617',
+                        color: '#F1F5F9',
+                        border: '1px solid #1E293B',
+                        borderRadius: '0 0 8px 8px',
+                        outline: 'none',
+                        resize: 'vertical',
+                        tabSize: 2
+                      }}
+                    />
+
+                    {/* Run & Console Control Bar */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '0.75rem',
+                      flexWrap: 'wrap',
+                      gap: '0.5rem'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          disabled={codeExecution[activeQuestion.id]?.running}
+                          onClick={() => handleRunCode(activeQuestion)}
+                          className="btn btn-primary btn-sm"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontWeight: 800,
+                            background: '#059669',
+                            borderColor: '#059669'
+                          }}
+                        >
+                          <Play size={14} />
+                          <span>{codeExecution[activeQuestion.id]?.running ? 'Executing in Sandbox...' : 'Run Code'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cur = activeResponse?.code !== undefined ? activeResponse.code : (activeQuestion.starter_code || '');
+                            handleUpdateAnswer({ code: cur });
+                            setManualSaveSuccess(true);
+                            setTimeout(() => setManualSaveSuccess(false), 2500);
+                          }}
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                        >
+                          <Check size={14} color={manualSaveSuccess ? '#10B981' : '#64748B'} />
+                          <span>{manualSaveSuccess ? 'Code Saved!' : 'Save Code'}</span>
+                        </button>
+                      </div>
+
+                      <div style={{ fontSize: '0.78rem', color: '#64748B', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <Lock size={12} />
+                        <span>Hidden test cases evaluated upon final test submission</span>
+                      </div>
+                    </div>
+
+                    {/* Execution Output Console */}
+                    {codeExecution[activeQuestion.id] && (
+                      <div style={{
+                        marginTop: '1rem',
+                        background: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '8px',
+                        padding: '1rem'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--color-navy)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Terminal size={15} /> Sandbox Execution Output
+                          </span>
+                          {codeExecution[activeQuestion.id].result && (
+                            <span style={{
+                              fontSize: '0.75rem',
+                              fontWeight: 800,
+                              padding: '0.15rem 0.5rem',
+                              borderRadius: '4px',
+                              background: codeExecution[activeQuestion.id].result.passed ? '#ECFDF5' : '#FEF2F2',
+                              color: codeExecution[activeQuestion.id].result.passed ? '#059669' : '#DC2626'
+                            }}>
+                              {codeExecution[activeQuestion.id].result.passed ? 'ALL PUBLIC TESTS PASSED' : 'TESTS FAILED'} • {codeExecution[activeQuestion.id].result.execution_time_ms}ms
+                            </span>
+                          )}
+                        </div>
+
+                        {codeExecution[activeQuestion.id].error && (
+                          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', padding: '0.75rem', borderRadius: '6px', fontSize: '0.82rem', fontFamily: 'monospace' }}>
+                            {codeExecution[activeQuestion.id].error}
+                          </div>
+                        )}
+
+                        {codeExecution[activeQuestion.id].result?.results && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {codeExecution[activeQuestion.id].result.results.map((r, rIdx) => (
+                              <div
+                                key={rIdx}
+                                style={{
+                                  background: r.passed ? '#F0FDF4' : '#FFF1F2',
+                                  border: `1px solid ${r.passed ? '#BBF7D0' : '#FECDD3'}`,
+                                  borderRadius: '6px',
+                                  padding: '0.6rem 0.8rem',
+                                  fontSize: '0.82rem'
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                                  <span style={{ fontWeight: 700, color: r.passed ? '#15803D' : '#BE123C' }}>
+                                    Test Case #{rIdx + 1}: {r.passed ? 'Passed ✓' : 'Failed ✗'}
+                                  </span>
+                                  <span style={{ fontSize: '0.75rem', color: '#64748B' }}>{r.execution_time_ms} ms</span>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem', fontFamily: 'monospace', fontSize: '0.78rem' }}>
+                                  <div>
+                                    <span style={{ color: '#64748B' }}>Input: </span>
+                                    <span>{r.input || '(none)'}</span>
+                                  </div>
+                                  <div>
+                                    <span style={{ color: '#64748B' }}>Expected: </span>
+                                    <span>{r.expected_output}</span>
+                                  </div>
+                                  <div>
+                                    <span style={{ color: '#64748B' }}>Your Output: </span>
+                                    <span style={{ color: r.passed ? '#15803D' : '#DC2626', fontWeight: 700 }}>
+                                      {r.actual_output !== undefined ? String(r.actual_output) : '(none)'}
+                                    </span>
+                                  </div>
+                                </div>
+                                {r.error && (
+                                  <div style={{ color: '#DC2626', marginTop: '0.3rem', fontSize: '0.76rem', fontFamily: 'monospace' }}>
+                                    Error: {r.error}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

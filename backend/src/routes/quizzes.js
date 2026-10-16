@@ -10,7 +10,8 @@ router.get('/attempts/:attemptId', authenticateToken, quizController.getAttemptD
 router.get('/:id', authenticateToken, quizController.getQuizById);
 router.post('/:id/attempts', authenticateToken, quizController.submitAttempt);
 
-// Quiz Authoring
+// Quiz Authoring & Teacher Evaluation
 router.post('/', authenticateToken, requireAnyRole('ADMIN', 'TEACHER'), quizController.createQuiz);
+router.post('/attempts/:attemptId/answers/:questionId/evaluate', authenticateToken, requireAnyRole('ADMIN', 'TEACHER'), quizController.evaluateAnswer);
 
 export default router;

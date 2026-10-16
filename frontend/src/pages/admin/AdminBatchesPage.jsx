@@ -30,6 +30,7 @@ export function AdminBatchesPage() {
   const [batches, setBatches] = useState([]);
   const [courses, setCourses] = useState([]);
   const [allTeachers, setAllTeachers] = useState([]);
+  const [allSubjects, setAllSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Filters & Search
@@ -43,6 +44,11 @@ export function AdminBatchesPage() {
 
   const [allocationBatch, setAllocationBatch] = useState(null);
   const [batchTeachers, setBatchTeachers] = useState([]);
+  const [batchAssignments, setBatchAssignments] = useState([]);
+  const [selectedAssignSubjectId, setSelectedAssignSubjectId] = useState('');
+  const [selectedAssignTeacherId, setSelectedAssignTeacherId] = useState('');
+  const [changeTeacherModal, setChangeTeacherModal] = useState(null);
+  const [newTeacherId, setNewTeacherId] = useState('');
   const [loadingTeachers, setLoadingTeachers] = useState(false);
   const [teacherSearch, setTeacherSearch] = useState('');
 
@@ -77,14 +83,16 @@ export function AdminBatchesPage() {
   const loadBatches = async () => {
     try {
       setLoading(true);
-      const [batchList, courseList, teacherList] = await Promise.all([
+      const [batchList, courseList, teacherList, subjectList] = await Promise.all([
         api.getBatches(),
         api.getCourses({ published: 'all' }).catch(() => []),
-        api.getAdminTeachers().catch(() => [])
+        api.getAdminTeachers().catch(() => []),
+        api.getAdminSubjects().catch(() => [])
       ]);
       setBatches(Array.isArray(batchList) ? batchList : []);
       setCourses(Array.isArray(courseList) ? courseList : []);
       setAllTeachers(Array.isArray(teacherList) ? teacherList : []);
+      setAllSubjects(Array.isArray(subjectList) ? subjectList : []);
     } catch (err) {
       showToast(err.message || 'Failed to load batches roster', 'error');
     } finally {
@@ -188,14 +196,87 @@ export function AdminBatchesPage() {
   const handleOpenTeachers = async (batch) => {
     setAllocationBatch(batch);
     setTeacherSearch('');
+    setChangeTeacherModal(null);
     try {
       setLoadingTeachers(true);
-      const assigned = await api.getBatchTeachers(batch.id);
+      const [assigned, assignmentsList] = await Promise.all([
+        api.getBatchTeachers(batch.id).catch(() => []),
+        api.getBatchAssignments(batch.id).catch(() => [])
+      ]);
       setBatchTeachers(Array.isArray(assigned) ? assigned : []);
+      setBatchAssignments(Array.isArray(assignmentsList) ? assignmentsList : []);
+      if (allSubjects.length > 0 && !selectedAssignSubjectId) {
+        setSelectedAssignSubjectId(allSubjects[0].id);
+      }
+      if (allTeachers.length > 0 && !selectedAssignTeacherId) {
+        setSelectedAssignTeacherId(allTeachers[0].id);
+      }
     } catch (err) {
       showToast(err.message || 'Failed to load assigned faculty', 'error');
     } finally {
       setLoadingTeachers(false);
+    }
+  };
+
+  const handleAssignSubjectToTeacher = async (e) => {
+    if (e) e.preventDefault();
+    if (!selectedAssignSubjectId || !selectedAssignTeacherId) {
+      showToast('Please select both a subject and a faculty teacher', 'error');
+      return;
+    }
+    try {
+      await api.assignTeacher({
+        batch_id: allocationBatch.id,
+        class_id: allocationBatch.class_id || null,
+        subject_id: selectedAssignSubjectId,
+        teacher_id: selectedAssignTeacherId
+      });
+      showToast('✓ Subject assigned to Teacher successfully', 'success');
+      const [updatedAssigned, updatedAssignments] = await Promise.all([
+        api.getBatchTeachers(allocationBatch.id).catch(() => []),
+        api.getBatchAssignments(allocationBatch.id).catch(() => [])
+      ]);
+      setBatchTeachers(Array.isArray(updatedAssigned) ? updatedAssigned : []);
+      setBatchAssignments(Array.isArray(updatedAssignments) ? updatedAssignments : []);
+      loadBatches();
+    } catch (err) {
+      showToast(err.message || 'Failed to assign subject to teacher', 'error');
+    }
+  };
+
+  const handleRemoveSubjectAssignment = async (assignmentId) => {
+    try {
+      await api.removeTeacherAssignment(assignmentId);
+      showToast('Subject assignment removed', 'success');
+      const [updatedAssigned, updatedAssignments] = await Promise.all([
+        api.getBatchTeachers(allocationBatch.id).catch(() => []),
+        api.getBatchAssignments(allocationBatch.id).catch(() => [])
+      ]);
+      setBatchTeachers(Array.isArray(updatedAssigned) ? updatedAssigned : []);
+      setBatchAssignments(Array.isArray(updatedAssignments) ? updatedAssignments : []);
+      loadBatches();
+    } catch (err) {
+      showToast(err.message || 'Failed to remove assignment', 'error');
+    }
+  };
+
+  const handleChangeTeacherSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!changeTeacherModal || !newTeacherId) return;
+    try {
+      await api.updateTeacherAssignment(changeTeacherModal.assignmentId, newTeacherId);
+      showToast('Assigned teacher updated successfully', 'success');
+      setChangeTeacherModal(null);
+      setNewTeacherId('');
+      const [updatedAssigned, updatedAssignments] = await Promise.all([
+        api.getBatchTeachers(allocationBatch.id).catch(() => []),
+        api.getBatchAssignments(allocationBatch.id).catch(() => [])
+      ]);
+      setBatchTeachers(Array.isArray(updatedAssigned) ? updatedAssigned : []);
+      setBatchAssignments(Array.isArray(updatedAssignments) ? updatedAssignments : []);
+      loadBatches();
+    } catch (err) {
+      showToast(err.message || 'Failed to change teacher', 'error');
     }
   };
 
@@ -1047,10 +1128,10 @@ export function AdminBatchesPage() {
             >
               <div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0F172A', margin: 0 }}>
-                  Faculty Allocation — {allocationBatch.name}
+                  Subject & Faculty Allocation — {allocationBatch.name}
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: '#64748B', fontFamily: 'monospace' }}>
-                  Code: {allocationBatch.code}
+                  Batch Code: {allocationBatch.code} {allocationBatch.course_title ? `• Curriculum: ${allocationBatch.course_title}` : ''}
                 </span>
               </div>
               <button
@@ -1061,19 +1142,63 @@ export function AdminBatchesPage() {
               </button>
             </div>
 
-            {/* Currently Assigned Faculty */}
+            {/* 1. Form: Assign Subject to Teacher for this Batch */}
+            <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '1.25rem', marginBottom: '1.5rem' }}>
+              <h4 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0F172A', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <BookOpen size={16} style={{ color: '#2563EB' }} />
+                <span>Assign Subject to Faculty</span>
+              </h4>
+              <form onSubmit={handleAssignSubjectToTeacher} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.75rem', alignItems: 'flex-end' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Subject</label>
+                  <select
+                    className="form-input"
+                    value={selectedAssignSubjectId}
+                    onChange={(e) => setSelectedAssignSubjectId(e.target.value)}
+                    style={{ fontSize: '0.85rem' }}
+                    required
+                  >
+                    <option value="">Select Subject</option>
+                    {allSubjects.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Teacher</label>
+                  <select
+                    className="form-input"
+                    value={selectedAssignTeacherId}
+                    onChange={(e) => setSelectedAssignTeacherId(e.target.value)}
+                    style={{ fontSize: '0.85rem' }}
+                    required
+                  >
+                    <option value="">Select Teacher</option>
+                    {allTeachers.map(t => (
+                      <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
+                    ))}
+                  </select>
+                </div>
+                <button type="submit" className="btn btn-primary" style={{ height: '38px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <Plus size={15} />
+                  <span>Assign</span>
+                </button>
+              </form>
+            </div>
+
+            {/* 2. Currently Assigned Subjects & Faculty */}
             <div style={{ marginBottom: '1.5rem' }}>
-              <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#334155', marginBottom: '0.5rem' }}>
-                Assigned Faculty Members ({batchTeachers.length})
+              <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: '#334155', marginBottom: '0.6rem' }}>
+                Assigned Subjects & Faculty ({batchAssignments.length})
               </h4>
               {loadingTeachers ? (
                 <div style={{ padding: '1rem', textAlign: 'center', color: '#94A3B8', fontSize: '0.85rem' }}>
-                  Loading faculty...
+                  Loading assignments...
                 </div>
-              ) : batchTeachers.length === 0 ? (
+              ) : batchAssignments.length === 0 ? (
                 <div
                   style={{
-                    padding: '1rem',
+                    padding: '1.25rem',
                     background: '#F8FAFC',
                     border: '1px dashed #CBD5E1',
                     borderRadius: '8px',
@@ -1082,64 +1207,75 @@ export function AdminBatchesPage() {
                     textAlign: 'center'
                   }}
                 >
-                  No faculty members allocated to this batch yet.
+                  No subjects assigned to teachers for this batch yet. Use the form above to assign a subject to a faculty member.
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto' }}>
-                  {batchTeachers.map((t) => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '220px', overflowY: 'auto' }}>
+                  {batchAssignments.map((asgn) => (
                     <div
-                      key={t.id}
+                      key={asgn.id}
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        padding: '0.6rem 0.85rem',
-                        background: '#F8FAFC',
-                        borderRadius: '8px',
-                        border: '1px solid #E2E8F0'
+                        padding: '0.75rem 1rem',
+                        background: '#F0FDF4',
+                        border: '1px solid #BBF7D0',
+                        borderRadius: '8px'
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <div
-                          style={{
-                            width: 30,
-                            height: 30,
-                            borderRadius: '50%',
-                            background: 'rgba(37, 99, 235, 0.1)',
-                            color: '#2563EB',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 700,
-                            fontSize: '0.8rem'
-                          }}
-                        >
-                          {t.full_name?.charAt(0) || 'T'}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <strong style={{ fontSize: '0.92rem', color: '#166534' }}>{asgn.subject_name}</strong>
+                          <span style={{ fontSize: '0.75rem', background: '#DCFCE7', color: '#166534', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                            {asgn.subject_code}
+                          </span>
+                          <span style={{ fontSize: '0.72rem', background: '#16A34A', color: '#FFFFFF', padding: '0.15rem 0.45rem', borderRadius: '999px', fontWeight: 700, textTransform: 'uppercase' }}>
+                            Assigned
+                          </span>
                         </div>
-                        <div>
-                          <strong style={{ fontSize: '0.88rem', color: '#0F172A', display: 'block' }}>
-                            {t.full_name}
-                          </strong>
-                          <span style={{ fontSize: '0.76rem', color: '#64748B' }}>{t.email}</span>
+                        <div style={{ fontSize: '0.82rem', color: '#374151', marginTop: '0.2rem' }}>
+                          Teacher: <strong>{asgn.teacher_name}</strong> ({asgn.teacher_email})
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: '0.1rem' }}>
+                          Batch: {allocationBatch.name}
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleRemoveTeacher(t.id)}
-                        className="btn btn-ghost btn-sm"
-                        style={{ color: '#EF4444', fontSize: '0.78rem', padding: '0.3rem 0.6rem' }}
-                      >
-                        Unassign
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChangeTeacherModal({
+                              assignmentId: asgn.id,
+                              currentTeacherId: asgn.teacher_id,
+                              subjectName: asgn.subject_name
+                            });
+                            setNewTeacherId(allTeachers.find(t => t.id !== asgn.teacher_id)?.id || allTeachers[0]?.id || '');
+                          }}
+                          className="btn btn-outline btn-sm"
+                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', background: '#FFFFFF' }}
+                        >
+                          Change Teacher
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSubjectAssignment(asgn.id)}
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: '#EF4444' }}
+                        >
+                          Remove Assignment
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* Allocate New Faculty */}
+            {/* 3. General Batch Teachers / Cohort Faculty Allocation */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <h4 style={{ fontSize: '0.88rem', fontWeight: 700, color: '#334155', marginBottom: '0.5rem' }}>
-                Allocate Active Faculty Member
+                Batch Faculty Roster ({batchTeachers.length})
               </h4>
 
               <div
@@ -1157,7 +1293,7 @@ export function AdminBatchesPage() {
                 <Search size={16} style={{ color: '#94A3B8' }} />
                 <input
                   type="text"
-                  placeholder="Filter teachers by name or email..."
+                  placeholder="Filter faculty members by name or email..."
                   value={teacherSearch}
                   onChange={(e) => setTeacherSearch(e.target.value)}
                   style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent', fontSize: '0.84rem' }}
@@ -1167,7 +1303,7 @@ export function AdminBatchesPage() {
               <div
                 style={{
                   flex: 1,
-                  maxHeight: '220px',
+                  maxHeight: '180px',
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
@@ -1181,7 +1317,8 @@ export function AdminBatchesPage() {
                     return !q || t.full_name?.toLowerCase().includes(q) || t.email?.toLowerCase().includes(q);
                   })
                   .map((teacher) => {
-                    const isAssigned = batchTeachers.some((bt) => bt.id === teacher.id);
+                    const isAssigned = batchTeachers.some((bt) => bt.id === teacher.id || bt.teacher_id === teacher.id) ||
+                      batchAssignments.some(ba => ba.teacher_id === teacher.id);
                     return (
                       <div
                         key={teacher.id}
@@ -1226,6 +1363,61 @@ export function AdminBatchesPage() {
                 Done
               </button>
             </div>
+
+            {/* Change Teacher Modal */}
+            {changeTeacherModal && (
+              <div
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(15, 23, 42, 0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 1050,
+                  padding: '1rem'
+                }}
+              >
+                <div className="card" style={{ maxWidth: '420px', width: '100%', padding: '1.75rem' }}>
+                  <h4 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0F172A' }}>
+                    Change Teacher
+                  </h4>
+                  <p style={{ fontSize: '0.84rem', color: '#64748B', marginBottom: '1.25rem' }}>
+                    Select replacement teacher for <strong>{changeTeacherModal.subjectName}</strong> in batch <strong>{allocationBatch.name}</strong>.
+                  </p>
+                  <form onSubmit={handleChangeTeacherSubmit}>
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, color: '#475569', display: 'block', marginBottom: '0.35rem' }}>
+                        Replacement Faculty Teacher
+                      </label>
+                      <select
+                        className="form-input"
+                        value={newTeacherId}
+                        onChange={(e) => setNewTeacherId(e.target.value)}
+                        required
+                        style={{ width: '100%', fontSize: '0.85rem' }}
+                      >
+                        {allTeachers.map(t => (
+                          <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => setChangeTeacherModal(null)}
+                        className="btn btn-outline btn-sm"
+                      >
+                        Cancel
+                      </button>
+                      <button type="submit" className="btn btn-primary btn-sm">
+                        Confirm Teacher Change
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

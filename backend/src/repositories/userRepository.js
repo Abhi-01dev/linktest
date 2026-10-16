@@ -308,7 +308,73 @@ export const userRepository = {
   },
 
   async getTeachers(filters = {}) {
-    return this.getAllUsers({ ...filters, role: 'TEACHER' });
+    const teachers = await this.getAllUsers({ ...filters, role: 'TEACHER' });
+    if (!teachers || teachers.length === 0) return [];
+
+    if (isPostgresConnected && pool) {
+      const teacherIds = teachers.map(t => t.id);
+      try {
+        const [asgnsRes, profRes] = await Promise.all([
+          pool.query(
+            `SELECT ta.*, c.name as class_name, b.name as batch_name, s.name as subject_name, s.code as subject_code
+             FROM teacher_assignments ta
+             LEFT JOIN classes c ON ta.class_id = c.id
+             LEFT JOIN batches b ON ta.batch_id = b.id
+             JOIN subjects s ON ta.subject_id = s.id
+             WHERE ta.teacher_id = ANY($1::varchar[])
+             ORDER BY ta.assigned_at DESC`,
+            [teacherIds]
+          ),
+          pool.query(
+            `SELECT * FROM teacher_profiles WHERE user_id = ANY($1::varchar[])`,
+            [teacherIds]
+          )
+        ]);
+
+        const asgnsMap = {};
+        for (const r of asgnsRes.rows) {
+          if (!asgnsMap[r.teacher_id]) asgnsMap[r.teacher_id] = [];
+          asgnsMap[r.teacher_id].push(r);
+        }
+
+        const profMap = {};
+        for (const p of profRes.rows) {
+          profMap[p.user_id] = p;
+        }
+
+        teachers.forEach(t => {
+          t.assignments = asgnsMap[t.id] || [];
+          const prof = profMap[t.id];
+          if (prof) {
+            t.department = prof.department || t.department;
+            t.qualification = prof.qualification || t.qualification;
+            t.specialization = prof.specialization || t.specialization;
+          }
+        });
+      } catch (err) {
+        // Fallback without assignments if table join errors
+        teachers.forEach(t => { if (!t.assignments) t.assignments = []; });
+      }
+      return teachers;
+    }
+
+    teachers.forEach(t => {
+      t.assignments = (memoryStore.teacher_assignments || [])
+        .filter(ta => ta.teacher_id === t.id)
+        .map(ta => {
+          const cls = (memoryStore.classes || []).find(c => c.id === ta.class_id);
+          const batch = (memoryStore.batches || []).find(b => b.id === ta.batch_id);
+          const subject = (memoryStore.subjects || []).find(s => s.id === ta.subject_id);
+          return {
+            ...ta,
+            class_name: cls?.name,
+            batch_name: batch?.name,
+            subject_name: subject?.name,
+            subject_code: subject?.code
+          };
+        });
+    });
+    return teachers;
   },
 
   async countByRole() {

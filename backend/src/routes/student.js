@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { studentController } from '../controllers/studentController.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
-// All student routes require authentication
-router.use(authenticateToken);
+// All student routes require authentication and STUDENT role
+router.use(authenticateToken, requireRole('STUDENT'));
 
 // ── Dashboard & Enrolled Classes ──
 router.get('/dashboard', studentController.getDashboard);

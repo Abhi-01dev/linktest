@@ -10,8 +10,8 @@ async function startServer() {
   // Initialize Database connection (PostgreSQL with fallback)
   await initDb();
 
-  const server = app.listen(config.port, () => {
-    console.log(`[LinkTest Server] Ready and listening on http://localhost:${config.port}`);
+  const server = app.listen(config.port, '0.0.0.0', () => {
+    console.log(`[LinkTest Server] Ready and listening on port ${config.port} (0.0.0.0)`);
     console.log(`[LinkTest Server] Health Check: http://localhost:${config.port}/api/health`);
     console.log(`[LinkTest Server] AI Status:    http://localhost:${config.port}/api/ai/status`);
     console.log(`[LinkTest Server] Environment:  ${config.nodeEnv}`);

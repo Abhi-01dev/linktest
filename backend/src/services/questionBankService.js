@@ -23,12 +23,20 @@ export const questionBankService = {
       'topic',
       'difficulty',
       'explanation',
-      'marks'
+      'marks',
+      'questionType',
+      'expectedAnswer',
+      'evaluationCriteria',
+      'programmingLanguage',
+      'starterCode',
+      'timeLimit',
+      'memoryLimit'
     ];
 
     const sampleRows = [
       {
         question: 'Which of the following data structures operates on a Last-In First-Out (LIFO) basis?',
+        questionType: 'MCQ',
         optionA: 'Queue',
         optionB: 'Stack',
         optionC: 'Binary Search Tree',
@@ -38,46 +46,73 @@ export const questionBankService = {
         topic: 'Linear Data Structures',
         difficulty: 'EASY',
         explanation: 'A stack operates strictly on the LIFO principle, where elements are inserted and removed from the same top end.',
-        marks: 4
+        marks: 4,
+        expectedAnswer: '',
+        evaluationCriteria: '',
+        programmingLanguage: '',
+        starterCode: '',
+        timeLimit: '',
+        memoryLimit: ''
       },
       {
-        question: 'What is the average time complexity of searching an element in a balanced Binary Search Tree (AVL / Red-Black Tree)?',
-        optionA: 'O(1)',
-        optionB: 'O(n)',
-        optionC: 'O(log n)',
-        optionD: 'O(n log n)',
-        correctAnswer: 'C',
+        question: 'HTTP is a stateless communication protocol by design.',
+        questionType: 'TRUE_FALSE',
+        optionA: '',
+        optionB: '',
+        optionC: '',
+        optionD: '',
+        correctAnswer: 'TRUE',
         subject: 'Computer Science Fundamentals',
-        topic: 'Tree Structures & Algorithms',
-        difficulty: 'MEDIUM',
-        explanation: 'Because the height of a balanced BST is kept proportional to log2(n), search operations take O(log n) comparisons.',
-        marks: 4
-      },
-      {
-        question: 'In SQL relational databases, what does the ACID property "Isolation" ensure?',
-        optionA: 'Changes are written permanently to disk after commit',
-        optionB: 'Transactions execute independently without concurrent interference',
-        optionC: 'Database constraints and integrity rules are never violated',
-        optionD: 'All steps in a transaction succeed, or the entire operation is rolled back',
-        correctAnswer: 'B',
-        subject: 'Database Systems',
-        topic: 'Transaction Management',
-        difficulty: 'HARD',
-        explanation: 'Isolation ensures that concurrent transactions execute as though they were run sequentially, preventing race conditions and dirty reads.',
-        marks: 4
-      },
-      {
-        question: 'In modern React, which hook is primarily used to manage side effects such as data fetching and subscriptions?',
-        optionA: 'useState',
-        optionB: 'useMemo',
-        optionC: 'useContext',
-        optionD: 'useEffect',
-        correctAnswer: 'D',
-        subject: 'Web Development',
-        topic: 'React Component Lifecycle & Hooks',
+        topic: 'Computer Networks',
         difficulty: 'EASY',
-        explanation: 'useEffect serves the purpose of handling side effects, timers, subscriptions, and DOM mutations in functional components.',
-        marks: 4
+        explanation: 'Each HTTP request is executed independently without the server retaining session state by default.',
+        marks: 2,
+        expectedAnswer: '',
+        evaluationCriteria: '',
+        programmingLanguage: '',
+        starterCode: '',
+        timeLimit: '',
+        memoryLimit: ''
+      },
+      {
+        question: 'Explain the working principle of a heat exchanger and describe its major industrial applications.',
+        questionType: 'LONG_ANSWER',
+        optionA: '',
+        optionB: '',
+        optionC: '',
+        optionD: '',
+        correctAnswer: '',
+        subject: 'Computer Science Fundamentals',
+        topic: 'Thermodynamics',
+        difficulty: 'MEDIUM',
+        explanation: 'Heat exchangers transfer thermal energy between fluids without mixing them.',
+        marks: 10,
+        expectedAnswer: 'A heat exchanger is a device designed to transfer heat between two or more fluids at different temperatures. They operate either through direct contact or across a solid conductive barrier (e.g. shell-and-tube or plate types). Applications include refrigeration, power plants, chemical processing, and HVAC systems.',
+        evaluationCriteria: 'Correct principle of thermal energy transfer across conductive barrier; Fluid separation mechanism; Explanation quality; At least two valid industrial applications mentioned.',
+        programmingLanguage: '',
+        starterCode: '',
+        timeLimit: '',
+        memoryLimit: ''
+      },
+      {
+        question: 'Write a JavaScript function sum(a, b) that returns the arithmetic sum of two given numbers.',
+        questionType: 'CODING',
+        optionA: '',
+        optionB: '',
+        optionC: '',
+        optionD: '',
+        correctAnswer: '',
+        subject: 'Computer Science Fundamentals',
+        topic: 'JavaScript Functions',
+        difficulty: 'EASY',
+        explanation: 'The function should accept two arguments a and b, and return a + b.',
+        marks: 10,
+        expectedAnswer: '',
+        evaluationCriteria: '',
+        programmingLanguage: 'javascript',
+        starterCode: 'function sum(a, b) {\n  // Write your code here\n  return a + b;\n}',
+        timeLimit: 2,
+        memoryLimit: 128
       }
     ];
 
@@ -86,8 +121,8 @@ export const questionBankService = {
 
   /**
    * Validates parsed CSV rows against schema constraints, teacher permissions, and duplicate rules
-   * @param {string} csvText 
-   * @param {Object} user 
+   * @param {string} csvText
+   * @param {Object} user
    * @returns {Promise<Object>}
    */
   async validateAndAnalyze(csvText, user) {
@@ -157,43 +192,100 @@ export const questionBankService = {
       const errors = [];
       const warnings = [];
 
+      // Determine and normalize question type
+      const rawQType = (data.questionType || data.question_type || data.type || 'MCQ').toUpperCase().trim();
+      let questionType = 'mcq_single';
+      if (['CODING', 'CODE', 'PROGRAMMING'].includes(rawQType)) {
+        questionType = 'coding';
+      } else if (['LONG_ANSWER', 'LONG', 'SUBJECTIVE', 'ESSAY', 'DESCRIPTIVE'].includes(rawQType)) {
+        questionType = 'long_answer';
+      } else if (['TRUE_FALSE', 'TRUEFALSE', 'TF', 'BOOLEAN'].includes(rawQType)) {
+        questionType = 'true_false';
+      } else {
+        questionType = 'mcq_single';
+      }
+
       // 1. Validate Question Text
       const questionText = (data.question || '').trim();
       if (!questionText) {
         errors.push('Question text is required.');
       } else if (questionText.length < 3) {
         errors.push('Question text is too short (minimum 3 characters).');
-      } else if (questionText.length > 2500) {
-        errors.push('Question text exceeds maximum length of 2500 characters.');
+      } else if (questionText.length > 5000) {
+        errors.push('Question text exceeds maximum length of 5000 characters.');
       }
 
-      // 2. Validate Options
+      // 2. Validate Type-Specific Options & Answers
       const optA = (data.optionA || '').trim();
       const optB = (data.optionB || '').trim();
       const optC = (data.optionC || '').trim();
       const optD = (data.optionD || '').trim();
+      let rawAns = (data.correctAnswer || '').toUpperCase().trim();
+      let optionsArr = [];
+      let correctOptionIndex = 0;
 
-      if (!optA) errors.push('Option A is required.');
-      if (!optB) errors.push('Option B is required.');
-      if (!optC) errors.push('Option C is required.');
-      if (!optD) errors.push('Option D is required.');
+      if (questionType === 'mcq_single') {
+        if (!optA) errors.push('Option A is required for Multiple Choice questions.');
+        if (!optB) errors.push('Option B is required for Multiple Choice questions.');
+        if (!optC) errors.push('Option C is required for Multiple Choice questions.');
+        if (!optD) errors.push('Option D is required for Multiple Choice questions.');
 
-      // Check distinct options warning
-      const optionsArr = [optA, optB, optC, optD].filter(Boolean);
-      const uniqueOptions = new Set(optionsArr.map(o => o.toLowerCase()));
-      if (optionsArr.length === 4 && uniqueOptions.size < 4) {
-        warnings.push('Duplicate option values detected within this question.');
+        optionsArr = [optA, optB, optC, optD].filter(Boolean);
+        const uniqueOptions = new Set(optionsArr.map(o => o.toLowerCase()));
+        if (optionsArr.length === 4 && uniqueOptions.size < 4) {
+          warnings.push('Duplicate option values detected within this question.');
+        }
+
+        if (!rawAns) {
+          errors.push('Correct answer is required for Multiple Choice questions (must be A, B, C, or D).');
+        } else if (!VALID_ANSWERS.includes(rawAns)) {
+          errors.push(`Invalid correct answer "${rawAns}". Allowed values are: A, B, C, D.`);
+        } else {
+          correctOptionIndex = ANSWER_INDEX_MAP[rawAns] ?? 0;
+        }
+      } else if (questionType === 'true_false') {
+        optionsArr = ['True', 'False'];
+        if (['TRUE', 'T', '1', 'A'].includes(rawAns)) {
+          rawAns = 'TRUE';
+          correctOptionIndex = 0;
+        } else if (['FALSE', 'F', '0', 'B'].includes(rawAns)) {
+          rawAns = 'FALSE';
+          correctOptionIndex = 1;
+        } else {
+          errors.push(`Invalid answer for True/False question "${rawAns}". Allowed values: TRUE or FALSE.`);
+        }
+      } else if (questionType === 'long_answer') {
+        // Options and correct answer are not required
+        optionsArr = [];
+        correctOptionIndex = 0;
+      } else if (questionType === 'coding') {
+        // Coding question: options not required
+        optionsArr = [];
+        correctOptionIndex = 0;
       }
 
-      // 3. Validate Correct Answer
-      const rawAns = (data.correctAnswer || '').toUpperCase().trim();
-      if (!rawAns) {
-        errors.push('Correct answer is required (must be A, B, C, or D).');
-      } else if (!VALID_ANSWERS.includes(rawAns)) {
-        errors.push(`Invalid correct answer "${rawAns}". Allowed values are: A, B, C, D.`);
+      // Expected Answer & Evaluation Criteria (Long Answer)
+      const expectedAnswer = (data.expectedAnswer || data.expected_answer || '').trim();
+      const evaluationCriteria = (data.evaluationCriteria || data.evaluation_criteria || '').trim();
+
+      // Programming Language, Starter Code, Time/Memory Limits (Coding)
+      let programmingLanguage = (data.programmingLanguage || data.programming_language || 'javascript').toLowerCase().trim();
+      if (questionType === 'coding' && !programmingLanguage) {
+        programmingLanguage = 'javascript';
+      }
+      const starterCode = (data.starterCode || data.starter_code || '').trim();
+      let timeLimit = 2.0;
+      if (data.timeLimit || data.time_limit) {
+        const parsedTL = parseFloat(data.timeLimit || data.time_limit);
+        if (!isNaN(parsedTL) && parsedTL > 0) timeLimit = parsedTL;
+      }
+      let memoryLimit = 128;
+      if (data.memoryLimit || data.memory_limit) {
+        const parsedML = parseInt(data.memoryLimit || data.memory_limit, 10);
+        if (!isNaN(parsedML) && parsedML > 0) memoryLimit = parsedML;
       }
 
-      // 4. Validate Subject & Topic
+      // 3. Validate Subject & Topic
       const subject = (data.subject || '').trim();
       const topic = (data.topic || '').trim();
 
@@ -209,7 +301,7 @@ export const questionBankService = {
         errors.push('Topic name must be at least 2 characters.');
       }
 
-      // 5. Teacher Authorization Check
+      // 4. Teacher Authorization Check
       if (!isUnrestricted && subject) {
         const subNorm = subject.toLowerCase().trim();
         const hasPermission = authorizedSubjects.some(authSub => authSub === subNorm || subNorm.includes(authSub) || authSub.includes(subNorm));
@@ -221,7 +313,7 @@ export const questionBankService = {
         }
       }
 
-      // 6. Validate Difficulty
+      // 5. Validate Difficulty
       let difficulty = (data.difficulty || 'MEDIUM').toUpperCase().trim();
       if (!VALID_DIFFICULTIES.includes(difficulty)) {
         if (data.difficulty && data.difficulty.trim() !== '') {
@@ -231,8 +323,8 @@ export const questionBankService = {
         }
       }
 
-      // 7. Validate Marks
-      let marks = 4.0;
+      // 6. Validate Marks
+      let marks = (questionType === 'long_answer' || questionType === 'coding') ? 10.0 : 4.0;
       if (data.marks !== undefined && String(data.marks).trim() !== '') {
         const parsedMarks = parseFloat(data.marks);
         if (isNaN(parsedMarks) || parsedMarks <= 0) {
@@ -244,8 +336,8 @@ export const questionBankService = {
         }
       }
 
-      // 8. Negative marks calculation
-      let negativeMarks = parseFloat((marks / 4).toFixed(2));
+      // 7. Negative marks calculation
+      let negativeMarks = questionType === 'mcq_single' ? parseFloat((marks / 4).toFixed(2)) : 0;
       if (data.negativeMarks !== undefined && String(data.negativeMarks).trim() !== '') {
         const parsedNeg = parseFloat(data.negativeMarks);
         if (!isNaN(parsedNeg) && parsedNeg >= 0) {
@@ -253,13 +345,13 @@ export const questionBankService = {
         }
       }
 
-      // 9. Explanation
+      // 8. Explanation
       const explanation = (data.explanation || '').trim();
-      if (explanation.length > 3000) {
-        errors.push('Explanation exceeds maximum allowed limit of 3000 characters.');
+      if (explanation.length > 4000) {
+        errors.push('Explanation exceeds maximum allowed limit of 4000 characters.');
       }
 
-      // 10. In-file duplicate check
+      // 9. In-file duplicate check
       const fileKey = `${questionText.toLowerCase()}:::${subject.toLowerCase()}`;
       let isDuplicateInFile = false;
       if (questionText && subject) {
@@ -273,7 +365,7 @@ export const questionBankService = {
         }
       }
 
-      // 11. Database duplicate check
+      // 10. Database duplicate check
       let isDuplicateInDb = false;
       let existingDbMatch = null;
       if (questionText && subject && !isDuplicateInFile) {
@@ -303,19 +395,26 @@ export const questionBankService = {
         warnings,
         data: {
           question: questionText,
+          questionType,
           optionA: optA,
           optionB: optB,
           optionC: optC,
           optionD: optD,
           correctAnswer: rawAns,
-          correctOptionIndex: ANSWER_INDEX_MAP[rawAns] !== undefined ? ANSWER_INDEX_MAP[rawAns] : 0,
-          options: [optA, optB, optC, optD],
+          correctOptionIndex,
+          options: optionsArr,
           subject,
           topic,
           difficulty,
           marks,
           negativeMarks,
-          explanation
+          explanation,
+          expectedAnswer,
+          evaluationCriteria,
+          programmingLanguage,
+          starterCode,
+          timeLimit,
+          memoryLimit
         }
       });
     }
@@ -357,11 +456,6 @@ export const questionBankService = {
 
   /**
    * Commit questions into database with duplicate strategy and transaction safety
-   * @param {string} csvText 
-   * @param {Object} user 
-   * @param {Object} options 
-   * @param {string} [options.duplicateStrategy='skip'] - 'skip' | 'allow'
-   * @param {Object} reqInfo - IP, user agent for audit log
    */
   async importCSV(csvText, user, options = {}, reqInfo = {}) {
     const duplicateStrategy = options.duplicateStrategy === 'allow' ? 'allow' : 'skip';
@@ -403,6 +497,7 @@ export const questionBankService = {
       // Prepare question record for insertion
       toInsert.push({
         question_text: r.data.question,
+        question_type: r.data.questionType,
         options: r.data.options,
         correct_option_index: r.data.correctOptionIndex,
         correct_answer: r.data.correctAnswer,
@@ -411,7 +506,14 @@ export const questionBankService = {
         difficulty: r.data.difficulty,
         explanation: r.data.explanation,
         marks: r.data.marks,
-        negative_marks: r.data.negativeMarks
+        negative_marks: r.data.negativeMarks,
+        expected_answer: r.data.expectedAnswer || null,
+        evaluation_criteria: r.data.evaluationCriteria || null,
+        programming_language: r.data.programmingLanguage || 'javascript',
+        starter_code: r.data.starterCode || null,
+        time_limit: r.data.timeLimit || 2.0,
+        memory_limit: r.data.memoryLimit || 128,
+        test_cases: []
       });
     }
 

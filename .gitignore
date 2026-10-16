@@ -45,3 +45,5 @@ backend/uploads/*
 *.backup.zip
 .backup/
 
+
+.env.production

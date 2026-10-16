@@ -26,22 +26,25 @@ export function StudentDashboard() {
   const [enrolledCourses, setEnrolledCourses] = useState([]);
   const [quizAttempts, setQuizAttempts] = useState([]);
   const [mockTests, setMockTests] = useState([]);
+  const [mockResults, setMockTestResults] = useState([]);
   const [liveClasses, setLiveClasses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadDashboardData() {
       try {
-        const [courses, attempts, tests, lives] = await Promise.all([
+        const [courses, attempts, tests, lives, results] = await Promise.all([
           api.getMyCourses().catch(() => []),
           api.getMyAttempts().catch(() => []),
           api.getMockTests({ status: 'published' }).catch(() => []),
-          api.getStudentLiveClasses().catch(() => [])
+          api.getStudentLiveClasses().catch(() => []),
+          api.getMyMockTestResults().catch(() => [])
         ]);
         setEnrolledCourses(courses || []);
         setQuizAttempts(attempts || []);
         setMockTests(Array.isArray(tests) ? tests : []);
         setLiveClasses(Array.isArray(lives) ? lives : []);
+        setMockTestResults(Array.isArray(results) ? results : []);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       } finally {
@@ -66,7 +69,7 @@ export function StudentDashboard() {
   const currentCourse = enrolledCourses[0] || null;
 
   return (
-    <div style={{ padding: '2.5rem 0 5rem' }}>
+    <div style={{ padding: '1.5rem 0 3.5rem' }}>
       <div className="container">
         <StudentNav />
         {/* Welcome Banner */}
@@ -75,44 +78,49 @@ export function StudentDashboard() {
           style={{
             background: 'linear-gradient(135deg, var(--color-navy) 0%, var(--color-navy-dark) 100%)',
             color: '#FFFFFF',
-            padding: '2.25rem',
+            padding: '1.75rem 2rem',
             border: 'none',
-            borderRadius: 'var(--radius-xl)',
-            marginBottom: '2.5rem',
+            borderRadius: 'var(--radius-lg)',
+            marginBottom: '1.75rem',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             flexWrap: 'wrap',
-            gap: '1.5rem'
+            gap: '1.25rem'
           }}
         >
           <div>
-            <span
-              className="badge"
-              style={{
-                background: 'rgba(249, 115, 22, 0.2)',
-                color: '#FB923C',
-                border: '1px solid rgba(249, 115, 22, 0.4)',
-                marginBottom: '0.75rem'
-              }}
-            >
-              STUDENT DASHBOARD
-            </span>
-            <h1 style={{ fontSize: 'clamp(1.75rem, 3vw, 2.3rem)', color: '#FFFFFF', marginBottom: '0.5rem' }}>
-              Welcome back, {user?.full_name}! 👋
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.05em',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '4px',
+                  background: 'rgba(240, 253, 244, 0.15)',
+                  color: '#86EFAC',
+                  border: '1px solid rgba(134, 239, 172, 0.3)'
+                }}
+              >
+                STUDENT PORTAL
+              </span>
+            </div>
+            <h1 style={{ fontSize: '1.75rem', color: '#FFFFFF', marginBottom: '0.35rem', fontWeight: 800 }}>
+              Welcome back, {user?.full_name?.split(' ')[0] || user?.full_name || 'Learner'}! 👋
             </h1>
-            <p style={{ color: '#94A3B8', fontSize: '1rem' }}>
+            <p style={{ color: '#94A3B8', fontSize: '0.9rem', margin: 0 }}>
               Track your technical coursework, assessment evaluations, and AI study sessions.
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <Link to="/courses" className="btn btn-outline" style={{ background: 'rgba(255,255,255,0.1)', color: '#FFFFFF', borderColor: 'rgba(255,255,255,0.2)' }}>
-              <BookOpen size={16} />
+          <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <Link to="/courses" className="btn btn-outline" style={{ background: 'rgba(255,255,255,0.08)', color: '#FFFFFF', borderColor: 'rgba(255,255,255,0.2)', padding: '0.5rem 0.95rem', fontSize: '0.85rem' }}>
+              <BookOpen size={15} />
               <span>Browse Catalog</span>
             </Link>
-            <Link to="/ai-tutor" className="btn btn-primary">
-              <Sparkles size={16} />
+            <Link to="/ai-tutor" className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              <Sparkles size={15} />
               <span>Ask AI Tutor</span>
             </Link>
           </div>
@@ -122,9 +130,9 @@ export function StudentDashboard() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: '1.5rem',
-            marginBottom: '2.5rem'
+            gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+            gap: '1.25rem',
+            marginBottom: '2rem'
           }}
         >
           <div className="card" style={{ padding: '1.5rem' }}>
@@ -296,6 +304,142 @@ export function StudentDashboard() {
               <span>{liveClasses.some(l => l.status === 'ongoing') ? 'Join Live Room Now' : 'View Schedule'}</span>
               <ArrowRight size={14} />
             </Link>
+          </div>
+        )}
+
+        {/* My Examination Results Section */}
+        {mockResults.length > 0 && (
+          <div style={{ marginBottom: '2.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                  <span style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    color: '#2563EB',
+                    background: 'rgba(37, 99, 235, 0.1)',
+                    padding: '0.15rem 0.5rem',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(37, 99, 235, 0.25)'
+                  }}>
+                    SCORECARDS & OUTCOMES
+                  </span>
+                </div>
+                <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy)', margin: 0 }}>
+                  My Results
+                </h2>
+              </div>
+              <span style={{ fontSize: '0.85rem', color: '#64748B', fontWeight: 600 }}>
+                {mockResults.filter(r => r.is_released).length} Released • {mockResults.filter(r => !r.is_released).length} In Evaluation
+              </span>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+              gap: '1.25rem'
+            }}>
+              {mockResults.slice(0, 4).map(res => {
+                const isReleased = res.is_released || res.result_status === 'RELEASED';
+                const isPending = res.result_status === 'PENDING_EVALUATION';
+
+                return (
+                  <div
+                    key={res.id || res.attempt_id}
+                    className="card"
+                    style={{
+                      padding: '1.5rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      border: isReleased ? '1px solid #BFDBFE' : '1px solid var(--color-border)',
+                      background: '#FFFFFF',
+                      boxShadow: isReleased ? '0 4px 14px rgba(37, 99, 235, 0.06)' : 'none',
+                      borderRadius: '12px'
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem', gap: '0.5rem' }}>
+                        <span style={{
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          padding: '0.2rem 0.5rem',
+                          borderRadius: '999px',
+                          background: isReleased ? '#ECFDF5' : isPending ? '#FFFBEB' : '#EFF6FF',
+                          color: isReleased ? '#059669' : isPending ? '#B45309' : '#2563EB',
+                          border: `1px solid ${isReleased ? '#A7F3D0' : isPending ? '#FDE68A' : '#BFDBFE'}`
+                        }}>
+                          {isReleased ? 'RELEASED' : isPending ? 'PENDING EVALUATION' : 'UNDER REVIEW'}
+                        </span>
+
+                        {isReleased && (
+                          <span style={{
+                            fontSize: '0.7rem',
+                            fontWeight: 800,
+                            color: '#2563EB',
+                            background: '#EFF6FF',
+                            padding: '0.15rem 0.45rem',
+                            borderRadius: '4px'
+                          }}>
+                            NEW RESULT AVAILABLE
+                          </span>
+                        )}
+                      </div>
+
+                      <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-navy)', margin: '0 0 0.35rem' }}>
+                        {res.test_title}
+                      </h3>
+                      <div style={{ fontSize: '0.8rem', color: '#64748B', marginBottom: '1rem' }}>
+                        {res.subject} • Completed on {new Date(res.submitted_at || Date.now()).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      </div>
+
+                      <div style={{
+                        background: '#F8FAFC',
+                        borderRadius: '8px',
+                        padding: '0.75rem 1rem',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}>
+                        <div>
+                          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>SCORE</div>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 900, color: isReleased ? (res.passed ? '#059669' : '#DC2626') : '#2563EB' }}>
+                            {isReleased ? `${res.total_score} / ${res.max_score}` : (isPending ? 'Pending Evaluation' : `${res.total_score} / ${res.max_score}`)}
+                          </div>
+                        </div>
+                        {isReleased && (
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>PERCENTAGE</div>
+                            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: res.passed ? '#059669' : '#DC2626' }}>
+                              {res.percentage}%
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <Link
+                      to={`/mock-tests/attempts/${res.attempt_id || res.id}/result`}
+                      className={`btn btn-sm ${isReleased ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{
+                        width: '100%',
+                        display: 'inline-flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        fontWeight: 700
+                      }}
+                    >
+                      <Award size={15} />
+                      <span>View Result</span>
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

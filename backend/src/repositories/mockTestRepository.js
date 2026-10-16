@@ -186,27 +186,50 @@ export const mockTestRepository = {
         for (let i = 0; i < questions.length; i++) {
           const q = questions[i];
           const qId = q.id || `q-${crypto.randomUUID().slice(0, 12)}`;
-          
+
           const rawQType = String(q.question_type || 'mcq_single').toLowerCase().trim();
           const cleanQType = rawQType === 'mcq_multi' ? 'mcq_multiple' : rawQType;
           const cleanAnswerKey = q.answer_key || q.correct_answer || {};
           const cleanNegMarks = parseFloat(q.negative_marks !== undefined ? q.negative_marks : (q.penalty_marks !== undefined ? q.penalty_marks : 0));
 
+          const qExpected = q.expected_answer || q.expectedAnswer || null;
+          const qCriteria = q.evaluation_criteria || q.evaluationCriteria || null;
+          const qLang = (q.programming_language || q.programmingLanguage || 'javascript').toLowerCase().trim();
+          const qStarter = q.starter_code || q.starterCode || null;
+          const qTimeLimit = parseFloat(q.time_limit || q.timeLimit || 2.0);
+          const qMemLimit = parseInt(q.memory_limit || q.memoryLimit || 128, 10);
+          const qTestCases = Array.isArray(q.test_cases || q.testCases) ? (q.test_cases || q.testCases) : [];
+
           await client.query(
             `INSERT INTO mock_test_questions (
               id, test_id, section_id, question_text, question_type, options, answer_key,
               marks, negative_marks, explanation, topic, difficulty, order_index, case_passage,
-              image_url, metadata, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+              image_url, metadata, created_at,
+              expected_answer, evaluation_criteria, programming_language, starter_code,
+              time_limit, memory_limit, test_cases
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
             [
               qId, testId, q.section_id || null, q.question_text, cleanQType,
               JSON.stringify(q.options || []), JSON.stringify(cleanAnswerKey),
               parseFloat(q.marks || 4.0), cleanNegMarks,
               q.explanation || '', q.topic || fullTestData.topic || '', q.difficulty || fullTestData.difficulty || 'medium',
               q.order_index || (i + 1), q.case_passage || null, q.image_url || null,
-              JSON.stringify(q.metadata || {}), now
+              JSON.stringify(q.metadata || {}), now,
+              qExpected, qCriteria, qLang, qStarter, qTimeLimit, qMemLimit, JSON.stringify(qTestCases)
             ]
           );
+
+          if (qTestCases.length > 0) {
+            for (const tc of qTestCases) {
+              const tcId = tc.id || `tc-${crypto.randomUUID()}`;
+              await client.query(
+                `INSERT INTO coding_test_cases (id, question_id, input, expected_output, is_hidden, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (id) DO NOTHING`,
+                [tcId, qId, tc.input || '', tc.expected_output || '', Boolean(tc.is_hidden), now]
+              );
+            }
+          }
         }
 
         await client.query('COMMIT');
@@ -231,6 +254,7 @@ export const mockTestRepository = {
       const cleanQType = rawQType === 'mcq_multi' ? 'mcq_multiple' : rawQType;
       const cleanAnswerKey = q.answer_key || q.correct_answer || {};
       const cleanNegMarks = parseFloat(q.negative_marks !== undefined ? q.negative_marks : (q.penalty_marks !== undefined ? q.penalty_marks : 0));
+      const qTestCases = Array.isArray(q.test_cases || q.testCases) ? (q.test_cases || q.testCases) : [];
 
       memoryStore.mock_test_questions.push({
         ...q,
@@ -240,8 +264,28 @@ export const mockTestRepository = {
         answer_key: cleanAnswerKey,
         negative_marks: cleanNegMarks,
         order_index: q.order_index || (i + 1),
+        expected_answer: q.expected_answer || q.expectedAnswer || null,
+        evaluation_criteria: q.evaluation_criteria || q.evaluationCriteria || null,
+        programming_language: q.programming_language || q.programmingLanguage || 'javascript',
+        starter_code: q.starter_code || q.starterCode || null,
+        time_limit: parseFloat(q.time_limit || q.timeLimit || 2.0),
+        memory_limit: parseInt(q.memory_limit || q.memoryLimit || 128, 10),
+        test_cases: qTestCases,
         created_at: now
       });
+
+      if (qTestCases.length > 0) {
+        qTestCases.forEach(tc => {
+          memoryStore.coding_test_cases.push({
+            id: tc.id || `tc-${crypto.randomUUID()}`,
+            question_id: qId,
+            input: tc.input || '',
+            expected_output: tc.expected_output || '',
+            is_hidden: Boolean(tc.is_hidden),
+            created_at: now
+          });
+        });
+      }
     }
 
     return this.getTestById(testId);
@@ -372,34 +416,80 @@ export const mockTestRepository = {
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       const qId = q.id || `q-${crypto.randomUUID().slice(0, 12)}`;
+      const qType = String(q.question_type || q.questionType || 'mcq_single').toLowerCase().trim();
+      const qExpected = q.expected_answer || q.expectedAnswer || null;
+      const qCriteria = q.evaluation_criteria || q.evaluationCriteria || null;
+      const qLang = (q.programming_language || q.programmingLanguage || 'javascript').toLowerCase().trim();
+      const qStarter = q.starter_code || q.starterCode || null;
+      const qTimeLimit = parseFloat(q.time_limit || q.timeLimit || 2.0);
+      const qMemLimit = parseInt(q.memory_limit || q.memoryLimit || 128, 10);
+      const qTestCases = Array.isArray(q.test_cases || q.testCases) ? (q.test_cases || q.testCases) : [];
 
       if (isPostgresConnected && pool) {
         const res = await pool.query(
           `INSERT INTO mock_test_questions (
             id, test_id, section_id, question_text, question_type, options, answer_key,
             marks, negative_marks, explanation, topic, difficulty, order_index, case_passage,
-            image_url, metadata, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            image_url, metadata, created_at,
+            expected_answer, evaluation_criteria, programming_language, starter_code,
+            time_limit, memory_limit, test_cases
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
           RETURNING *`,
           [
-            qId, testId, q.section_id || null, q.question_text, q.question_type || 'mcq_single',
+            qId, testId, q.section_id || null, q.question_text, qType,
             JSON.stringify(q.options || []), JSON.stringify(q.answer_key || {}),
             parseFloat(q.marks || 4.0), parseFloat(q.negative_marks || 1.0),
             q.explanation || '', q.topic || '', q.difficulty || 'medium',
             q.order_index || (i + 1), q.case_passage || null, q.image_url || null,
-            JSON.stringify(q.metadata || {}), now
+            JSON.stringify(q.metadata || {}), now,
+            qExpected, qCriteria, qLang, qStarter, qTimeLimit, qMemLimit, JSON.stringify(qTestCases)
           ]
         );
+
+        if (qTestCases.length > 0) {
+          for (const tc of qTestCases) {
+            const tcId = tc.id || `tc-${crypto.randomUUID()}`;
+            await pool.query(
+              `INSERT INTO coding_test_cases (id, question_id, input, expected_output, is_hidden, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (id) DO NOTHING`,
+              [tcId, qId, tc.input || '', tc.expected_output || '', Boolean(tc.is_hidden), now]
+            );
+          }
+        }
+
         created.push(res.rows[0]);
       } else {
         const record = {
           ...q,
           id: qId,
           test_id: testId,
+          question_type: qType,
           order_index: q.order_index || (i + 1),
+          expected_answer: qExpected,
+          evaluation_criteria: qCriteria,
+          programming_language: qLang,
+          starter_code: qStarter,
+          time_limit: qTimeLimit,
+          memory_limit: qMemLimit,
+          test_cases: qTestCases,
           created_at: now
         };
         memoryStore.mock_test_questions.push(record);
+
+        if (qTestCases.length > 0) {
+          qTestCases.forEach(tc => {
+            memoryStore.coding_test_cases.push({
+              id: tc.id || `tc-${crypto.randomUUID()}`,
+              question_id: qId,
+              input: tc.input || '',
+              expected_output: tc.expected_output || '',
+              is_hidden: Boolean(tc.is_hidden),
+              created_at: now
+            });
+          });
+        }
+
         created.push(record);
       }
     }
@@ -515,6 +605,10 @@ export const mockTestRepository = {
       unanswered_count: 0,
       time_spent_seconds: 0,
       warning_count: 0,
+      security_warning_count: 0,
+      fullscreen_exit_count: 0,
+      submission_status: null,
+      submission_reason: null,
       test_snapshot: attemptData.test_snapshot || {},
       proctoring_summary: {
         face_absence_events: 0,
@@ -528,6 +622,9 @@ export const mockTestRepository = {
       evaluator_remarks: null,
       evaluated_by: null,
       evaluated_at: null,
+      result_status: attemptData.result_status || 'PENDING_EVALUATION',
+      released_at: attemptData.released_at || null,
+      released_by: attemptData.released_by || null,
       created_at: now,
       updated_at: now
     };
@@ -537,13 +634,18 @@ export const mockTestRepository = {
         `INSERT INTO mock_test_attempts (
           id, test_id, student_id, started_at, expires_at, status, total_score, max_score,
           percentage, passed, correct_count, incorrect_count, unanswered_count, time_spent_seconds,
-          warning_count, test_snapshot, proctoring_summary, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+          warning_count, security_warning_count, fullscreen_exit_count, submission_status, submission_reason,
+          result_status, released_at, released_by,
+          test_snapshot, proctoring_summary, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
         [
           record.id, record.test_id, record.student_id, record.started_at, record.expires_at,
           record.status, record.total_score, record.max_score, record.percentage, record.passed,
           record.correct_count, record.incorrect_count, record.unanswered_count, record.time_spent_seconds,
-          record.warning_count, JSON.stringify(record.test_snapshot), JSON.stringify(record.proctoring_summary),
+          record.warning_count, record.security_warning_count, record.fullscreen_exit_count,
+          record.submission_status, record.submission_reason,
+          record.result_status, record.released_at, record.released_by,
+          JSON.stringify(record.test_snapshot), JSON.stringify(record.proctoring_summary),
           record.created_at, record.updated_at
         ]
       );
@@ -562,7 +664,10 @@ export const mockTestRepository = {
       const allowed = [
         'submitted_at', 'status', 'total_score', 'max_score', 'percentage', 'passed',
         'correct_count', 'incorrect_count', 'unanswered_count', 'time_spent_seconds',
-        'warning_count', 'proctoring_summary', 'evaluator_remarks', 'evaluated_by', 'evaluated_at'
+        'warning_count', 'security_warning_count', 'fullscreen_exit_count',
+        'submission_status', 'submission_reason',
+        'result_status', 'released_at', 'released_by',
+        'proctoring_summary', 'evaluator_remarks', 'evaluated_by', 'evaluated_at'
       ];
       const fields = [];
       const values = [];
@@ -655,17 +760,18 @@ export const mockTestRepository = {
         await pool.query(
           `INSERT INTO mock_test_responses (
             id, attempt_id, question_id, response_data, is_marked_for_review, is_visited,
-            score_awarded, is_correct, evaluation_comment, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            score_awarded, is_correct, evaluation_comment, is_pending_review, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           ON CONFLICT (attempt_id, question_id) DO UPDATE
           SET score_awarded = EXCLUDED.score_awarded,
               is_correct = EXCLUDED.is_correct,
               evaluation_comment = EXCLUDED.evaluation_comment,
+              is_pending_review = EXCLUDED.is_pending_review,
               updated_at = EXCLUDED.updated_at`,
           [
             `resp-${crypto.randomUUID().slice(0, 10)}`, attemptId, item.question_id,
             JSON.stringify(item.response_data), item.is_marked_for_review, item.is_visited,
-            item.score_awarded, item.is_correct, item.evaluation_comment, now
+            item.score_awarded, item.is_correct, item.evaluation_comment, Boolean(item.is_pending_review), now
           ]
         );
       } else {
@@ -678,6 +784,7 @@ export const mockTestRepository = {
             score_awarded: item.score_awarded,
             is_correct: item.is_correct,
             evaluation_comment: item.evaluation_comment,
+            is_pending_review: Boolean(item.is_pending_review),
             updated_at: now
           };
         } else {
@@ -691,6 +798,7 @@ export const mockTestRepository = {
             score_awarded: item.score_awarded,
             is_correct: item.is_correct,
             evaluation_comment: item.evaluation_comment,
+            is_pending_review: Boolean(item.is_pending_review),
             evaluated_by: null,
             evaluated_at: null,
             updated_at: now
@@ -698,6 +806,285 @@ export const mockTestRepository = {
         }
       }
     }
+  },
+
+  async manuallyEvaluateResponse(attemptId, questionId, { score, comment, evaluatorId }) {
+    const now = new Date().toISOString();
+    const finalScore = Math.max(0, parseFloat(score) || 0);
+
+    if (isPostgresConnected && pool) {
+      const isCorrect = finalScore > 0;
+      await pool.query(
+        `UPDATE mock_test_responses
+         SET score_awarded = $1,
+             evaluation_comment = $2,
+             evaluated_by = $3,
+             evaluated_at = $4,
+             is_pending_review = false,
+             is_correct = $5,
+             updated_at = $4
+         WHERE attempt_id = $6 AND question_id = $7`,
+        [finalScore, comment || null, evaluatorId || null, now, isCorrect, attemptId, questionId]
+      );
+
+      // Recalculate attempt totals
+      const totalsRes = await pool.query(
+        `SELECT
+           COALESCE(SUM(score_awarded), 0)::numeric as total_score,
+           COUNT(CASE WHEN is_correct = true THEN 1 END)::int as correct_count,
+           COUNT(CASE WHEN is_correct = false THEN 1 END)::int as incorrect_count,
+           COUNT(CASE WHEN is_pending_review = true THEN 1 END)::int as pending_count
+         FROM mock_test_responses
+         WHERE attempt_id = $1`,
+        [attemptId]
+      );
+
+      const totals = totalsRes.rows[0];
+      const attempt = await this.getAttemptById(attemptId);
+      const maxScore = parseFloat(attempt?.max_score || 100);
+      const passPercentage = parseFloat(attempt?.pass_percentage || 40);
+      const totalScoreNum = Math.max(0, parseFloat(totals.total_score));
+      const percentage = maxScore > 0 ? parseFloat(((totalScoreNum / maxScore) * 100).toFixed(2)) : 0;
+      const passed = percentage >= passPercentage;
+
+      const newStatus = totals.pending_count === 0 ? 'evaluated' : attempt.status;
+      const newResultStatus = attempt.result_status === 'RELEASED'
+        ? 'RELEASED'
+        : (totals.pending_count === 0 ? 'READY' : 'PENDING_EVALUATION');
+
+      await pool.query(
+        `UPDATE mock_test_attempts
+         SET total_score = $1,
+             percentage = $2,
+             passed = $3,
+             correct_count = $4,
+             incorrect_count = $5,
+             status = $6,
+             result_status = $7,
+             evaluated_by = $8,
+             evaluated_at = $9,
+             updated_at = $9
+         WHERE id = $10`,
+        [
+          totalScoreNum,
+          percentage,
+          passed,
+          totals.correct_count,
+          totals.incorrect_count,
+          newStatus,
+          newResultStatus,
+          evaluatorId || null,
+          now,
+          attemptId
+        ]
+      );
+
+      return this.getAttemptById(attemptId);
+    }
+
+    const resp = (memoryStore.mock_test_responses || []).find(
+      r => r.attempt_id === attemptId && r.question_id === questionId
+    );
+    if (resp) {
+      resp.score_awarded = finalScore;
+      resp.evaluation_comment = comment || null;
+      resp.evaluated_by = evaluatorId || null;
+      resp.evaluated_at = now;
+      resp.is_pending_review = false;
+      resp.is_correct = finalScore > 0;
+      resp.updated_at = now;
+    }
+
+    const attempt = (memoryStore.mock_test_attempts || []).find(a => a.id === attemptId);
+    if (attempt) {
+      const allResponses = (memoryStore.mock_test_responses || []).filter(r => r.attempt_id === attemptId);
+      const totalScore = allResponses.reduce((sum, r) => sum + (parseFloat(r.score_awarded) || 0), 0);
+      const correctCount = allResponses.filter(r => r.is_correct === true).length;
+      const incorrectCount = allResponses.filter(r => r.is_correct === false).length;
+      const pendingCount = allResponses.filter(r => r.is_pending_review === true).length;
+
+      attempt.total_score = Math.max(0, parseFloat(totalScore.toFixed(2)));
+      attempt.correct_count = correctCount;
+      attempt.incorrect_count = incorrectCount;
+      attempt.percentage = attempt.max_score > 0 ? parseFloat(((attempt.total_score / attempt.max_score) * 100).toFixed(2)) : 0;
+      attempt.passed = attempt.percentage >= parseFloat(attempt.pass_percentage || 40);
+      if (pendingCount === 0) {
+        attempt.status = 'evaluated';
+        if (attempt.result_status !== 'RELEASED') {
+          attempt.result_status = 'READY';
+        }
+      }
+      attempt.evaluated_by = evaluatorId || null;
+      attempt.evaluated_at = now;
+      attempt.updated_at = now;
+    }
+
+    return this.getAttemptById(attemptId);
+  },
+
+  /**
+   * Releases an individual attempt result to the candidate
+   */
+  async releaseAttemptResult(attemptId, teacherId) {
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      await pool.query(
+        `UPDATE mock_test_attempts
+         SET result_status = 'RELEASED',
+             released_at = $1,
+             released_by = $2,
+             updated_at = $1
+         WHERE id = $3`,
+        [now, teacherId, attemptId]
+      );
+      return this.getAttemptById(attemptId);
+    }
+
+    const attempt = (memoryStore.mock_test_attempts || []).find(a => a.id === attemptId);
+    if (attempt) {
+      attempt.result_status = 'RELEASED';
+      attempt.released_at = now;
+      attempt.released_by = teacherId;
+      attempt.updated_at = now;
+    }
+    return this.getAttemptById(attemptId);
+  },
+
+  /**
+   * Releases all completed results for a test (and optional batch)
+   */
+  async releaseAllResultsForTest(testId, teacherId, batchId = null) {
+    const now = new Date().toISOString();
+    if (isPostgresConnected && pool) {
+      let q = `
+        UPDATE mock_test_attempts a
+        SET result_status = 'RELEASED',
+            released_at = $1,
+            released_by = $2,
+            updated_at = $1
+        WHERE a.test_id = $3
+          AND a.status IN ('submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted')
+      `;
+      const params = [now, teacherId, testId];
+      if (batchId) {
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $4)`;
+        params.push(batchId);
+      }
+      await pool.query(q, params);
+      return true;
+    }
+
+    (memoryStore.mock_test_attempts || [])
+      .filter(a => a.test_id === testId && ['submitted', 'evaluated', 'AUTO_SUBMITTED'].includes(a.status))
+      .forEach(a => {
+        a.result_status = 'RELEASED';
+        a.released_at = now;
+        a.released_by = teacherId;
+        a.updated_at = now;
+      });
+    return true;
+  },
+
+  /**
+   * Retrieves comprehensive attempts with student info and question details for reports and PDF generation
+   */
+  async getDetailedAttemptsForReport(testId, batchId = null) {
+    if (isPostgresConnected && pool) {
+      let q = `
+        SELECT a.*,
+               u.full_name as student_name,
+               u.email as student_email,
+               u.id as student_user_id
+        FROM mock_test_attempts a
+        JOIN users u ON a.student_id = u.id
+        WHERE a.test_id = $1
+          AND a.status IN ('submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted')
+      `;
+      const params = [testId];
+      if (batchId) {
+        params.push(batchId);
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $2)`;
+      }
+      q += ` ORDER BY a.total_score DESC, u.full_name ASC`;
+      const res = await pool.query(q, params);
+
+      // Fetch questions for each attempt to include breakdown in PDF
+      const questionsRes = await pool.query(
+        `SELECT id, question_text, question_type, marks, programming_language
+         FROM mock_test_questions
+         WHERE test_id = $1
+         ORDER BY order_index ASC`,
+        [testId]
+      );
+      const questions = questionsRes.rows;
+
+      const attemptsWithQuestions = await Promise.all(res.rows.map(async att => {
+        const respRes = await pool.query(
+          `SELECT question_id, score_awarded, is_correct, evaluation_comment, is_pending_review, response_data, execution_results
+           FROM mock_test_responses
+           WHERE attempt_id = $1`,
+          [att.id]
+        );
+        const respMap = {};
+        respRes.rows.forEach(r => { respMap[r.question_id] = r; });
+
+        const qReviews = questions.map(q => {
+          const r = respMap[q.id];
+          return {
+            id: q.id,
+            question_text: q.question_text,
+            question_type: q.question_type,
+            marks: parseFloat(q.marks || 0),
+            score_awarded: r ? parseFloat(r.score_awarded || 0) : 0,
+            is_correct: r ? r.is_correct : null,
+            is_pending_review: r ? Boolean(r.is_pending_review) : false,
+            evaluation_comment: r ? r.evaluation_comment : null,
+            execution_results: r ? r.execution_results : null
+          };
+        });
+
+        return {
+          ...att,
+          questions: qReviews
+        };
+      }));
+
+      return attemptsWithQuestions;
+    }
+
+    let attempts = (memoryStore.mock_test_attempts || []).filter(
+      a => a.test_id === testId && ['submitted', 'evaluated', 'AUTO_SUBMITTED'].includes(a.status)
+    );
+
+    const questions = (memoryStore.mock_test_questions || []).filter(q => q.test_id === testId);
+
+    return attempts.map(a => {
+      const u = (memoryStore.users || []).find(user => user.id === a.student_id) || {};
+      const responses = (memoryStore.mock_test_responses || []).filter(r => r.attempt_id === a.id);
+      const respMap = {};
+      responses.forEach(r => { respMap[r.question_id] = r; });
+
+      const qReviews = questions.map(q => {
+        const r = respMap[q.id];
+        return {
+          id: q.id,
+          question_text: q.question_text,
+          question_type: q.question_type,
+          marks: parseFloat(q.marks || 0),
+          score_awarded: r ? parseFloat(r.score_awarded || 0) : 0,
+          is_correct: r ? r.is_correct : null,
+          is_pending_review: r ? Boolean(r.is_pending_review) : false,
+          evaluation_comment: r ? r.evaluation_comment : null
+        };
+      });
+
+      return {
+        ...a,
+        student_name: u.full_name || 'Student',
+        student_email: u.email || '',
+        questions: qReviews
+      };
+    }).sort((a, b) => (b.total_score || 0) - (a.total_score || 0));
   },
 
   // ---------------------------------------------------------------------------

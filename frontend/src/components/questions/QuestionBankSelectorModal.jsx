@@ -19,6 +19,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [subjectFilter, setSubjectFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [availableSubjects, setAvailableSubjects] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
@@ -29,6 +30,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
       const res = await api.getQuestionBank({
         search,
         subject: subjectFilter,
+        type: typeFilter,
         limit: 100
       });
       setQuestions(res.data || []);
@@ -60,7 +62,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
     if (isOpen) {
       loadQuestions();
     }
-  }, [search, subjectFilter]);
+  }, [search, subjectFilter, typeFilter]);
 
   if (!isOpen) return null;
 
@@ -106,7 +108,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
         <div style={{
           background: '#FFFFFF',
           borderRadius: '16px',
-          maxWidth: '900px',
+          maxWidth: '920px',
           width: '100%',
           maxHeight: '90vh',
           display: 'flex',
@@ -130,7 +132,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                   Select from Question Bank
                 </h3>
                 <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748B' }}>
-                  Pick banked questions to append to your active assessment
+                  Pick banked questions (Multiple Choice, True/False, Long Answer, Coding) to add to your test
                 </p>
               </div>
             </div>
@@ -163,7 +165,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
             background: '#FFFFFF',
             flexWrap: 'wrap'
           }}>
-            <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: '180px' }}>
               <Search size={15} style={{ position: 'absolute', left: '10px', top: '10px', color: '#94A3B8' }} />
               <input
                 type="text"
@@ -179,6 +181,26 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                 }}
               />
             </div>
+
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              style={{
+                padding: '0.45rem 0.75rem',
+                fontSize: '0.82rem',
+                border: '1px solid #CBD5E1',
+                borderRadius: '6px',
+                background: '#FFFFFF',
+                fontWeight: 600,
+                color: '#334155'
+              }}
+            >
+              <option value="all">All Question Types</option>
+              <option value="mcq">Multiple Choice</option>
+              <option value="true_false">True / False</option>
+              <option value="long_answer">Long Answer</option>
+              <option value="coding">Coding Question</option>
+            </select>
 
             <select
               value={subjectFilter}
@@ -218,7 +240,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
             ) : questions.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '3rem', color: '#64748B' }}>
                 <Layers size={32} style={{ color: '#CBD5E1', margin: '0 auto 0.75rem' }} />
-                <p style={{ margin: 0 }}>No questions found in Question Bank matching criteria.</p>
+                <p style={{ margin: 0 }}>No questions found matching criteria.</p>
                 <button
                   onClick={() => setBulkImportOpen(true)}
                   className="btn btn-primary"
@@ -231,8 +253,13 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
                 {questions.map((q) => {
                   const isChecked = selectedIds.has(q.id);
+                  const qType = String(q.question_type || q.questionType || 'mcq_single').toLowerCase();
+                  const isCoding = qType.includes('coding');
+                  const isLongAnswer = qType.includes('long_answer') || qType.includes('long-answer');
+                  const isTrueFalse = qType.includes('true_false') || qType.includes('true-false');
                   const options = Array.isArray(q.options) ? q.options : [];
                   const correctIdx = q.correct_option_index !== undefined ? q.correct_option_index : 0;
+                  const testCasesCount = Array.isArray(q.test_cases) ? q.test_cases.length : 0;
 
                   return (
                     <div
@@ -255,7 +282,22 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                       </div>
 
                       <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {/* Question Type Badge */}
+                          <span style={{
+                            padding: '0.15rem 0.45rem',
+                            borderRadius: '4px',
+                            fontSize: '0.68rem',
+                            fontWeight: 800,
+                            letterSpacing: '0.02em',
+                            textTransform: 'uppercase',
+                            background: isCoding ? '#EEF2FF' : isLongAnswer ? '#FEF3C7' : isTrueFalse ? '#CCFBF1' : '#EFF6FF',
+                            color: isCoding ? '#4338CA' : isLongAnswer ? '#92400E' : isTrueFalse ? '#0F766E' : '#1D4ED8',
+                            border: `1px solid ${isCoding ? '#C7D2FE' : isLongAnswer ? '#FDE68A' : isTrueFalse ? '#99F6E4' : '#BFDBFE'}`
+                          }}>
+                            {isCoding ? '💻 Coding' : isLongAnswer ? '📝 Long Answer' : isTrueFalse ? '⚖️ True/False' : '🔘 MCQ'}
+                          </span>
+
                           <span style={{
                             background: '#F1F5F9',
                             color: '#475569',
@@ -276,8 +318,15 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                           }}>
                             • {q.difficulty}
                           </span>
-                          <span style={{ fontSize: '0.72rem', color: '#64748B', marginLeft: 'auto' }}>
-                            +{q.marks} Marks
+
+                          {isCoding && testCasesCount > 0 && (
+                            <span style={{ fontSize: '0.7rem', background: '#F3E8FF', color: '#6B21A8', padding: '0.1rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                              {testCasesCount} Test Cases
+                            </span>
+                          )}
+
+                          <span style={{ fontSize: '0.72rem', color: '#64748B', marginLeft: 'auto', fontWeight: 600 }}>
+                            +{q.marks || 4} Marks
                           </span>
                         </div>
 
@@ -285,7 +334,8 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                           {q.question_text}
                         </div>
 
-                        {options.length > 0 && (
+                        {/* MCQ / TrueFalse options */}
+                        {!isCoding && !isLongAnswer && options.length > 0 && (
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem', fontSize: '0.78rem' }}>
                             {options.map((opt, oIdx) => (
                               <div
@@ -298,6 +348,21 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                                 {String.fromCharCode(65 + oIdx)}. {opt} {correctIdx === oIdx && '✓'}
                               </div>
                             ))}
+                          </div>
+                        )}
+
+                        {/* Long Answer expected criteria preview */}
+                        {isLongAnswer && (q.expected_answer || q.evaluation_criteria) && (
+                          <div style={{ fontSize: '0.76rem', color: '#64748B', background: '#F8FAFC', padding: '0.4rem 0.6rem', borderRadius: '4px', border: '1px solid #E2E8F0' }}>
+                            {q.expected_answer && <div><strong style={{ color: '#475569' }}>Expected Answer:</strong> {q.expected_answer.slice(0, 120)}{q.expected_answer.length > 120 ? '...' : ''}</div>}
+                            {q.evaluation_criteria && <div><strong style={{ color: '#475569' }}>Rubric:</strong> {q.evaluation_criteria.slice(0, 100)}</div>}
+                          </div>
+                        )}
+
+                        {/* Coding starter code preview */}
+                        {isCoding && q.starter_code && (
+                          <div style={{ fontSize: '0.74rem', fontFamily: 'monospace', background: '#0F172A', color: '#F8FAFC', padding: '0.4rem 0.6rem', borderRadius: '4px', overflowX: 'hidden', whiteSpace: 'pre' }}>
+                            {q.starter_code.slice(0, 100)}{q.starter_code.length > 100 ? '...' : ''}
                           </div>
                         )}
                       </div>

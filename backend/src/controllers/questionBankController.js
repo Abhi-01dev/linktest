@@ -1,5 +1,6 @@
 import { questionBankService } from '../services/questionBankService.js';
 import { questionBankRepository } from '../repositories/questionBankRepository.js';
+import { notificationService } from '../services/notificationService.js';
 
 export const questionBankController = {
   /**
@@ -92,6 +93,17 @@ export const questionBankController = {
       );
 
       if (!result.success) {
+        notificationService.createNotification({
+          userId: req.user.id,
+          title: 'Question Bank Import Failed',
+          message: result.error || 'Failed to import questions from CSV file.',
+          type: 'ERROR',
+          priority: 'HIGH',
+          actionUrl: req.user.role === 'ADMIN' ? '/admin/questions' : '/teacher/question-bank',
+          actionLabel: 'View Question Bank',
+          relatedEntityType: 'QUESTION_IMPORT'
+        }).catch(() => {});
+
         return res.status(400).json({
           success: false,
           error: {
@@ -100,6 +112,20 @@ export const questionBankController = {
           }
         });
       }
+
+      const importedCount = result.result?.importedCount || 0;
+      const failedCount = result.result?.failedCount || 0;
+
+      notificationService.createNotification({
+        userId: req.user.id,
+        title: 'Question Import Completed',
+        message: `${importedCount} questions were successfully imported into the Question Bank${failedCount > 0 ? ` (${failedCount} rows skipped)` : ''}.`,
+        type: 'TASK_COMPLETED',
+        priority: 'NORMAL',
+        actionUrl: req.user.role === 'ADMIN' ? '/admin/questions' : '/teacher/question-bank',
+        actionLabel: 'View Question Bank',
+        relatedEntityType: 'QUESTION_IMPORT'
+      }).catch(() => {});
 
       return res.status(200).json({
         success: true,
@@ -140,6 +166,8 @@ export const questionBankController = {
         topic = '',
         difficulty = '',
         createdBy = '',
+        question_type = '',
+        type = '',
         limit = 50,
         offset = 0
       } = req.query;
@@ -151,6 +179,7 @@ export const questionBankController = {
         topic,
         difficulty,
         createdBy,
+        question_type: question_type || type,
         limit,
         offset
       });
@@ -201,7 +230,23 @@ export const questionBankController = {
         difficulty,
         explanation,
         marks,
-        negative_marks
+        negative_marks,
+        question_type,
+        questionType,
+        expected_answer,
+        expectedAnswer,
+        evaluation_criteria,
+        evaluationCriteria,
+        programming_language,
+        programmingLanguage,
+        starter_code,
+        starterCode,
+        time_limit,
+        timeLimit,
+        memory_limit,
+        memoryLimit,
+        test_cases,
+        testCases
       } = req.body;
 
       if (!question_text || !subject || !topic) {
@@ -234,6 +279,14 @@ export const questionBankController = {
         explanation,
         marks,
         negative_marks,
+        question_type: question_type || questionType || 'mcq_single',
+        expected_answer: expected_answer || expectedAnswer || null,
+        evaluation_criteria: evaluation_criteria || evaluationCriteria || null,
+        programming_language: programming_language || programmingLanguage || 'javascript',
+        starter_code: starter_code || starterCode || null,
+        time_limit: time_limit || timeLimit || 2.0,
+        memory_limit: memory_limit || memoryLimit || 128,
+        test_cases: test_cases || testCases || [],
         created_by: req.user.id
       });
 
@@ -276,6 +329,65 @@ export const questionBankController = {
       return res.status(200).json({
         success: true,
         message: 'Question deleted successfully from Question Bank.'
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /**
+   * GET /api/questions/:id or /api/questions/bank/:id
+   */
+  async getQuestionById(req, res, next) {
+    try {
+      const { id } = req.params;
+      const question = await questionBankRepository.findById(id);
+
+      if (!question) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Question not found.' }
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: { question }
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /**
+   * PUT /api/questions/:id or /api/questions/bank/:id
+   */
+  async updateQuestion(req, res, next) {
+    try {
+      const { id } = req.params;
+      const existing = await questionBankRepository.findById(id);
+
+      if (!existing) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Question not found.' }
+        });
+      }
+
+      // Role check: Only ADMIN or the teacher who created it can update
+      if (req.user.role !== 'ADMIN' && existing.created_by !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'You can only update questions created by your account.' }
+        });
+      }
+
+      const updated = await questionBankRepository.updateQuestion(id, req.body);
+
+      return res.status(200).json({
+        success: true,
+        data: { question: updated },
+        message: 'Question updated successfully.'
       });
     } catch (err) {
       next(err);

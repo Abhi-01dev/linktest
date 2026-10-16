@@ -14,6 +14,14 @@ export const questionBankRepository = {
     const marks = parseFloat(questionData.marks) || 4.0;
     const negativeMarks = parseFloat(questionData.negative_marks !== undefined ? questionData.negative_marks : 1.0);
     const difficulty = (questionData.difficulty || 'MEDIUM').toUpperCase().trim();
+    const questionType = String(questionData.question_type || questionData.questionType || 'mcq_single').toLowerCase().trim();
+    const expectedAnswer = questionData.expected_answer || questionData.expectedAnswer || null;
+    const evaluationCriteria = questionData.evaluation_criteria || questionData.evaluationCriteria || null;
+    const programmingLanguage = (questionData.programming_language || questionData.programmingLanguage || 'javascript').toLowerCase().trim();
+    const starterCode = questionData.starter_code || questionData.starterCode || null;
+    const timeLimit = parseFloat(questionData.time_limit || questionData.timeLimit || 2.0);
+    const memoryLimit = parseInt(questionData.memory_limit || questionData.memoryLimit || 128, 10);
+    const testCases = Array.isArray(questionData.test_cases || questionData.testCases) ? (questionData.test_cases || questionData.testCases) : [];
 
     if (isPostgresConnected && pool) {
       const dbClient = client || pool;
@@ -21,8 +29,10 @@ export const questionBankRepository = {
         `INSERT INTO question_bank (
           id, question_text, options, correct_option_index, correct_answer,
           subject, topic, difficulty, explanation, marks, negative_marks,
-          created_by, subject_id, course_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          created_by, subject_id, course_id, created_at, updated_at,
+          question_type, expected_answer, evaluation_criteria,
+          programming_language, starter_code, time_limit, memory_limit, test_cases
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
         RETURNING *`,
         [
           id,
@@ -40,9 +50,31 @@ export const questionBankRepository = {
           questionData.subject_id || null,
           questionData.course_id || null,
           now,
-          now
+          now,
+          questionType,
+          expectedAnswer,
+          evaluationCriteria,
+          programmingLanguage,
+          starterCode,
+          timeLimit,
+          memoryLimit,
+          JSON.stringify(testCases)
         ]
       );
+
+      // Also persist to coding_test_cases if test cases present
+      if (testCases.length > 0) {
+        for (const tc of testCases) {
+          const tcId = tc.id || `tc-${crypto.randomUUID()}`;
+          await dbClient.query(
+            `INSERT INTO coding_test_cases (id, question_id, input, expected_output, is_hidden, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (id) DO NOTHING`,
+            [tcId, id, tc.input || '', tc.expected_output || '', Boolean(tc.is_hidden), now]
+          );
+        }
+      }
+
       return res.rows[0];
     }
 
@@ -61,17 +93,39 @@ export const questionBankRepository = {
       created_by: questionData.created_by || null,
       subject_id: questionData.subject_id || null,
       course_id: questionData.course_id || null,
+      question_type: questionType,
+      expected_answer: expectedAnswer,
+      evaluation_criteria: evaluationCriteria,
+      programming_language: programmingLanguage,
+      starter_code: starterCode,
+      time_limit: timeLimit,
+      memory_limit: memoryLimit,
+      test_cases: testCases,
       created_at: now,
       updated_at: now
     };
     memoryStore.question_bank.unshift(item);
+
+    if (testCases.length > 0) {
+      testCases.forEach(tc => {
+        memoryStore.coding_test_cases.push({
+          id: tc.id || `tc-${crypto.randomUUID()}`,
+          question_id: id,
+          input: tc.input || '',
+          expected_output: tc.expected_output || '',
+          is_hidden: Boolean(tc.is_hidden),
+          created_at: now
+        });
+      });
+    }
+
     return item;
   },
 
   /**
    * Batch insert valid questions with full transaction safety
-   * @param {Array<Object>} questions 
-   * @param {string} userId 
+   * @param {Array<Object>} questions
+   * @param {string} userId
    * @returns {Promise<Array<Object>>}
    */
   async batchInsert(questions, userId) {
@@ -111,7 +165,7 @@ export const questionBankRepository = {
 
   /**
    * Find existing questions in question_bank matching question_text and subject
-   * @param {Array<{ question_text: string, subject: string }>} candidates 
+   * @param {Array<{ question_text: string, subject: string }>} candidates
    * @returns {Promise<Array<Object>>}
    */
   async findExistingDuplicates(candidates) {
@@ -152,6 +206,7 @@ export const questionBankRepository = {
     topic = '',
     difficulty = '',
     createdBy = '',
+    question_type = '',
     limit = 50,
     offset = 0
   } = {}) {
@@ -190,6 +245,12 @@ export const questionBankRepository = {
       if (createdBy && createdBy.trim()) {
         conditions.push(`created_by = $${paramIdx}`);
         params.push(createdBy.trim());
+        paramIdx++;
+      }
+
+      if (question_type && question_type.trim() && question_type !== 'all') {
+        conditions.push(`LOWER(COALESCE(question_type, 'mcq_single')) = LOWER($${paramIdx})`);
+        params.push(question_type.trim());
         paramIdx++;
       }
 
@@ -250,6 +311,10 @@ export const questionBankRepository = {
       list = list.filter(q => q.created_by === createdBy.trim());
     }
 
+    if (question_type && question_type.trim() && question_type !== 'all') {
+      list = list.filter(q => (q.question_type || 'mcq_single').toLowerCase() === question_type.toLowerCase().trim());
+    }
+
     const total = list.length;
     const paginated = list.slice(pageOffset, pageOffset + pageLimit);
 
@@ -293,6 +358,123 @@ export const questionBankRepository = {
       return removed[0];
     }
     return null;
+  },
+
+  /**
+   * Find a question by ID
+   */
+  async findById(id) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(`SELECT * FROM question_bank WHERE id = $1`, [id]);
+      return res.rows[0] || null;
+    }
+    return (memoryStore.question_bank || []).find(q => q.id === id) || null;
+  },
+
+  /**
+   * Update an existing question
+   */
+  async updateQuestion(id, updates) {
+    const existing = await this.findById(id);
+    if (!existing) return null;
+
+    const now = new Date().toISOString();
+    const updated = {
+      ...existing,
+      ...updates,
+      updated_at: now
+    };
+
+    if (updates.test_cases || updates.testCases) {
+      updated.test_cases = updates.test_cases || updates.testCases;
+    }
+
+    if (isPostgresConnected && pool) {
+      await pool.query(
+        `UPDATE question_bank SET
+          question_text = COALESCE($1, question_text),
+          options = COALESCE($2, options),
+          correct_option_index = COALESCE($3, correct_option_index),
+          correct_answer = COALESCE($4, correct_answer),
+          subject = COALESCE($5, subject),
+          topic = COALESCE($6, topic),
+          difficulty = COALESCE($7, difficulty),
+          explanation = COALESCE($8, explanation),
+          marks = COALESCE($9, marks),
+          negative_marks = COALESCE($10, negative_marks),
+          question_type = COALESCE($11, question_type),
+          expected_answer = $12,
+          evaluation_criteria = $13,
+          programming_language = COALESCE($14, programming_language),
+          starter_code = $15,
+          time_limit = COALESCE($16, time_limit),
+          memory_limit = COALESCE($17, memory_limit),
+          test_cases = COALESCE($18, test_cases),
+          updated_at = $19
+        WHERE id = $20`,
+        [
+          updated.question_text,
+          JSON.stringify(updated.options || []),
+          updated.correct_option_index,
+          updated.correct_answer,
+          updated.subject,
+          updated.topic,
+          updated.difficulty,
+          updated.explanation,
+          updated.marks,
+          updated.negative_marks,
+          updated.question_type,
+          updated.expected_answer,
+          updated.evaluation_criteria,
+          updated.programming_language,
+          updated.starter_code,
+          updated.time_limit,
+          updated.memory_limit,
+          JSON.stringify(updated.test_cases || []),
+          now,
+          id
+        ]
+      );
+
+      // Sync coding_test_cases if provided
+      if (Array.isArray(updated.test_cases)) {
+        await pool.query(`DELETE FROM coding_test_cases WHERE question_id = $1`, [id]);
+        for (let i = 0; i < updated.test_cases.length; i++) {
+          const tc = updated.test_cases[i];
+          const tcId = tc.id || `tc-${crypto.randomUUID()}`;
+          await pool.query(
+            `INSERT INTO coding_test_cases (id, question_id, input, expected_output, is_hidden, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [tcId, id, String(tc.input ?? ''), String(tc.expected_output ?? ''), Boolean(tc.is_hidden), now]
+          );
+        }
+      }
+
+      return this.findById(id);
+    }
+
+    const idx = (memoryStore.question_bank || []).findIndex(q => q.id === id);
+    if (idx !== -1) {
+      memoryStore.question_bank[idx] = updated;
+    }
+    return updated;
+  },
+
+  /**
+   * Delete question from question bank
+   */
+  async deleteQuestion(id) {
+    if (isPostgresConnected && pool) {
+      await pool.query(`DELETE FROM coding_test_cases WHERE question_id = $1`, [id]);
+      await pool.query(`DELETE FROM question_bank WHERE id = $1`, [id]);
+      return true;
+    }
+    const idx = (memoryStore.question_bank || []).findIndex(q => q.id === id);
+    if (idx !== -1) {
+      memoryStore.question_bank.splice(idx, 1);
+      return true;
+    }
+    return false;
   },
 
   /**

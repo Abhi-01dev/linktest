@@ -1,4 +1,11 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const getApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+  if (!envUrl) return '/api';
+  const trimmed = String(envUrl).trim().replace(/\/+$/, '');
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
+};
+
+const BASE_URL = getApiBaseUrl();
 
 class ApiClient {
   constructor() {
@@ -120,6 +127,9 @@ class ApiClient {
 
   logout() {
     this.setToken(null);
+    localStorage.removeItem('linktest_token');
+    localStorage.removeItem('linktest_user');
+    sessionStorage.clear();
   }
 
   // Courses
@@ -228,6 +238,12 @@ class ApiClient {
       body: JSON.stringify({ topic, count })
     });
     return res.data;
+  }
+
+  // System Health
+  async getHealth() {
+    const res = await this.request('/health');
+    return res.data || res;
   }
 
   // Admin APIs
@@ -416,12 +432,37 @@ class ApiClient {
   }
 
   async assignTeacher(data) {
-    const teacherId = data.teacher_id;
+    const teacherId = data.teacher_id || data.teacherId;
     const res = await this.request(teacherId ? `/admin/teachers/${teacherId}/assign` : '/admin/teachers/assign', {
       method: 'POST',
       body: JSON.stringify(data)
     });
     return res.data?.assignment || res.data;
+  }
+
+  async updateTeacherAssignment(assignmentId, teacherId) {
+    const res = await this.request(`/admin/teachers/assignments/${assignmentId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ teacher_id: teacherId })
+    });
+    return res.data?.assignment || res.data;
+  }
+
+  async removeTeacherAssignment(assignmentId) {
+    const res = await this.request(`/admin/teachers/assignments/${assignmentId}`, {
+      method: 'DELETE'
+    });
+    return res.data || res;
+  }
+
+  async getBatchAssignments(batchId) {
+    const res = await this.request(`/admin/batches/${batchId}/assignments`);
+    return res.data?.assignments || [];
+  }
+
+  async getAdminTeacherAssignments(teacherId) {
+    const res = await this.request(`/admin/teachers/${teacherId}/assignments`);
+    return res.data?.assignments || [];
   }
 
   async enrollStudent(data) {
@@ -874,17 +915,47 @@ class ApiClient {
     return res.data;
   }
 
-  async getStudentNotifications(unreadOnly = false) {
-    const res = await this.request(`/student/notifications${unreadOnly ? '?unreadOnly=true' : ''}`);
+  // ── Unified Notification System APIs ─────────────────────────────────
+  async getNotifications(params = {}) {
+    const q = new URLSearchParams();
+    if (params.unreadOnly) q.set('unreadOnly', 'true');
+    if (params.limit) q.set('limit', String(params.limit));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const res = await this.request(`/notifications${qs}`);
+    return res.data || { notifications: [], unread_count: 0 };
+  }
+
+  async getUnreadNotificationCount() {
+    const res = await this.request('/notifications/unread-count');
+    return res.data?.unread_count || 0;
+  }
+
+  async markNotificationsRead(ids = null) {
+    const res = await this.request('/notifications/read', {
+      method: 'POST',
+      body: JSON.stringify({ ids: Array.isArray(ids) ? ids : (ids ? [ids] : null) })
+    });
     return res.data;
   }
 
-  async markNotificationsRead(ids) {
-    const res = await this.request('/student/notifications/read', {
-      method: 'POST',
-      body: JSON.stringify({ ids })
+  async markNotificationRead(id) {
+    const res = await this.request(`/notifications/${id}/read`, {
+      method: 'POST'
     });
     return res.data;
+  }
+
+  async dismissNotification(id) {
+    const res = await this.request(`/notifications/${id}/dismiss`, {
+      method: 'POST'
+    });
+    return res.data;
+  }
+
+  // Alias for backward compatibility
+  async getStudentNotifications(unreadOnly = false) {
+    const res = await this.getNotifications({ unreadOnly });
+    return res.notifications || [];
   }
 
   async getStudentTickets() {
@@ -1028,6 +1099,17 @@ class ApiClient {
     return res.data;
   }
 
+  async logMockTestSecurityEvent(attemptId, eventData) {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      throw new Error('Valid attempt ID is required to log security event.');
+    }
+    const res = await this.request(`/mock-tests/attempts/${attemptId}/security-event`, {
+      method: 'POST',
+      body: JSON.stringify(eventData)
+    });
+    return res.data;
+  }
+
   async submitMockTestAttempt(attemptId, options = {}) {
     if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
       throw new Error('Valid attempt ID is required to submit examination.');
@@ -1050,6 +1132,42 @@ class ApiClient {
   async getMyMockTestAttempts(testId = null) {
     const res = await this.request(`/mock-tests/my-attempts${testId ? `?test_id=${testId}` : ''}`);
     return res.data.attempts;
+  }
+
+  async getMyMockTestResults() {
+    const res = await this.request('/mock-tests/my-results');
+    return res.data?.results || [];
+  }
+
+  async releaseMockTestAttemptResult(attemptId) {
+    const res = await this.request(`/mock-tests/attempts/${attemptId}/release`, {
+      method: 'POST'
+    });
+    return res.data;
+  }
+
+  async downloadTestResultsPdf(testId, batchId = null) {
+    const token = this.token || localStorage.getItem('linktest_token');
+    const url = `${BASE_URL}/reports/tests/${testId}/results/pdf${batchId ? `?batchId=${batchId}` : ''}`;
+    const response = await fetch(url, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Failed to download examination results PDF.');
+    }
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = `linktest-results-${testId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+    return true;
   }
 
   async getMockTestProctoringEvents(attemptId) {
@@ -1264,6 +1382,52 @@ class ApiClient {
       method: 'DELETE'
     });
     return res;
+  }
+
+  async updateQuestionBankItem(id, data) {
+    const res = await this.request(`/questions/bank/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+    return res.data;
+  }
+
+  // --- Coding & Evaluation Methods ---
+  async runCode({ questionId, code, language = 'javascript', customTestCases }) {
+    const res = await this.request('/coding/run', {
+      method: 'POST',
+      body: JSON.stringify({ questionId, code, language, customTestCases })
+    });
+    return res.data;
+  }
+
+  async submitCodingSolution({ questionId, attemptId, code, language = 'javascript' }) {
+    const res = await this.request('/coding/submit', {
+      method: 'POST',
+      body: JSON.stringify({ questionId, attemptId, code, language })
+    });
+    return res.data;
+  }
+
+  async getCodingSubmission(id) {
+    const res = await this.request(`/coding-submissions/${id}`);
+    return res.data;
+  }
+
+  async evaluateMockTestResponse(attemptId, questionId, { score, comment }) {
+    const res = await this.request(`/mock-tests/attempts/${attemptId}/responses/${questionId}/evaluate`, {
+      method: 'POST',
+      body: JSON.stringify({ score, comment })
+    });
+    return res.data;
+  }
+
+  async evaluateQuizAnswer(attemptId, questionId, { score, comment }) {
+    const res = await this.request(`/quizzes/attempts/${attemptId}/answers/${questionId}/evaluate`, {
+      method: 'POST',
+      body: JSON.stringify({ score, comment })
+    });
+    return res.data;
   }
 }
 

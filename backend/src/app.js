@@ -21,6 +21,10 @@ import batchRoutes from './routes/batches.js';
 import studentsRoutes from './routes/students.js';
 import questionBankRoutes from './routes/questionBank.js';
 import subjectRoutes from './routes/subjects.js';
+import codingRoutes from './routes/coding.js';
+import reportsRoutes from './routes/reports.js';
+import notificationsRoutes from './routes/notifications.js';
+import { livekitService } from './services/livekitService.js';
 
 import crypto from 'crypto';
 
@@ -36,23 +40,42 @@ app.use((req, res, next) => {
 // Security and utility middleware
 app.use(helmet());
 
-// Strictly allowed frontend origins (supporting dev ports 5173, 5174, 3000, and configured production URL)
-const allowedOrigins = Array.from(new Set([
-  config.frontendUrl,
+// Strictly allowed frontend origins (supporting dev ports 5173, 5174, 3000, comma-separated env values, and Vercel preview domains)
+const configuredOrigins = (config.frontendUrl || '')
+  .split(',')
+  .map(url => url.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const defaultOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:5174'
-].filter(Boolean)));
+];
+
+const allowedOrigins = Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow non-browser requests (like server-to-server or tests without origin)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
+
+    const normalizedOrigin = origin.replace(/\/+$/, '');
+    if (allowedOrigins.includes(normalizedOrigin)) {
       return callback(null, true);
     }
+
+    // Allow Vercel preview and production deployments safely
+    try {
+      const parsed = new URL(origin);
+      if (parsed.hostname.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+    } catch {
+      // Ignore URL parsing errors
+    }
+
     return callback(new Error(`CORS policy does not allow access from origin ${origin}`));
   },
   credentials: true
@@ -60,9 +83,14 @@ app.use(cors({
 
 app.use(express.json({ limit: '2mb' }));
 
-// Health and Diagnostics Endpoint
+// Health and Diagnostics Endpoint (Safe for production monitoring, no secrets leaked)
 app.get('/api/health', (req, res) => {
+  const dbStatus = getDbStatus();
+  const livekitStatus = livekitService.getStatus();
+  const storageConfigured = Boolean(config.storage?.provider);
+
   res.status(200).json({
+    status: 'ok',
     success: true,
     data: {
       status: 'operational',
@@ -70,7 +98,17 @@ app.get('/api/health', (req, res) => {
       name: 'LinkTest API Server',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
-      database: getDbStatus(),
+      services: {
+        database: dbStatus.connected ? 'connected' : 'unavailable',
+        api: 'online',
+        authentication: 'operational',
+        storage: storageConfigured ? 'available' : 'not_configured',
+        live_classes: livekitStatus.configured ? 'operational' : 'not_configured'
+      },
+      database: {
+        connected: dbStatus.connected,
+        type: dbStatus.type
+      },
       ollama_configured_model: config.ollama.model,
       google_auth_configured: Boolean(config.google?.clientId),
       auth_methods: ['local_jwt', 'google_oauth2']
@@ -96,6 +134,10 @@ app.use('/api/batches', batchRoutes);
 app.use('/api/students', studentsRoutes);
 app.use('/api/questions', questionBankRoutes);
 app.use('/api/subjects', subjectRoutes);
+app.use('/api/coding-submissions', codingRoutes);
+app.use('/api/coding', codingRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 // Catch-all 404 for undefined routes
 app.use((req, res) => {

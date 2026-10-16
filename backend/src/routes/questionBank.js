@@ -37,7 +37,18 @@ router.post('/csv/error-report', questionBankController.downloadErrorReport);
 // ── Question Bank CRUD & Retrieval ──
 router.get('/bank/filters', questionBankController.getFilterOptions);
 router.get('/bank', questionBankController.getQuestions);
+router.get('/', questionBankController.getQuestions);
+
 router.post('/bank', questionBankController.createQuestion);
+router.post('/', questionBankController.createQuestion);
+
+router.get('/bank/:id', questionBankController.getQuestionById);
+router.get('/:id', questionBankController.getQuestionById);
+
+router.put('/bank/:id', questionBankController.updateQuestion);
+router.put('/:id', questionBankController.updateQuestion);
+
 router.delete('/bank/:id', questionBankController.deleteQuestion);
+router.delete('/:id', questionBankController.deleteQuestion);
 
 export default router;

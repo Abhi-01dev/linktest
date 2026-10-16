@@ -16,7 +16,7 @@ export const batchRepository = {
 
     if (isPostgresConnected && pool) {
       let query = `
-        SELECT 
+        SELECT
           b.*,
           c.title as course_title,
           cls.name as class_name,
@@ -27,14 +27,14 @@ export const batchRepository = {
         LEFT JOIN courses c ON b.course_id = c.id
         LEFT JOIN classes cls ON b.class_id = cls.id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as student_count 
-          FROM batch_enrollments 
+          SELECT batch_id, COUNT(*)::int as student_count
+          FROM batch_enrollments
           WHERE status = 'active'
           GROUP BY batch_id
         ) be ON b.id = be.batch_id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as teacher_count 
-          FROM batch_teachers 
+          SELECT batch_id, COUNT(*)::int as teacher_count
+          FROM batch_teachers
           GROUP BY batch_id
         ) bt ON b.id = bt.batch_id
         WHERE 1=1
@@ -116,7 +116,7 @@ export const batchRepository = {
   async getBatchesForTeacher(teacherId) {
     if (isPostgresConnected && pool) {
       const query = `
-        SELECT 
+        SELECT DISTINCT
           b.*,
           c.title as course_title,
           cls.name as class_name,
@@ -124,33 +124,40 @@ export const batchRepository = {
           COALESCE(bt_all.teacher_count, 0)::int as teachers_count,
           (b.capacity - COALESCE(be.student_count, 0))::int as available_capacity
         FROM batches b
-        JOIN batch_teachers bt ON b.id = bt.batch_id AND bt.teacher_id = $1
         LEFT JOIN courses c ON b.course_id = c.id
         LEFT JOIN classes cls ON b.class_id = cls.id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as student_count 
-          FROM batch_enrollments 
+          SELECT batch_id, COUNT(*)::int as student_count
+          FROM batch_enrollments
           WHERE status = 'active'
           GROUP BY batch_id
         ) be ON b.id = be.batch_id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as teacher_count 
-          FROM batch_teachers 
+          SELECT batch_id, COUNT(*)::int as teacher_count
+          FROM batch_teachers
           GROUP BY batch_id
         ) bt_all ON b.id = bt_all.batch_id
-        WHERE b.status = 'Active' OR b.class_teacher_id = $1
+        WHERE b.id IN (
+          SELECT batch_id FROM batch_teachers WHERE teacher_id = $1
+          UNION
+          SELECT batch_id FROM teacher_assignments WHERE teacher_id = $1 AND batch_id IS NOT NULL
+          UNION
+          SELECT id FROM batches WHERE class_teacher_id = $1
+        )
         ORDER BY b.created_at DESC
       `;
       const res = await pool.query(query, [teacherId]);
       return res.rows;
     }
 
-    const assignedBatchIds = (memoryStore.batch_teachers || [])
-      .filter(bt => bt.teacher_id === teacherId)
-      .map(bt => bt.batch_id);
+    const assignedBatchIds = new Set([
+      ...(memoryStore.batch_teachers || []).filter(bt => bt.teacher_id === teacherId).map(bt => bt.batch_id),
+      ...(memoryStore.teacher_assignments || []).filter(ta => ta.teacher_id === teacherId && ta.batch_id).map(ta => ta.batch_id),
+      ...(memoryStore.batches || []).filter(b => b.class_teacher_id === teacherId).map(b => b.id)
+    ]);
 
     return (memoryStore.batches || [])
-      .filter(b => assignedBatchIds.includes(b.id) || b.class_teacher_id === teacherId)
+      .filter(b => assignedBatchIds.has(b.id))
       .map(b => {
         const course = (memoryStore.courses || []).find(c => c.id === b.course_id);
         const cls = (memoryStore.classes || []).find(c => c.id === b.class_id);
@@ -170,7 +177,7 @@ export const batchRepository = {
   async getBatchById(id) {
     if (isPostgresConnected && pool) {
       const query = `
-        SELECT 
+        SELECT
           b.*,
           c.title as course_title,
           cls.name as class_name,
@@ -181,14 +188,14 @@ export const batchRepository = {
         LEFT JOIN courses c ON b.course_id = c.id
         LEFT JOIN classes cls ON b.class_id = cls.id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as student_count 
-          FROM batch_enrollments 
+          SELECT batch_id, COUNT(*)::int as student_count
+          FROM batch_enrollments
           WHERE status = 'active'
           GROUP BY batch_id
         ) be ON b.id = be.batch_id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as teacher_count 
-          FROM batch_teachers 
+          SELECT batch_id, COUNT(*)::int as teacher_count
+          FROM batch_teachers
           GROUP BY batch_id
         ) bt ON b.id = bt.batch_id
         WHERE b.id = $1
@@ -361,7 +368,7 @@ export const batchRepository = {
   async getBatchTeachers(batchId) {
     if (isPostgresConnected && pool) {
       const query = `
-        SELECT 
+        SELECT
           bt.id as allocation_id,
           bt.batch_id,
           bt.teacher_id,
@@ -465,69 +472,12 @@ export const batchRepository = {
     return (memoryStore.teacher_assignments || []).some(ta => ta.batch_id === batchId && ta.teacher_id === teacherId);
   },
 
-  async getBatchesForTeacher(teacherId) {
-    if (isPostgresConnected && pool) {
-      const query = `
-        SELECT DISTINCT
-          b.*,
-          c.title as course_title,
-          cls.name as class_name,
-          COALESCE(be.student_count, 0)::int as enrolled_count,
-          COALESCE(bt_all.teacher_count, 0)::int as teachers_count,
-          (b.capacity - COALESCE(be.student_count, 0))::int as available_capacity
-        FROM batches b
-        LEFT JOIN courses c ON b.course_id = c.id
-        LEFT JOIN classes cls ON b.class_id = cls.id
-        LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as student_count 
-          FROM batch_enrollments 
-          WHERE status = 'active'
-          GROUP BY batch_id
-        ) be ON b.id = be.batch_id
-        LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as teacher_count 
-          FROM batch_teachers 
-          GROUP BY batch_id
-        ) bt_all ON b.id = bt_all.batch_id
-        WHERE b.id IN (
-          SELECT batch_id FROM batch_teachers WHERE teacher_id = $1
-          UNION
-          SELECT batch_id FROM teacher_assignments WHERE teacher_id = $1 AND batch_id IS NOT NULL
-        )
-        ORDER BY b.created_at DESC
-      `;
-      const res = await pool.query(query, [teacherId]);
-      return res.rows;
-    }
-
-    const assignedBatchIds = new Set([
-      ...(memoryStore.batch_teachers || []).filter(bt => bt.teacher_id === teacherId).map(bt => bt.batch_id),
-      ...(memoryStore.teacher_assignments || []).filter(ta => ta.teacher_id === teacherId && ta.batch_id).map(ta => ta.batch_id)
-    ]);
-
-    return (memoryStore.batches || [])
-      .filter(b => assignedBatchIds.has(b.id))
-      .map(b => {
-        const course = memoryStore.courses.find(c => c.id === b.course_id);
-        const cls = memoryStore.classes.find(c => c.id === b.class_id);
-        const enrolled = (memoryStore.batch_enrollments || []).filter(e => e.batch_id === b.id && e.status === 'active').length;
-        const teachers = (memoryStore.batch_teachers || []).filter(t => t.batch_id === b.id).length;
-        return {
-          ...b,
-          course_title: course?.title || null,
-          class_name: cls?.name || null,
-          enrolled_count: enrolled,
-          teachers_count: teachers,
-          available_capacity: (b.capacity || 50) - enrolled
-        };
-      });
-  },
 
   // ── Student Enrollments ──────────────────────────────────────────────────
   async getBatchStudents(batchId) {
     if (isPostgresConnected && pool) {
       const query = `
-        SELECT 
+        SELECT
           be.id as enrollment_id,
           be.batch_id,
           be.student_id,

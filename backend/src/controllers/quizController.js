@@ -113,5 +113,35 @@ export const quizController = {
     } catch (err) {
       next(err);
     }
+  },
+
+  async evaluateAnswer(req, res, next) {
+    try {
+      const { attemptId, questionId } = req.params;
+      const { score, comment } = req.body;
+
+      if (score === undefined || isNaN(parseFloat(score))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_SCORE', message: 'A numeric score must be provided.' }
+        });
+      }
+
+      const updated = await quizRepository.manuallyEvaluateAnswer({
+        attemptId,
+        questionId,
+        score: parseFloat(score),
+        comment: comment || '',
+        evaluatorId: req.user.id
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: { attempt: updated },
+        message: 'Quiz answer evaluated successfully.'
+      });
+    } catch (err) {
+      next(err);
+    }
   }
 };

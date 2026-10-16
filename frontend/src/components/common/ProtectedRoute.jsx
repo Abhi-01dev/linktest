@@ -29,18 +29,20 @@ export function ProtectedRoute({ children, requiredRole = null }) {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
-  if (requiredRole) {
-    const isAllowed = Array.isArray(requiredRole)
-      ? requiredRole.includes(user?.role)
-      : user?.role === requiredRole;
+  const role = String(user?.role || '').toUpperCase();
 
-    if (!isAllowed) {
-      if (user?.role === 'ADMIN') return <Navigate to="/admin" replace />;
-      if (user?.role === 'TEACHER') return <Navigate to="/teacher" replace />;
-      return <Navigate to="/dashboard" replace />;
+  if (requiredRole) {
+    const allowedRoles = Array.isArray(requiredRole)
+      ? requiredRole.map(r => String(r).toUpperCase())
+      : [String(requiredRole).toUpperCase()];
+
+    if (!allowedRoles.includes(role)) {
+      if (role === 'ADMIN') return <Navigate to="/admin/dashboard" replace />;
+      if (role === 'TEACHER') return <Navigate to="/teacher/dashboard" replace />;
+      return <Navigate to="/student/dashboard" replace />;
     }
   }
 

@@ -1,6 +1,7 @@
 import { lmsRepository } from '../repositories/lmsRepository.js';
 import { userRepository } from '../repositories/userRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
+import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
 
 const createAssignmentSchema = z.object({
@@ -233,6 +234,31 @@ export const teacherController = {
       });
 
       await logAudit(req.user, 'CREATE_ASSIGNMENT', 'assignments', assignment.id, `Created assignment "${parsed.title}"`);
+
+      // Unified Notification Event: Notify students in class/batch
+      (async () => {
+        try {
+          const students = await lmsRepository.getStudentsInClass(parsed.class_id, parsed.batch_id || null);
+          const studentIds = students.map(s => s.id || s.user_id).filter(Boolean);
+          for (const sId of studentIds) {
+            notificationService.createNotification({
+              userId: sId,
+              title: 'Assignment Added',
+              message: `New assignment "${parsed.title}" has been assigned. Due date: ${parsed.due_date}.`,
+              type: 'INFO',
+              priority: 'NORMAL',
+              actionUrl: '/assignments',
+              actionLabel: 'View Assignment',
+              relatedEntityType: 'ASSIGNMENT',
+              relatedEntityId: assignment.id,
+              eventKey: `student:${sId}:assignment:${assignment.id}:CREATED`
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.warn('[Notification] Failed to notify students for assignment:', e.message);
+        }
+      })();
+
       res.status(201).json({
         success: true,
         data: assignment,
@@ -265,6 +291,24 @@ export const teacherController = {
       });
 
       await logAudit(req.user, 'GRADE_SUBMISSION', 'assignment_submissions', submissionId, `Graded submission: ${parsed.marks_obtained} marks`);
+
+      // Unified Notification Event: Notify student of graded assignment
+      if (graded && (graded.student_id || graded.studentId)) {
+        const studentId = graded.student_id || graded.studentId;
+        notificationService.createNotification({
+          userId: studentId,
+          title: 'Assignment Graded',
+          message: `Your assignment submission has been evaluated: ${parsed.marks_obtained} marks awarded.`,
+          type: 'SUCCESS',
+          priority: 'NORMAL',
+          actionUrl: '/assignments',
+          actionLabel: 'View Result',
+          relatedEntityType: 'ASSIGNMENT',
+          relatedEntityId: graded.assignment_id || submissionId,
+          eventKey: `student:${studentId}:submission:${submissionId}:GRADED`
+        }).catch(() => {});
+      }
+
       res.status(200).json({
         success: true,
         data: graded,
@@ -309,6 +353,33 @@ export const teacherController = {
       });
 
       await logAudit(req.user, 'UPLOAD_MATERIAL', 'study_materials', material.id, `Uploaded study material "${parsed.title}"`);
+
+      // Unified Notification Event: Notify students in class
+      if (parsed.class_id) {
+        (async () => {
+          try {
+            const students = await lmsRepository.getStudentsInClass(parsed.class_id, null);
+            const studentIds = students.map(s => s.id || s.user_id).filter(Boolean);
+            for (const sId of studentIds) {
+              notificationService.createNotification({
+                userId: sId,
+                title: 'New Study Material Available',
+                message: `Instructor uploaded new study resource: "${parsed.title}".`,
+                type: 'INFO',
+                priority: 'LOW',
+                actionUrl: '/materials',
+                actionLabel: 'Open Material',
+                relatedEntityType: 'MATERIAL',
+                relatedEntityId: material.id,
+                eventKey: `student:${sId}:material:${material.id}:CREATED`
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.warn('[Notification] Failed to notify students for material:', e.message);
+          }
+        })();
+      }
+
       res.status(201).json({
         success: true,
         data: material,
@@ -350,6 +421,33 @@ export const teacherController = {
       });
 
       await logAudit(req.user, 'SCHEDULE_LIVE_CLASS', 'live_class_sessions', session.id, `Scheduled LiveKit lecture "${parsed.title}"`);
+
+      // Unified Notification Event: Notify students in class/batch
+      if (parsed.class_id) {
+        (async () => {
+          try {
+            const students = await lmsRepository.getStudentsInClass(parsed.class_id, parsed.batch_id || null);
+            const studentIds = students.map(s => s.id || s.user_id).filter(Boolean);
+            for (const sId of studentIds) {
+              notificationService.createNotification({
+                userId: sId,
+                title: 'Live Class Starting Soon',
+                message: `Live lecture "${parsed.title}" is scheduled for ${new Date(parsed.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+                type: 'ACTION_REQUIRED',
+                priority: 'HIGH',
+                actionUrl: '/live-classes',
+                actionLabel: 'Join Class',
+                relatedEntityType: 'LIVE_CLASS',
+                relatedEntityId: session.id,
+                eventKey: `student:${sId}:live_class:${session.id}:SCHEDULED`
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.warn('[Notification] Failed to notify students for live class:', e.message);
+          }
+        })();
+      }
+
       res.status(201).json({
         success: true,
         data: session,

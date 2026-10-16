@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { batchController } from '../controllers/batchController.js';
-import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { authenticateToken, requireAnyRole, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
-// All batch operations require authentication
-router.use(authenticateToken);
+// All batch operations require authentication (ADMIN or TEACHER only)
+router.use(authenticateToken, requireAnyRole('ADMIN', 'TEACHER'));
 
 // ── Batch CRUD ─────────────────────────────────────────────────────────────
 router.get('/', batchController.getBatches);
