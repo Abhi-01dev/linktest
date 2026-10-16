@@ -27,6 +27,8 @@ DROP TABLE IF EXISTS timetable_entries CASCADE;
 DROP TABLE IF EXISTS student_class_enrollments CASCADE;
 DROP TABLE IF EXISTS teacher_assignments CASCADE;
 DROP TABLE IF EXISTS class_subjects CASCADE;
+DROP TABLE IF EXISTS batch_enrollments CASCADE;
+DROP TABLE IF EXISTS batch_teachers CASCADE;
 DROP TABLE IF EXISTS batches CASCADE;
 DROP TABLE IF EXISTS classes CASCADE;
 DROP TABLE IF EXISTS subjects CASCADE;
@@ -132,6 +134,24 @@ CREATE TABLE classes (
     academic_session_id VARCHAR(64) REFERENCES academic_sessions(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 25. COURSES
+CREATE TABLE courses (
+    id VARCHAR(64) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    thumbnail_url TEXT,
+    instructor_name VARCHAR(150) NOT NULL,
+    instructor_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'published',
+    published BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_courses_category ON courses(category);
+CREATE INDEX idx_courses_published ON courses(published);
 
 -- 7. BATCHES / SECTIONS
 CREATE TABLE batches (
@@ -475,23 +495,7 @@ CREATE INDEX idx_audit_logs_actor ON audit_logs(actor_id);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
 
--- 25. COURSES
-CREATE TABLE courses (
-    id VARCHAR(64) PRIMARY KEY,
-    title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
-    category VARCHAR(100) NOT NULL,
-    thumbnail_url TEXT,
-    instructor_name VARCHAR(150) NOT NULL,
-    instructor_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'published',
-    published BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE INDEX idx_courses_category ON courses(category);
-CREATE INDEX idx_courses_published ON courses(published);
 
 -- 26. LESSONS
 CREATE TABLE lessons (
