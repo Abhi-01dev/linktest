@@ -9,6 +9,7 @@ import { invitationRepository, passwordResetRepository } from '../repositories/i
 import { generateOtp, hashOtp, verifyOtpHash } from '../utils/cryptoOtp.js';
 import { emailService } from './emailService.js';
 import { logAudit } from '../repositories/auditRepository.js';
+import { securityLogRepository } from '../repositories/securityLogRepository.js';
 
 let googleOAuthClient = new OAuth2Client(config.google?.clientId || '');
 
@@ -37,7 +38,7 @@ function issueJwt(user) {
 }
 
 export const authService = {
-  async register({ full_name, email, password }) {
+  async register({ full_name, email, password, ipAddress = null, userAgent = null }) {
     const normalizedEmail = email.trim().toLowerCase();
     const existing = await userRepository.findByEmail(normalizedEmail);
 
@@ -56,6 +57,21 @@ export const authService = {
         err.code = 'CONFLICT';
         throw err;
       }
+
+      // Check 60-second cooldown on idempotent re-registration to prevent spam bypass
+      const existingToken = await tokenRepository.findByUserId(existing.id);
+      if (existingToken && existingToken.last_sent_at) {
+        const elapsedMs = Date.now() - new Date(existingToken.last_sent_at).getTime();
+        if (elapsedMs < 60000) {
+          const remainingSeconds = Math.ceil((60000 - elapsedMs) / 1000);
+          const err = new Error(`Please wait ${remainingSeconds} seconds before requesting a new code.`);
+          err.statusCode = 429;
+          err.code = 'RESEND_COOLDOWN';
+          err.details = { cooldown_seconds: remainingSeconds };
+          throw err;
+        }
+      }
+
       const passwordHash = await bcrypt.hash(password, 10);
       user = await userRepository.updateUnverifiedUser(existing.id, {
         fullName: full_name,
@@ -76,11 +92,20 @@ export const authService = {
     const tokenHash = hashOtp(otp);
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-    await tokenRepository.createOrUpdateToken({
-      userId: user.id,
-      tokenHash,
-      expiresAt
-    });
+    if (existing) {
+      await tokenRepository.createOrUpdateTokenWithCooldown({
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        cooldownMs: 60000
+      });
+    } else {
+      await tokenRepository.createOrUpdateToken({
+        userId: user.id,
+        tokenHash,
+        expiresAt
+      });
+    }
 
     let emailSent = true;
     try {
@@ -110,7 +135,7 @@ export const authService = {
     };
   },
 
-  async verifyEmail({ email, otp }) {
+  async verifyEmail({ email, otp, ipAddress = null, userAgent = null }) {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await userRepository.findByEmail(normalizedEmail);
 
@@ -136,6 +161,30 @@ export const authService = {
       throw err;
     }
 
+    // 1. Check max attempt lockout / invalidation FIRST
+    if (tokenRecord.attempts >= 5 || tokenRecord.token_hash === 'INVALIDATED') {
+      await securityLogRepository.logEvent({
+        eventType: 'MAX_ATTEMPTS_EXCEEDED',
+        severity: 'WARNING',
+        userId: user.id,
+        userEmail: user.email,
+        ipAddress,
+        userAgent,
+        details: `Blocked verification attempt on locked account for user ${user.email}. Maximum attempts (5) already exceeded.`,
+        metadata: {
+          userId: user.id,
+          email: user.email,
+          attempts: tokenRecord.attempts
+        }
+      }).catch(() => {});
+
+      const err = new Error('Too many incorrect attempts. Please request a new verification code.');
+      err.statusCode = 429;
+      err.code = 'MAX_ATTEMPTS_EXCEEDED';
+      throw err;
+    }
+
+    // 2. Check expiration
     if (new Date() > new Date(tokenRecord.expires_at)) {
       const err = new Error('Verification code has expired. Please request a new code.');
       err.statusCode = 400;
@@ -143,24 +192,43 @@ export const authService = {
       throw err;
     }
 
-    if (tokenRecord.attempts >= 5) {
-      const err = new Error('Too many incorrect attempts. Please request a new verification code.');
-      err.statusCode = 429;
-      err.code = 'MAX_ATTEMPTS_EXCEEDED';
-      throw err;
-    }
-
+    // 3. Verify OTP hash
     const isValid = verifyOtpHash(otp, tokenRecord.token_hash);
     if (!isValid) {
       const newAttempts = await tokenRepository.incrementAttempts(user.id);
       const remainingAttempts = Math.max(0, 5 - newAttempts);
+
+      if (newAttempts >= 5) {
+        await tokenRepository.invalidateToken(user.id);
+
+        await securityLogRepository.logEvent({
+          eventType: 'MAX_ATTEMPTS_EXCEEDED',
+          severity: 'HIGH',
+          userId: user.id,
+          userEmail: user.email,
+          ipAddress,
+          userAgent,
+          details: `Maximum OTP verification attempts exceeded (5 failed attempts). Active OTP invalidated and verification locked for user ${user.email}.`,
+          metadata: {
+            userId: user.id,
+            email: user.email,
+            attempts: newAttempts,
+            maxAttempts: 5,
+            action: 'OTP_INVALIDATED'
+          }
+        }).catch(() => {});
+
+        const err = new Error('Too many incorrect attempts. Please request a new verification code.');
+        err.statusCode = 429;
+        err.code = 'MAX_ATTEMPTS_EXCEEDED';
+        throw err;
+      }
+
       const err = new Error(
-        remainingAttempts > 0
-          ? `Incorrect verification code. ${remainingAttempts} attempt(s) remaining.`
-          : 'Too many incorrect attempts. Please request a new verification code.'
+        `Incorrect verification code. ${remainingAttempts} attempt(s) remaining.`
       );
-      err.statusCode = remainingAttempts === 0 ? 429 : 400;
-      err.code = remainingAttempts === 0 ? 'MAX_ATTEMPTS_EXCEEDED' : 'INVALID_OTP';
+      err.statusCode = 400;
+      err.code = 'INVALID_OTP';
       throw err;
     }
 
@@ -181,7 +249,7 @@ export const authService = {
     };
   },
 
-  async resendVerification({ email }) {
+  async resendVerification({ email, ipAddress = null, userAgent = null }) {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await userRepository.findByEmail(normalizedEmail);
 
@@ -192,24 +260,32 @@ export const authService = {
       };
     }
 
-    const existingToken = await tokenRepository.findByUserId(user.id);
-    if (existingToken && existingToken.last_sent_at) {
-      const elapsedMs = Date.now() - new Date(existingToken.last_sent_at).getTime();
-      if (elapsedMs < 60000) {
-        const remainingSeconds = Math.ceil((60000 - elapsedMs) / 1000);
-        const err = new Error(`Please wait ${remainingSeconds} seconds before requesting a new code.`);
-        err.statusCode = 429;
-        err.code = 'RESEND_COOLDOWN';
-        err.details = { cooldown_seconds: remainingSeconds };
-        throw err;
-      }
-    }
-
     const otp = generateOtp();
     const tokenHash = hashOtp(otp);
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-    await tokenRepository.createOrUpdateToken({ userId: user.id, tokenHash, expiresAt });
+    try {
+      await tokenRepository.createOrUpdateTokenWithCooldown({
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        cooldownMs: 60000
+      });
+    } catch (err) {
+      if (err.code === 'RESEND_COOLDOWN') {
+        await securityLogRepository.logEvent({
+          eventType: 'RESEND_COOLDOWN_BLOCKED',
+          severity: 'WARNING',
+          userId: user.id,
+          userEmail: user.email,
+          ipAddress,
+          userAgent,
+          details: `Verification OTP resend requested before cooldown elapsed for ${user.email}. Remaining cooldown: ${err.details?.cooldown_seconds}s.`,
+          metadata: { userId: user.id, email: user.email, cooldown_seconds: err.details?.cooldown_seconds }
+        }).catch(() => {});
+      }
+      throw err;
+    }
 
     try {
       await emailService.sendVerificationOtp({ email: user.email, fullName: user.full_name, otp });

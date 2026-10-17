@@ -41,6 +41,90 @@ export const tokenRepository = {
     return tokenRecord;
   },
 
+  async createOrUpdateTokenWithCooldown({ userId, tokenHash, expiresAt, cooldownMs = 60000 }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    if (isPostgresConnected && pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const checkRes = await client.query(
+          `SELECT * FROM email_verification_tokens WHERE user_id = $1 FOR UPDATE`,
+          [userId]
+        );
+        const existing = checkRes.rows[0];
+        if (existing && existing.last_sent_at) {
+          const elapsedMs = Date.now() - new Date(existing.last_sent_at).getTime();
+          if (elapsedMs < cooldownMs) {
+            await client.query('ROLLBACK');
+            const remainingSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
+            const err = new Error(`Please wait ${remainingSeconds} seconds before requesting a new code.`);
+            err.statusCode = 429;
+            err.code = 'RESEND_COOLDOWN';
+            err.details = { cooldown_seconds: remainingSeconds };
+            throw err;
+          }
+        }
+
+        const insertRes = await client.query(
+          `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, attempts, last_sent_at, created_at)
+           VALUES ($1, $2, $3, $4, 0, $5, $5)
+           ON CONFLICT (user_id) DO UPDATE
+           SET token_hash = EXCLUDED.token_hash,
+               expires_at = EXCLUDED.expires_at,
+               attempts = 0,
+               last_sent_at = EXCLUDED.last_sent_at
+           RETURNING *`,
+          [id, userId, tokenHash, expiresAt, now]
+        );
+        await client.query('COMMIT');
+        return insertRes.rows[0];
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (_) {}
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    const existingIdx = memoryStore.email_verification_tokens.findIndex(t => t.user_id === userId);
+    if (existingIdx !== -1) {
+      const existing = memoryStore.email_verification_tokens[existingIdx];
+      if (existing.last_sent_at) {
+        const elapsedMs = Date.now() - new Date(existing.last_sent_at).getTime();
+        if (elapsedMs < cooldownMs) {
+          const remainingSeconds = Math.ceil((cooldownMs - elapsedMs) / 1000);
+          const err = new Error(`Please wait ${remainingSeconds} seconds before requesting a new code.`);
+          err.statusCode = 429;
+          err.code = 'RESEND_COOLDOWN';
+          err.details = { cooldown_seconds: remainingSeconds };
+          throw err;
+        }
+      }
+    }
+
+    const tokenRecord = {
+      id: existingIdx !== -1 ? memoryStore.email_verification_tokens[existingIdx].id : id,
+      user_id: userId,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+      attempts: 0,
+      last_sent_at: now,
+      created_at: existingIdx !== -1 ? memoryStore.email_verification_tokens[existingIdx].created_at : now
+    };
+
+    if (existingIdx !== -1) {
+      memoryStore.email_verification_tokens[existingIdx] = tokenRecord;
+    } else {
+      memoryStore.email_verification_tokens.push(tokenRecord);
+    }
+
+    return tokenRecord;
+  },
+
   async findByUserId(userId) {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
@@ -57,7 +141,8 @@ export const tokenRepository = {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `UPDATE email_verification_tokens 
-         SET attempts = attempts + 1 
+         SET attempts = attempts + 1,
+             token_hash = CASE WHEN attempts + 1 >= 5 THEN 'INVALIDATED' ELSE token_hash END
          WHERE user_id = $1 
          RETURNING attempts`,
         [userId]
@@ -68,9 +153,32 @@ export const tokenRepository = {
     const token = memoryStore.email_verification_tokens.find(t => t.user_id === userId);
     if (token) {
       token.attempts = (token.attempts || 0) + 1;
+      if (token.attempts >= 5) {
+        token.token_hash = 'INVALIDATED';
+      }
       return token.attempts;
     }
     return 1;
+  },
+
+  async invalidateToken(userId) {
+    if (isPostgresConnected && pool) {
+      await pool.query(
+        `UPDATE email_verification_tokens 
+         SET token_hash = 'INVALIDATED', attempts = GREATEST(attempts, 5) 
+         WHERE user_id = $1`,
+        [userId]
+      );
+      return true;
+    }
+
+    const token = memoryStore.email_verification_tokens.find(t => t.user_id === userId);
+    if (token) {
+      token.token_hash = 'INVALIDATED';
+      token.attempts = Math.max(token.attempts || 0, 5);
+      return true;
+    }
+    return false;
   },
 
   async deleteByUserId(userId) {
@@ -159,5 +267,14 @@ export const tokenRepository = {
     }
     const token = memoryStore.email_verification_tokens.find(t => t.user_id === userId);
     if (token) token.last_sent_at = lastSentAt;
+  },
+
+  async setTokenAttemptsForTest(userId, attempts) {
+    if (isPostgresConnected && pool) {
+      await pool.query(`UPDATE email_verification_tokens SET attempts = $1 WHERE user_id = $2`, [attempts, userId]);
+      return;
+    }
+    const token = memoryStore.email_verification_tokens.find(t => t.user_id === userId);
+    if (token) token.attempts = attempts;
   }
 };

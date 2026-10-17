@@ -31,14 +31,16 @@ export const authController = {
   async register(req, res, next) {
     try {
       const validatedData = registerSchema.parse(req.body);
-      const result = await authService.register(validatedData);
+      const ipAddress = req.ip || req.headers['x-forwarded-for'];
+      const userAgent = req.headers['user-agent'];
+      const result = await authService.register({ ...validatedData, ipAddress, userAgent });
       securityLogRepository.logEvent({
         eventType: 'REGISTER_SUCCESS',
         severity: 'INFO',
         userId: result.user?.id,
         userEmail: result.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for'],
-        userAgent: req.headers['user-agent'],
+        ipAddress,
+        userAgent,
         details: `New account registered for ${result.user?.email} (${result.user?.role || 'STUDENT'})`
       }).catch(() => {});
 
@@ -55,14 +57,16 @@ export const authController = {
   async verifyEmail(req, res, next) {
     try {
       const validatedData = verifyEmailSchema.parse(req.body);
-      const result = await authService.verifyEmail(validatedData);
+      const ipAddress = req.ip || req.headers['x-forwarded-for'];
+      const userAgent = req.headers['user-agent'];
+      const result = await authService.verifyEmail({ ...validatedData, ipAddress, userAgent });
       securityLogRepository.logEvent({
         eventType: 'EMAIL_VERIFIED',
         severity: 'INFO',
         userId: result.user?.id,
         userEmail: result.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for'],
-        userAgent: req.headers['user-agent'],
+        ipAddress,
+        userAgent,
         details: `Email verified successfully for ${result.user?.email}`
       }).catch(() => {});
 
@@ -79,7 +83,9 @@ export const authController = {
   async resendVerification(req, res, next) {
     try {
       const validatedData = resendVerificationSchema.parse(req.body);
-      const result = await authService.resendVerification(validatedData);
+      const ipAddress = req.ip || req.headers['x-forwarded-for'];
+      const userAgent = req.headers['user-agent'];
+      const result = await authService.resendVerification({ ...validatedData, ipAddress, userAgent });
       return res.status(200).json({
         success: true,
         data: result,

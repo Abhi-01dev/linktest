@@ -5,6 +5,7 @@ import { initDb } from '../src/db/index.js';
 import { emailService } from '../src/services/emailService.js';
 import { tokenRepository } from '../src/repositories/tokenRepository.js';
 import { userRepository } from '../src/repositories/userRepository.js';
+import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
 
 let server;
 let baseUrl;
@@ -406,6 +407,192 @@ describe('LinkTest API End-to-End Suite', () => {
     } finally {
       emailService.sendVerificationOtp = originalSend;
     }
+  });
+
+  test('10g. Idempotent registration enforces 60-second cooldown', async () => {
+    const email = `idempotent.reg.${Date.now()}@linktest.io`;
+    // Initial registration
+    const firstReg = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Idempotent User',
+        email,
+        password: 'Password123!'
+      })
+    });
+    assert.strictEqual(firstReg.status, 201);
+
+    // Immediate second registration with same email
+    const secondReg = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Idempotent User Updated',
+        email,
+        password: 'NewPassword123!'
+      })
+    });
+    assert.strictEqual(secondReg.status, 429);
+    const secondBody = await secondReg.json();
+    assert.strictEqual(secondBody.error.code, 'RESEND_COOLDOWN');
+    assert.ok(secondBody.error.details?.cooldown_seconds > 0);
+
+    // After cooldown has passed, idempotent registration succeeds
+    const user = await userRepository.findByEmail(email);
+    await tokenRepository.setTokenLastSentAtForTest(user.id, new Date(Date.now() - 120 * 1000).toISOString());
+
+    const thirdReg = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Idempotent User Allowed',
+        email,
+        password: 'Password123!'
+      })
+    });
+    assert.strictEqual(thirdReg.status, 201);
+  });
+
+  test('10h. Full OTP verification attempt lockout lifecycle (Manual steps A through J)', async () => {
+    const email = `lifecycle.${Date.now()}@linktest.io`;
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Lifecycle Student',
+        email,
+        password: 'Password123!'
+      })
+    });
+    assert.strictEqual(regRes.status, 201);
+    const user = await userRepository.findByEmail(email);
+
+    // A. First resend allowed after cooldown
+    await tokenRepository.setTokenLastSentAtForTest(user.id, new Date(Date.now() - 120 * 1000).toISOString());
+    const resendA = await fetch(`${baseUrl}/api/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    assert.strictEqual(resendA.status, 200);
+    const otpHolderA = emailService.getLastSentEmail().otp;
+    assert.ok(otpHolderA);
+
+    // B. Immediate second resend -> 429 RESEND_COOLDOWN
+    const resendB = await fetch(`${baseUrl}/api/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    assert.strictEqual(resendB.status, 429);
+    const bodyB = await resendB.json();
+    assert.strictEqual(bodyB.error.code, 'RESEND_COOLDOWN');
+
+    // C. After cooldown -> new OTP allowed and attempts reset
+    await tokenRepository.setTokenLastSentAtForTest(user.id, new Date(Date.now() - 120 * 1000).toISOString());
+    const resendC = await fetch(`${baseUrl}/api/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    assert.strictEqual(resendC.status, 200);
+    const activeOtp = emailService.getLastSentEmail().otp;
+    const tokenC = await tokenRepository.findByUserId(user.id);
+    assert.strictEqual(tokenC.attempts, 0, 'Attempts counter must be 0 after fresh OTP issuance');
+
+    // D. Wrong OTP #1 -> rejected
+    const attempt1 = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: '000000' })
+    });
+    assert.strictEqual(attempt1.status, 400);
+    const body1 = await attempt1.json();
+    assert.strictEqual(body1.error.code, 'INVALID_OTP');
+    assert.ok(body1.error.message.includes('4 attempt(s) remaining'));
+
+    // E. Wrong OTP #2 -> rejected
+    const attempt2 = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: '000000' })
+    });
+    assert.strictEqual(attempt2.status, 400);
+    assert.strictEqual((await attempt2.json()).error.code, 'INVALID_OTP');
+
+    // F. Wrong OTP #3 -> rejected
+    const attempt3 = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: '000000' })
+    });
+    assert.strictEqual(attempt3.status, 400);
+    assert.strictEqual((await attempt3.json()).error.code, 'INVALID_OTP');
+
+    // G. Wrong OTP #4 -> rejected
+    const attempt4 = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: '000000' })
+    });
+    assert.strictEqual(attempt4.status, 400);
+    const body4 = await attempt4.json();
+    assert.strictEqual(body4.error.code, 'INVALID_OTP');
+    assert.ok(body4.error.message.includes('1 attempt(s) remaining'));
+
+    // H. Wrong OTP #5 -> 429 MAX_ATTEMPTS_EXCEEDED and OTP invalidated
+    const attempt5 = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: '000000' })
+    });
+    assert.strictEqual(attempt5.status, 429);
+    const body5 = await attempt5.json();
+    assert.strictEqual(body5.error.code, 'MAX_ATTEMPTS_EXCEEDED');
+
+    // Verify OTP token is invalidated in database
+    const lockedToken = await tokenRepository.findByUserId(user.id);
+    assert.strictEqual(lockedToken.token_hash, 'INVALIDATED');
+    assert.ok(lockedToken.attempts >= 5);
+
+    // Verify security log recorded
+    const logsRes = await securityLogRepository.getLogs({ search: email, limit: 10 });
+    const lockoutLog = logsRes.logs.find(l => l.event_type === 'MAX_ATTEMPTS_EXCEEDED');
+    assert.ok(lockoutLog, 'A detailed MAX_ATTEMPTS_EXCEEDED security audit log must be recorded');
+
+    // I. Correct old OTP after lock -> rejected
+    const attemptOldValid = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: activeOtp })
+    });
+    assert.strictEqual(attemptOldValid.status, 429);
+    const bodyOldValid = await attemptOldValid.json();
+    assert.strictEqual(bodyOldValid.error.code, 'MAX_ATTEMPTS_EXCEEDED');
+
+    // J. New OTP after allowed resend -> works
+    await tokenRepository.setTokenLastSentAtForTest(user.id, new Date(Date.now() - 120 * 1000).toISOString());
+    const resendJ = await fetch(`${baseUrl}/api/auth/resend-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    assert.strictEqual(resendJ.status, 200);
+
+    const freshOtp = emailService.getLastSentEmail().otp;
+    assert.ok(freshOtp);
+
+    const verifySuccess = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp: freshOtp })
+    });
+    assert.strictEqual(verifySuccess.status, 200);
+    const successBody = await verifySuccess.json();
+    assert.strictEqual(successBody.success, true);
+    assert.strictEqual(successBody.data.user.email_verified, true);
+    assert.ok(successBody.data.token);
   });
 
   test('11. Seeded Admin can log in successfully', async () => {
