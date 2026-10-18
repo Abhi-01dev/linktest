@@ -66,6 +66,14 @@ describe('LinkTest API End-to-End Suite', () => {
     assert.strictEqual(lastEmail.to, uniqueEmail);
     assert.strictEqual(lastEmail.subject, 'Verify your email address — LinkTest');
     assert.match(lastEmail.otp, /^\d{6}$/, 'OTP must be a 6-digit numeric code');
+
+    // Verify token stored securely (hashed) and TTL is 10 minutes
+    const regUser = await userRepository.findByEmail(uniqueEmail);
+    const tokenRecord = await tokenRepository.findByUserId(regUser.id);
+    assert.ok(tokenRecord, 'A token record must be persisted');
+    assert.notStrictEqual(tokenRecord.token_hash, lastEmail.otp, 'Token must be stored as hash, not plaintext');
+    const ttlMs = new Date(tokenRecord.expires_at).getTime() - Date.now();
+    assert.ok(ttlMs > 9 * 60 * 1000 && ttlMs <= 10 * 60 * 1000 + 5000, 'OTP must have a 10-minute TTL');
   });
 
   test('3. Invalid email format is rejected by validation', async () => {
@@ -110,6 +118,7 @@ describe('LinkTest API End-to-End Suite', () => {
     const body = await loginRes.json();
     assert.strictEqual(body.success, false);
     assert.strictEqual(body.error.code, 'EMAIL_NOT_VERIFIED');
+    assert.strictEqual(body.error.message, 'Please verify your email before logging in.');
   });
 
   test('5. Incorrect OTP verification is rejected and counts attempts', async () => {
@@ -165,6 +174,7 @@ describe('LinkTest API End-to-End Suite', () => {
     const body = await verifyRes.json();
     assert.strictEqual(body.success, true);
     assert.strictEqual(body.data.user.email_verified, true);
+    assert.ok(body.data.user.email_verified_at, 'email_verified_at must be populated upon verification');
     assert.ok(body.data.token, 'A valid JWT session must be issued upon email verification');
     studentToken = body.data.token;
 

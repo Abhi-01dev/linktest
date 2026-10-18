@@ -118,7 +118,7 @@ function buildVerificationHtml(fullName, otp) {
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 24px; background-color: #F1F5F9; border-radius: 8px; padding: 12px 16px;">
                 <tr>
                   <td style="font-size: 13px; color: #334155;">
-                    ⏱️ <strong>This code will expire in 5 minutes.</strong> For security purposes, never share this code with anyone. LinkTest staff will never ask for your code.
+                    ⏱️ <strong>This code will expire in 10 minutes.</strong> For security purposes, never share this code with anyone. LinkTest staff will never ask for your code.
                   </td>
                 </tr>
               </table>
@@ -160,7 +160,7 @@ Welcome to LinkTest! To complete your registration and activate your student acc
 
 Verification Code: ${otp}
 
-⏱️ This code will expire in 5 minutes.
+⏱️ This code will expire in 10 minutes.
 For security, do not share this code with anyone.
 
 If you did not request this registration, you can safely ignore this email.
@@ -207,7 +207,7 @@ export const emailService = {
     console.log('----------------------------------------------------------------');
     console.log(`  To:       ${email} (${fullName})`);
     console.log(`  Code:     ${otp}`);
-    console.log(`  Expires:  In 5 minutes`);
+    console.log(`  Expires:  In 10 minutes`);
     console.log('================================================================');
 
     lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };

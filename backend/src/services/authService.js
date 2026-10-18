@@ -37,6 +37,9 @@ function issueJwt(user) {
   );
 }
 
+// 10-minute OTP TTL as required by Issue #1
+const OTP_TTL_MS = 10 * 60 * 1000;
+
 export const authService = {
   async register({ full_name, email, password, ipAddress = null, userAgent = null }) {
     const normalizedEmail = email.trim().toLowerCase();
@@ -90,7 +93,7 @@ export const authService = {
 
     const otp = generateOtp();
     const tokenHash = hashOtp(otp);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
 
     if (existing) {
       await tokenRepository.createOrUpdateTokenWithCooldown({
@@ -262,7 +265,7 @@ export const authService = {
 
     const otp = generateOtp();
     const tokenHash = hashOtp(otp);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
 
     try {
       await tokenRepository.createOrUpdateTokenWithCooldown({
@@ -330,7 +333,7 @@ export const authService = {
     }
 
     if (!user.email_verified) {
-      const err = new Error('Please verify your email address before logging in.');
+      const err = new Error('Please verify your email before logging in.');
       err.statusCode = 403;
       err.code = 'EMAIL_NOT_VERIFIED';
       err.details = { email: user.email, unverified: true };
