@@ -4,6 +4,7 @@ import { securityLogRepository } from '../repositories/securityLogRepository.js'
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 50, // limit each IP to 50 requests per window
+  skip: () => process.env.NODE_ENV === 'test' || process.env.MOCK_EMAIL === 'true',
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req, res) => {

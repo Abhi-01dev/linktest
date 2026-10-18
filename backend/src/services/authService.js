@@ -621,7 +621,15 @@ export const authService = {
         throw err;
       }
 
-      // 3. Verify stable subject identifier (sub)
+      // 3. Verify token has not expired
+      if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+        const err = new Error('Invalid or expired Google authentication token.');
+        err.statusCode = 401;
+        err.code = 'INVALID_GOOGLE_TOKEN';
+        throw err;
+      }
+
+      // 4. Verify stable subject identifier (sub)
       if (!payload.sub) {
         const err = new Error('Missing Google user subject identifier (sub).');
         err.statusCode = 401;
@@ -629,7 +637,7 @@ export const authService = {
         throw err;
       }
 
-      // 4. Verify email existence and verified status
+      // 5. Verify email existence and verified status
       if (!payload.email) {
         const err = new Error('Google credential must include an email address.');
         err.statusCode = 400;
@@ -637,7 +645,7 @@ export const authService = {
         throw err;
       }
 
-      if (payload.email_verified === false) {
+      if (!payload.email_verified) {
         const err = new Error('Google email address must be verified by Google to sign in.');
         err.statusCode = 403;
         err.code = 'GOOGLE_EMAIL_NOT_VERIFIED';
@@ -647,9 +655,9 @@ export const authService = {
       return payload;
     } catch (err) {
       if (err.statusCode) throw err;
-      const verifyErr = new Error(`Google authentication failed: ${err.message}`);
+      const verifyErr = new Error('Invalid or expired Google authentication token.');
       verifyErr.statusCode = 401;
-      verifyErr.code = 'GOOGLE_AUTH_FAILED';
+      verifyErr.code = 'INVALID_GOOGLE_TOKEN';
       throw verifyErr;
     }
   },
@@ -679,6 +687,10 @@ export const authService = {
         err.statusCode = 403;
         err.code = 'ACCOUNT_DEACTIVATED';
         throw err;
+      }
+
+      if (!user.email_verified) {
+        await userRepository.markEmailVerified(user.id);
       }
 
       await userRepository.updateLastLogin(user.id);

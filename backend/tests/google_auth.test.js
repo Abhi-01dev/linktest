@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
 import { userRepository } from '../src/repositories/userRepository.js';
+import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
 import { authService, setGoogleOAuthClient, getGoogleOAuthClient } from '../src/services/authService.js';
 import { config } from '../src/config/env.js';
 
@@ -60,7 +61,7 @@ describe('LinkTest Google OAuth 2.0 & OpenID Connect Suite', () => {
     assert.strictEqual(res.status, 401);
     const body = await res.json();
     assert.strictEqual(body.success, false);
-    assert.strictEqual(body.error.code, 'GOOGLE_AUTH_FAILED');
+    assert.strictEqual(body.error.code, 'INVALID_GOOGLE_TOKEN');
   });
 
   test('3. Reject Google token with untrusted issuer', async () => {
@@ -374,5 +375,155 @@ describe('LinkTest Google OAuth 2.0 & OpenID Connect Suite', () => {
     const body = await res.json();
     assert.strictEqual(body.success, true);
     assert.ok(body.data.auth_methods.includes('google_oauth2'));
+  });
+
+  test('11. Reject expired Google ID token with INVALID_GOOGLE_TOKEN', async () => {
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: 'google-sub-expired',
+          email: 'expired@example.com',
+          email_verified: true,
+          exp: Math.floor(Date.now() / 1000) - 3600
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'expired.google.token' })
+    });
+
+    assert.strictEqual(res.status, 401);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'INVALID_GOOGLE_TOKEN');
+  });
+
+  test('12. Respect account security rules for suspended/deactivated user attempting Google login', async () => {
+    const suspendedEmail = `suspended.user.${Date.now()}@example.com`;
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Suspended User',
+        email: suspendedEmail,
+        password: 'Password123!'
+      })
+    });
+    const regBody = await regRes.json();
+    await userRepository.updateStatus(regBody.data.user.id, 'suspended');
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-susp-${Date.now()}`,
+          email: suspendedEmail,
+          email_verified: true
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.for.suspended' })
+    });
+
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'ACCOUNT_SUSPENDED');
+  });
+
+  test('13. Google authentication strictly prevents role escalation', async () => {
+    const emailA = `role.test.${Date.now()}@example.com`;
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-role-${Date.now()}`,
+          email: emailA,
+          email_verified: true,
+          role: 'ADMIN',
+          isAdmin: true
+        })
+      })
+    });
+
+    const resA = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.role.test' })
+    });
+    assert.strictEqual(resA.status, 200);
+    const bodyA = await resA.json();
+    assert.strictEqual(bodyA.data.user.role, 'STUDENT', 'New user MUST be assigned STUDENT role only');
+
+    const teacherEmail = `existing.teacher.${Date.now()}@example.com`;
+    await userRepository.create({
+      fullName: 'Teacher Jane',
+      email: teacherEmail,
+      passwordHash: 'hashedpass',
+      role: 'TEACHER',
+      emailVerified: true
+    });
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-teacher-${Date.now()}`,
+          email: teacherEmail,
+          email_verified: true
+        })
+      })
+    });
+
+    const resTeacher = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.teacher.test' })
+    });
+    assert.strictEqual(resTeacher.status, 200);
+    const bodyTeacher = await resTeacher.json();
+    assert.strictEqual(bodyTeacher.data.user.role, 'TEACHER', 'Existing user role must be preserved');
+  });
+
+  test('14. Google sign-in records security audit events', async () => {
+    const auditEmail = `audit.test.${Date.now()}@example.com`;
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-audit-${Date.now()}`,
+          email: auditEmail,
+          email_verified: true,
+          name: 'Audit User'
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'LinkTestAuditAgent/1.0'
+      },
+      body: JSON.stringify({ credential: 'token.audit.test' })
+    });
+    assert.strictEqual(res.status, 200);
+
+    const logs = await securityLogRepository.getLogs({ search: auditEmail });
+    assert.ok(logs.logs.length > 0, 'Security log must be recorded for Google auth');
+    const googleLog = logs.logs.find(l => l.user_email === auditEmail);
+    assert.ok(googleLog);
+    assert.strictEqual(googleLog.metadata.authMethod, 'GOOGLE');
   });
 });

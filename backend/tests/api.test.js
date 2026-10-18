@@ -6,15 +6,19 @@ import { emailService } from '../src/services/emailService.js';
 import { tokenRepository } from '../src/repositories/tokenRepository.js';
 import { userRepository } from '../src/repositories/userRepository.js';
 import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
+import { setGoogleOAuthClient, getGoogleOAuthClient } from '../src/services/authService.js';
+import { config } from '../src/config/env.js';
 
 let server;
 let baseUrl;
 let studentToken;
 let adminToken;
+let originalGoogleClient;
 
 describe('LinkTest API End-to-End Suite', () => {
   before(async () => {
     process.env.MOCK_EMAIL = 'true';
+    originalGoogleClient = getGoogleOAuthClient();
     await initDb();
     await new Promise((resolve) => {
       server = app.listen(0, () => {
@@ -26,6 +30,7 @@ describe('LinkTest API End-to-End Suite', () => {
   });
 
   after(async () => {
+    setGoogleOAuthClient(originalGoogleClient);
     if (server) {
       await new Promise((resolve) => server.close(resolve));
     }
@@ -724,5 +729,389 @@ describe('LinkTest API End-to-End Suite', () => {
     assert.strictEqual(body.success, true);
     assert.ok(body.data.model);
     assert.ok(body.data.status_message);
+  });
+
+  // ============================================================
+  // GOOGLE IDENTITY SERVICES (GIS) AUTHENTICATION TESTS (19 - 30)
+  // ============================================================
+
+  test('19. Google Auth — Valid Google ID token resolves user and returns LinkTest JWT', async () => {
+    const uniqueEmail = `gis.valid.${Date.now()}@linktest.io`;
+    const uniqueSub = `sub-gis-valid-${Date.now()}`;
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: uniqueSub,
+          email: uniqueEmail,
+          email_verified: true,
+          name: 'GIS Valid User',
+          picture: 'https://lh3.googleusercontent.com/photo.jpg'
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'valid.mock.gis.token' })
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.success, true);
+    assert.strictEqual(body.data.user.email, uniqueEmail);
+    assert.strictEqual(body.data.user.google_id, uniqueSub);
+    assert.ok(body.data.token, 'Must return LinkTest session JWT');
+  });
+
+  test('20. Google Auth — Existing user with Google email links identity, preserves role, and returns JWT without duplicate', async () => {
+    const existingEmail = `gis.existing.${Date.now()}@linktest.io`;
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Existing Account User',
+        email: existingEmail,
+        password: 'Password123!'
+      })
+    });
+    assert.strictEqual(regRes.status, 201);
+
+    const uniqueSub = `sub-gis-existing-${Date.now()}`;
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: uniqueSub,
+          email: existingEmail,
+          email_verified: true,
+          name: 'Existing Account User (Google)'
+        })
+      })
+    });
+
+    const linkRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'valid.mock.link.token' })
+    });
+
+    assert.strictEqual(linkRes.status, 200);
+    const body = await linkRes.json();
+    assert.strictEqual(body.data.is_new_user, false);
+    assert.strictEqual(body.data.account_linked, true);
+    assert.strictEqual(body.data.user.email, existingEmail);
+    assert.strictEqual(body.data.user.role, 'STUDENT');
+    assert.strictEqual(body.data.user.google_id, uniqueSub);
+    assert.ok(body.data.token);
+  });
+
+  test('21. Google Auth — New Google email creates active STUDENT account with email_verified=true and returns JWT', async () => {
+    const newEmail = `gis.newstudent.${Date.now()}@linktest.io`;
+    const newSub = `sub-gis-new-${Date.now()}`;
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: newSub,
+          email: newEmail,
+          email_verified: true,
+          name: 'Ananya Roy',
+          picture: 'https://lh3.googleusercontent.com/ananya.jpg'
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'valid.mock.newuser.token' })
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.data.is_new_user, true);
+    assert.strictEqual(body.data.user.role, 'STUDENT');
+    assert.strictEqual(body.data.user.email_verified, true);
+    assert.strictEqual(body.data.user.status, 'active');
+    assert.strictEqual(body.data.user.google_id, newSub);
+    assert.ok(body.data.token);
+  });
+
+  test('22. Google Auth — Invalid Google token rejected with HTTP 401 & code INVALID_GOOGLE_TOKEN', async () => {
+    setGoogleOAuthClient({
+      verifyIdToken: async () => {
+        throw new Error('Invalid token signature or cryptographic verification failed');
+      }
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'tampered.or.invalid.token' })
+    });
+
+    assert.strictEqual(res.status, 401);
+    const body = await res.json();
+    assert.strictEqual(body.success, false);
+    assert.strictEqual(body.error.code, 'INVALID_GOOGLE_TOKEN');
+  });
+
+  test('23. Google Auth — Expired Google token rejected with HTTP 401', async () => {
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: 'sub-expired',
+          email: 'expired@linktest.io',
+          email_verified: true,
+          exp: Math.floor(Date.now() / 1000) - 1800
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'expired.token' })
+    });
+
+    assert.strictEqual(res.status, 401);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'INVALID_GOOGLE_TOKEN');
+  });
+
+  test('24. Google Auth — Wrong audience rejected with HTTP 401', async () => {
+    const prevClientId = config.google.clientId;
+    config.google.clientId = 'linktest-expected-client-id.apps.googleusercontent.com';
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: 'unauthorized-client-id.apps.googleusercontent.com',
+          sub: 'sub-wrong-aud',
+          email: 'wrongaud@linktest.io',
+          email_verified: true
+        })
+      })
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: 'wrong.aud.token' })
+      });
+
+      assert.strictEqual(res.status, 401);
+      const body = await res.json();
+      assert.strictEqual(body.error.code, 'AUDIENCE_MISMATCH');
+    } finally {
+      config.google.clientId = prevClientId;
+    }
+  });
+
+  test('25. Google Auth — Invalid issuer rejected with HTTP 401', async () => {
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://fraudulent-issuer.com',
+          aud: config.google.clientId || undefined,
+          sub: 'sub-bad-iss',
+          email: 'badissuer@linktest.io',
+          email_verified: true
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'bad.issuer.token' })
+    });
+
+    assert.strictEqual(res.status, 401);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'INVALID_ISSUER');
+  });
+
+  test('26. Google Auth — Unverified Google email rejected with HTTP 403', async () => {
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: 'sub-unverified-email',
+          email: 'notverified@linktest.io',
+          email_verified: false
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'unverified.email.token' })
+    });
+
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'GOOGLE_EMAIL_NOT_VERIFIED');
+  });
+
+  test('27. Google Auth — Disabled/suspended user account access is rejected (HTTP 403)', async () => {
+    const suspendedEmail = `gis.suspended.${Date.now()}@linktest.io`;
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Suspended Account User',
+        email: suspendedEmail,
+        password: 'Password123!'
+      })
+    });
+    const regBody = await regRes.json();
+    await userRepository.updateStatus(regBody.data.user.id, 'suspended');
+
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-gis-susp-${Date.now()}`,
+          email: suspendedEmail,
+          email_verified: true
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.for.suspended.user' })
+    });
+
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error.code, 'ACCOUNT_SUSPENDED');
+  });
+
+  test('28. Google Auth — Google login creates security and audit log', async () => {
+    const auditEmail = `gis.audit.${Date.now()}@linktest.io`;
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-gis-audit-${Date.now()}`,
+          email: auditEmail,
+          email_verified: true,
+          name: 'Audit Check User'
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'LinkTestAuditVerification/1.0'
+      },
+      body: JSON.stringify({ credential: 'token.audit.verify' })
+    });
+    assert.strictEqual(res.status, 200);
+
+    const logRes = await securityLogRepository.getLogs({ search: auditEmail });
+    assert.ok(logRes.logs.length > 0, 'Must record security log for Google authentication');
+    const matchedLog = logRes.logs.find(l => l.user_email === auditEmail);
+    assert.ok(matchedLog);
+    assert.strictEqual(matchedLog.metadata?.authMethod, 'GOOGLE');
+  });
+
+  test('29. Google Auth — Prevents role escalation (never creates ADMIN or TEACHER)', async () => {
+    const escalationAttemptEmail = `gis.escalate.${Date.now()}@linktest.io`;
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-gis-escalate-${Date.now()}`,
+          email: escalationAttemptEmail,
+          email_verified: true,
+          role: 'ADMIN',
+          is_admin: true,
+          admin: true
+        })
+      })
+    });
+
+    const res = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.attempting.escalation' })
+    });
+
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.data.user.role, 'STUDENT', 'Google registration MUST strictly assign STUDENT role');
+  });
+
+  test('30. Google Auth — Existing password login continues working after Google account linking', async () => {
+    const studentEmail = `gis.pwdkeep.${Date.now()}@linktest.io`;
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Password Retained Student',
+        email: studentEmail,
+        password: 'Password123!'
+      })
+    });
+    assert.strictEqual(regRes.status, 201);
+
+    // Link Google account
+    setGoogleOAuthClient({
+      verifyIdToken: async () => ({
+        getPayload: () => ({
+          iss: 'https://accounts.google.com',
+          aud: config.google.clientId || undefined,
+          sub: `sub-gis-pwd-${Date.now()}`,
+          email: studentEmail,
+          email_verified: true,
+          name: 'Password Retained Student (Google)'
+        })
+      })
+    });
+
+    const linkRes = await fetch(`${baseUrl}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: 'token.pwd.keep' })
+    });
+    assert.strictEqual(linkRes.status, 200);
+
+    // Verify existing password login still works
+    const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: studentEmail,
+        password: 'Password123!'
+      })
+    });
+
+    assert.strictEqual(loginRes.status, 200);
+    const loginBody = await loginRes.json();
+    assert.strictEqual(loginBody.success, true);
+    assert.strictEqual(loginBody.data.user.email, studentEmail);
+    assert.ok(loginBody.data.token);
   });
 });

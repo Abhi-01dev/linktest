@@ -23,6 +23,16 @@ export const resendVerificationSchema = z.object({
   email: z.string().email('Please enter a valid email address')
 });
 
+export const googleAuthSchema = z.object({
+  credential: z
+    .string({
+      required_error: 'Google credential token is required',
+      invalid_type_error: 'Google credential token must be a string'
+    })
+    .trim()
+    .min(1, 'Google credential token cannot be empty')
+});
+
 export const createCourseSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),
   description: z.string().min(10, 'Description must be at least 10 characters'),

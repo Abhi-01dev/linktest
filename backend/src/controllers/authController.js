@@ -4,7 +4,8 @@ import {
   registerSchema,
   loginSchema,
   verifyEmailSchema,
-  resendVerificationSchema
+  resendVerificationSchema,
+  googleAuthSchema
 } from '../validators/index.js';
 import { z } from 'zod';
 
@@ -235,9 +236,7 @@ export const authController = {
     const ipAddress = req.ip || req.headers['x-forwarded-for'];
     const userAgent = req.headers['user-agent'];
     try {
-      const { credential } = z.object({
-        credential: z.string().min(1, 'Google credential token is required')
-      }).parse(req.body);
+      const { credential } = googleAuthSchema.parse(req.body);
 
       const result = await authService.loginWithGoogle({ credential });
 
@@ -248,7 +247,13 @@ export const authController = {
         userEmail: result.user?.email,
         ipAddress,
         userAgent,
-        details: `Google authentication successful for ${result.user?.email}`
+        details: `Google authentication successful for ${result.user?.email}`,
+        metadata: {
+          authMethod: 'GOOGLE',
+          action: result.is_new_user ? 'GOOGLE_REGISTER' : (result.account_linked ? 'GOOGLE_ACCOUNT_LINKED' : 'GOOGLE_SIGN_IN'),
+          isNewUser: Boolean(result.is_new_user),
+          accountLinked: Boolean(result.account_linked)
+        }
       }).catch(() => {});
 
       return res.status(200).json({
@@ -266,7 +271,12 @@ export const authController = {
         severity: 'WARNING',
         ipAddress,
         userAgent,
-        details: `Google OAuth verification failed: ${err.message}`
+        details: `Google OAuth verification failed: ${err.message}`,
+        metadata: {
+          authMethod: 'GOOGLE',
+          action: 'GOOGLE_SIGN_IN_FAILED',
+          errorCode: err.code || 'UNAUTHORIZED'
+        }
       }).catch(() => {});
       next(err);
     }
