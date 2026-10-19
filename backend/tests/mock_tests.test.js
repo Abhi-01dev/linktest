@@ -46,7 +46,7 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const aBody = await adminRes.json();
     adminToken = aBody.data.token;
@@ -265,6 +265,7 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     assert.ok(Array.isArray(questions) && questions.length === 5);
     for (const q of questions) {
       assert.strictEqual(q.correct_answer, undefined, `Question ${q.id} must NOT have correct_answer`);
+      assert.strictEqual(q.answer_key, undefined, `Question ${q.id} must NOT have answer_key`);
       assert.strictEqual(q.explanation, undefined, `Question ${q.id} must NOT have explanation`);
     }
   });
@@ -274,8 +275,17 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     const attemptRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}`, {
       headers: { Authorization: `Bearer ${studentToken}` }
     });
+    assert.strictEqual(attemptRes.status, 200);
     const attemptBody = await attemptRes.json();
-    const actualQIds = attemptBody.data.questions.map((q) => q.id);
+    assert.strictEqual(attemptBody.success, true);
+    const questions = attemptBody.data.questions;
+    assert.ok(Array.isArray(questions) && questions.length === 5);
+    for (const q of questions) {
+      assert.strictEqual(q.correct_answer, undefined, `Question ${q.id} must NOT have correct_answer`);
+      assert.strictEqual(q.answer_key, undefined, `Question ${q.id} must NOT have answer_key`);
+      assert.strictEqual(q.explanation, undefined, `Question ${q.id} must NOT have explanation`);
+    }
+    const actualQIds = questions.map((q) => q.id);
 
     const actualAnswers = {
       [actualQIds[0]]: { selected: 'opt_2' },

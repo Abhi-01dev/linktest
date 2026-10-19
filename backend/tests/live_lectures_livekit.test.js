@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { initDb, pool, isPostgresConnected, memoryStore } from '../src/db/index.js';
+import { livekitService } from '../src/services/livekitService.js';
 import crypto from 'crypto';
 
 let server;
@@ -23,6 +24,9 @@ describe('LinkTest Phase 2 & 5: LiveKit Live Lectures & Batch Allocation E2E Sui
 
   before(async () => {
     process.env.MOCK_EMAIL = 'true';
+    livekitService.serverUrl = 'wss://test.livekit.cloud';
+    livekitService.apiKey = 'test-livekit-key';
+    livekitService.apiSecret = 'test-livekit-secret';
     await initDb();
     await new Promise((resolve) => {
       server = app.listen(0, () => {

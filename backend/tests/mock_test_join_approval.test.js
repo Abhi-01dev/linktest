@@ -33,7 +33,7 @@ describe('Mock Test Join Approval & Access Control Security Test Suite', () => {
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const aBody = await adminRes.json();
     adminToken = aBody.data.token;

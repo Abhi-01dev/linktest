@@ -265,3 +265,8 @@ Write-Host "=========================================="
 Write-Host "         SMOKE TEST RESULTS SUMMARY       "
 Write-Host "=========================================="
 $results | Format-Table -AutoSize
+$failedCount = @($results | Where-Object { $_.Result -eq "FAIL" }).Count
+Write-Host "Total Tests: $($results.Count) | Passed: $($results.Count - $failedCount) | Failed: $failedCount"
+if ($failedCount -gt 0) {
+    exit 1
+}

@@ -300,3 +300,6 @@ $passedCount = ($results | Where-Object { $_.Status -eq "PASSED" }).Count
 $failedCount = ($results | Where-Object { $_.Status -eq "FAILED" }).Count
 Write-Host "Total Tests: $($results.Count) | Passed: $passedCount | Failed: $failedCount"
 $results | Format-Table -AutoSize
+if ($failedCount -gt 0) {
+    exit 1
+}
