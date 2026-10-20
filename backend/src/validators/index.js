@@ -23,6 +23,14 @@ export const resendVerificationSchema = z.object({
   email: z.string().email('Please enter a valid email address')
 });
 
+export const forgotPasswordSchema = z.object({
+  email: z.string().email('Please enter a valid email address')
+});
+
+export const resetPasswordSchema = z.object({
+  new_password: z.string().min(8, 'Password must be at least 8 characters').max(128)
+});
+
 export const googleAuthSchema = z.object({
   credential: z
     .string({
@@ -32,6 +40,7 @@ export const googleAuthSchema = z.object({
     .trim()
     .min(1, 'Google credential token cannot be empty')
 });
+
 
 export const createCourseSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),

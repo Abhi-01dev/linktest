@@ -5,7 +5,8 @@ import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config/env.js';
 import { userRepository } from '../repositories/userRepository.js';
 import { tokenRepository } from '../repositories/tokenRepository.js';
-import { invitationRepository, passwordResetRepository } from '../repositories/invitationRepository.js';
+import { invitationRepository } from '../repositories/invitationRepository.js';
+import { passwordResetRepository } from '../repositories/passwordResetRepository.js';
 import { generateOtp, hashOtp, verifyOtpHash } from '../utils/cryptoOtp.js';
 import { emailService } from './emailService.js';
 import { logAudit } from '../repositories/auditRepository.js';
@@ -589,18 +590,29 @@ export const authService = {
   // ============================================================
   // PASSWORD RESET
   // ============================================================
-  async forgotPassword({ email }) {
-    const normalizedEmail = email.trim().toLowerCase();
+  async forgotPassword({ email, ipAddress = null, userAgent = null }) {
+    const normalizedEmail = (email || '').trim().toLowerCase();
     const user = await userRepository.findByEmail(normalizedEmail);
 
+    const genericMessage = 'If an account exists for this email, a password reset link has been sent.';
+
     // Always return generic response to prevent account enumeration
-    if (!user || !user.email_verified) {
-      return { message: 'If an account exists for this email, a password reset link has been sent.' };
+    if (!user || user.status === 'suspended' || user.status === 'deactivated') {
+      securityLogRepository.logEvent({
+        eventType: 'PASSWORD_RESET_REQUESTED',
+        severity: 'INFO',
+        userEmail: normalizedEmail,
+        ipAddress,
+        userAgent,
+        details: `Password reset requested for email: ${normalizedEmail}`
+      }).catch(() => {});
+
+      return { message: genericMessage };
     }
 
-    const rawToken = generateSecureToken();
-    const tokenHash = hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+    const rawToken = generateSecureToken(); // 32 random bytes hex
+    const tokenHash = hashToken(rawToken);  // SHA-256 hash
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // Exactly 15 minutes
 
     await passwordResetRepository.create({ userId: user.id, tokenHash, expiresAt });
 
@@ -612,9 +624,18 @@ export const authService = {
       console.error('[PasswordReset] Email delivery error:', err.message);
     }
 
+    securityLogRepository.logEvent({
+      eventType: 'PASSWORD_RESET_REQUESTED',
+      severity: 'INFO',
+      userId: user.id,
+      userEmail: user.email,
+      ipAddress,
+      userAgent,
+      details: `Password reset link dispatched for ${user.email}`
+    }).catch(() => {});
+
     return {
-      message: 'If an account exists for this email, a password reset link has been sent.',
-      ...(config.nodeEnv === 'development' ? { dev_reset_url: resetUrl } : {})
+      message: genericMessage
     };
   },
 
@@ -650,30 +671,57 @@ export const authService = {
     return { message: 'A secure password reset link has been sent to the student.' };
   },
 
-  async resetPassword({ token, newPassword }) {
-    const tokenHash = hashToken(token);
-    const record = await passwordResetRepository.findByTokenHash(tokenHash);
+  async resetPassword({ token, newPassword, ipAddress = null, userAgent = null }) {
+    if (!token || typeof token !== 'string' || !token.trim()) {
+      const err = new Error('Invalid or expired password reset token.');
+      err.statusCode = 400;
+      err.code = 'INVALID_OR_EXPIRED_TOKEN';
+      throw err;
+    }
+
+    const tokenHash = hashToken(token.trim());
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    // Atomically verify token, update user password, and invalidate all user tokens
+    const record = await passwordResetRepository.consumeAndResetPassword({
+      tokenHash,
+      passwordHash
+    });
 
     if (!record) {
-      const err = new Error('Invalid or expired password reset link.');
+      const err = new Error('Invalid or expired password reset token.');
       err.statusCode = 400;
-      err.code = 'INVALID_RESET_TOKEN';
+      err.code = 'INVALID_OR_EXPIRED_TOKEN';
       throw err;
     }
 
-    if (new Date() > new Date(record.expires_at)) {
-      const err = new Error('This password reset link has expired. Please request a new one.');
-      err.statusCode = 400;
-      err.code = 'RESET_TOKEN_EXPIRED';
-      throw err;
-    }
+    const user = await userRepository.findById(record.user_id);
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await userRepository.updatePassword(record.user_id, passwordHash);
-    await passwordResetRepository.markUsed(record.id);
+    securityLogRepository.logEvent({
+      eventType: 'PASSWORD_RESET_SUCCESS',
+      severity: 'INFO',
+      userId: record.user_id,
+      userEmail: user?.email,
+      ipAddress,
+      userAgent,
+      details: `Password successfully reset via secure token for ${user?.email || record.user_id}`
+    }).catch(() => {});
 
-    return { message: 'Password has been reset successfully. Please log in with your new password.' };
+    await logAudit({
+      actorId: record.user_id,
+      actorEmail: user?.email,
+      action: 'PASSWORD_RESET_COMPLETED',
+      resourceType: 'user',
+      resourceId: record.user_id,
+      summary: `Password reset successfully for user ${user?.email || record.user_id}`
+    }).catch(() => {});
+
+    return {
+      user,
+      message: 'Password has been reset successfully. Please log in with your new password.'
+    };
   },
+
 
   async changePassword({ userId, currentPassword, newPassword }) {
     const user = await userRepository.findByEmail(

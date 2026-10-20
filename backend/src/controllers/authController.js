@@ -5,7 +5,9 @@ import {
   loginSchema,
   verifyEmailSchema,
   resendVerificationSchema,
-  googleAuthSchema
+  googleAuthSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema
 } from '../validators/index.js';
 import { z } from 'zod';
 
@@ -14,14 +16,6 @@ const acceptInviteSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters').max(128)
 });
 
-const forgotPasswordSchema = z.object({
-  email: z.string().email('Invalid email address').max(255)
-});
-
-const resetPasswordSchema = z.object({
-  token: z.string().min(60, 'Invalid reset token'),
-  new_password: z.string().min(8, 'Password must be at least 8 characters').max(128)
-});
 
 const changePasswordSchema = z.object({
   current_password: z.string().min(1, 'Current password is required'),
@@ -162,7 +156,9 @@ export const authController = {
   async forgotPassword(req, res, next) {
     try {
       const { email } = forgotPasswordSchema.parse(req.body);
-      const result = await authService.forgotPassword({ email });
+      const ipAddress = req.ip || req.headers['x-forwarded-for'];
+      const userAgent = req.headers['user-agent'];
+      const result = await authService.forgotPassword({ email, ipAddress, userAgent });
       return res.status(200).json({
         success: true,
         data: result,
@@ -175,19 +171,29 @@ export const authController = {
 
   async resetPassword(req, res, next) {
     try {
-      const { token, new_password } = resetPasswordSchema.parse(req.body);
-      const result = await authService.resetPassword({ token, newPassword: new_password });
-      securityLogRepository.logEvent({
-        eventType: 'PASSWORD_RESET_SUCCESS',
-        severity: 'INFO',
-        ipAddress: req.ip || req.headers['x-forwarded-for'],
-        userAgent: req.headers['user-agent'],
-        details: 'Password successfully reset via secure token'
-      }).catch(() => {});
+      const { token, new_password } = req.body || {};
+      if (!token || typeof token !== 'string' || !token.trim()) {
+        const err = new Error('Invalid or expired password reset token.');
+        err.statusCode = 400;
+        err.code = 'INVALID_OR_EXPIRED_TOKEN';
+        throw err;
+      }
+      const { new_password: validatedPassword } = resetPasswordSchema.parse({ new_password });
+      const ipAddress = req.ip || req.headers['x-forwarded-for'];
+      const userAgent = req.headers['user-agent'];
+
+      const result = await authService.resetPassword({
+        token: token.trim(),
+        newPassword: validatedPassword,
+        ipAddress,
+        userAgent
+      });
 
       return res.status(200).json({
         success: true,
-        data: result,
+        data: {
+          message: result.message
+        },
         message: result.message
       });
     } catch (err) {

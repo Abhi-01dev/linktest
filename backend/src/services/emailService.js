@@ -289,7 +289,7 @@ export const emailService = {
     const payload = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text };
 
     if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
-      lastSentEmail = { ...payload, sentAt: new Date() };
+      lastSentEmail = { ...payload, resetUrl, expiresAt, sentAt: new Date() };
       return { success: true, mocked: true };
     }
     if (transporter) {

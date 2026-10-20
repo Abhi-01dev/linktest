@@ -278,3 +278,6 @@ export const tokenRepository = {
     if (token) token.attempts = attempts;
   }
 };
+
+export { passwordResetRepository } from './passwordResetRepository.js';
+

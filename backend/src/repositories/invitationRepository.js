@@ -91,39 +91,5 @@ export const invitationRepository = {
   }
 };
 
-export const passwordResetRepository = {
-  async create({ userId, tokenHash, expiresAt }) {
-    const id = crypto.randomUUID();
-    const created_at = new Date().toISOString();
-    // Invalidate any existing tokens for this user
-    if (isPostgresConnected && pool) {
-      await pool.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
-      const res = await pool.query(
-        `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used, created_at) VALUES ($1,$2,$3,$4,false,$5) RETURNING *`,
-        [id, userId, tokenHash, expiresAt, created_at]
-      );
-      return res.rows[0];
-    }
-    memoryStore.password_reset_tokens = memoryStore.password_reset_tokens.filter(t => t.user_id !== userId);
-    const token = { id, user_id: userId, token_hash: tokenHash, expires_at: expiresAt, used: false, created_at };
-    memoryStore.password_reset_tokens.push(token);
-    return token;
-  },
+export { passwordResetRepository } from './passwordResetRepository.js';
 
-  async findByTokenHash(tokenHash) {
-    if (isPostgresConnected && pool) {
-      const res = await pool.query('SELECT * FROM password_reset_tokens WHERE token_hash = $1 AND used = false', [tokenHash]);
-      return res.rows[0] || null;
-    }
-    return memoryStore.password_reset_tokens.find(t => t.token_hash === tokenHash && !t.used) || null;
-  },
-
-  async markUsed(id) {
-    if (isPostgresConnected && pool) {
-      await pool.query('UPDATE password_reset_tokens SET used = true WHERE id = $1', [id]);
-      return;
-    }
-    const token = memoryStore.password_reset_tokens.find(t => t.id === id);
-    if (token) token.used = true;
-  }
-};
