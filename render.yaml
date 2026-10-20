@@ -1,9 +1,13 @@
 services:
   - type: web
     name: linktest-backend
-    env: docker
+    runtime: node
+    plan: free
+    branch: main
     rootDir: backend
-    dockerfilePath: Dockerfile
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
@@ -15,10 +19,34 @@ services:
         generateValue: true
       - key: FRONTEND_URL
         sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_SECURE
+        value: false
       - key: SMTP_USER
         sync: false
       - key: SMTP_APP_PASSWORD
         sync: false
+      - key: SMTP_FROM_NAME
+        value: LinkTest
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: CLOUD_AI_PROVIDER
+        value: groq
       - key: CLOUD_AI_API_KEY
         sync: false
       - key: CLOUD_AI_MODEL
