@@ -42,6 +42,7 @@ export function TeacherTestBuilderPage() {
     description: '',
     instructions: '1. Standard examination rules apply.\n2. Do not leave the exam tab.\n3. Ensure your webcam remains on and face is centered.',
     subject: 'Computer Science',
+    batch_id: '',
     topic: 'Web Development & Cloud',
     difficulty: 'medium',
     category: 'mock_exam',
@@ -69,6 +70,7 @@ export function TeacherTestBuilderPage() {
     show_explanations: true
   });
 
+  const [batches, setBatches] = useState([]);
   const [questions, setQuestions] = useState([]);
 
   // Modals state
@@ -115,6 +117,20 @@ export function TeacherTestBuilderPage() {
   const [aiModelUsed, setAiModelUsed] = useState(null);
   const [initializingOllama, setInitializingOllama] = useState(false);
 
+  // Load available batches for target selection
+  useEffect(() => {
+    async function fetchBatches() {
+      try {
+        const res = await api.getBatches({ scope: 'all' });
+        const list = Array.isArray(res) ? res : (res?.batches || res?.data || []);
+        setBatches(list);
+      } catch (err) {
+        console.error('Failed to load batches:', err);
+      }
+    }
+    fetchBatches();
+  }, []);
+
   // Load existing test if editing
   useEffect(() => {
     if (isEditing) {
@@ -126,10 +142,11 @@ export function TeacherTestBuilderPage() {
             description: test.description || '',
             instructions: test.instructions || '',
             subject: test.subject || '',
+            batch_id: test.batch_id || '',
             topic: test.topic || '',
             difficulty: test.difficulty || 'medium',
             category: test.category || 'mock_exam',
-            duration_minutes: test.duration_minutes || 60,
+            duration_minutes: test.duration_minutes || 45,
             total_marks: test.total_marks || 100,
             pass_percentage: test.pass_percentage || 40,
             max_attempts: test.max_attempts || 1,
@@ -157,6 +174,12 @@ export function TeacherTestBuilderPage() {
   const handleSave = async (status = null) => {
     if (!formData.title.trim() || !formData.subject.trim()) {
       alert('Please provide a Title and Subject.');
+      setActiveTab('general');
+      return;
+    }
+
+    if (!formData.batch_id) {
+      alert('Please select a Target Batch for this mock exam.');
       setActiveTab('general');
       return;
     }
@@ -486,6 +509,7 @@ export function TeacherTestBuilderPage() {
               </label>
               <input
                 type="text"
+                placeholder="e.g. Computer Science Fundamentals, CS101"
                 value={formData.subject}
                 onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
                 style={{
@@ -500,12 +524,80 @@ export function TeacherTestBuilderPage() {
 
             <div>
               <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                Target Batch *
+              </label>
+              <select
+                id="target-batch-select"
+                value={formData.batch_id || ''}
+                onChange={(e) => setFormData({ ...formData, batch_id: e.target.value })}
+                required
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 0.85rem',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '6px',
+                  fontSize: '0.88rem',
+                  background: '#FFFFFF'
+                }}
+              >
+                <option value="">-- Select Target Batch --</option>
+                {batches.map(b => (
+                  <option key={b.id} value={b.id}>
+                    {b.name} ({b.code || b.department || 'Active'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, marginBottom: '0.35rem' }}>
                 Topic
               </label>
               <input
                 type="text"
                 value={formData.topic}
                 onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '0.65rem 0.85rem',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '6px',
+                  fontSize: '0.88rem'
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                Duration (Minutes) *
+              </label>
+              <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
+                {[15, 30, 45, 60].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, duration_minutes: mins })}
+                    style={{
+                      padding: '0.25rem 0.65rem',
+                      borderRadius: '5px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: formData.duration_minutes === mins ? '2px solid var(--color-orange, #F97316)' : '1px solid var(--color-border, #E2E8F0)',
+                      background: formData.duration_minutes === mins ? '#FFF7ED' : '#FFFFFF',
+                      color: formData.duration_minutes === mins ? '#C2410C' : 'inherit'
+                    }}
+                  >
+                    {mins}m
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number"
+                min="5"
+                max="360"
+                value={formData.duration_minutes}
+                onChange={(e) => setFormData({ ...formData, duration_minutes: parseInt(e.target.value, 10) || 45 })}
                 style={{
                   width: '100%',
                   padding: '0.65rem 0.85rem',
@@ -561,26 +653,6 @@ export function TeacherTestBuilderPage() {
                 <option value="hard">Hard</option>
                 <option value="advanced">Advanced</option>
               </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.84rem', fontWeight: 700, marginBottom: '0.35rem' }}>
-                Duration (Minutes)
-              </label>
-              <input
-                type="number"
-                min="5"
-                max="360"
-                value={formData.duration_minutes}
-                onChange={(e) => setFormData({ ...formData, duration_minutes: parseInt(e.target.value, 10) })}
-                style={{
-                  width: '100%',
-                  padding: '0.65rem 0.85rem',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: '6px',
-                  fontSize: '0.88rem'
-                }}
-              />
             </div>
 
             <div>

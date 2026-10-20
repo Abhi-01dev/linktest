@@ -76,6 +76,16 @@ export function TeacherTestAnalyticsPage() {
     }
   };
 
+  const handleReleaseIndividualResult = async (attemptId, studentName) => {
+    try {
+      await api.releaseMockTestAttemptResult(attemptId);
+      alert(`Result successfully released for ${studentName || 'candidate'}!`);
+      await loadAnalytics();
+    } catch (err) {
+      alert(err.message || 'Failed to release individual result.');
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '6rem' }}>
@@ -245,9 +255,25 @@ export function TeacherTestAnalyticsPage() {
         boxShadow: 'var(--shadow-sm)',
         padding: '1.5rem'
       }}>
-        <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-navy)', marginBottom: '1.25rem' }}>
-          Candidate Attempts & Integrity Status ({analytics.candidates?.length || 0})
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
+          <div>
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-navy)', margin: 0 }}>
+              Candidate Attempts & Evaluation Roster ({analytics.candidates?.length || 0})
+            </h3>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: '#64748B' }}>
+              Evaluate pending long-answer and coding responses, then release individual results to candidates.
+            </p>
+          </div>
+          <button
+            onClick={handleDownloadPdf}
+            disabled={generatingPdf}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem' }}
+          >
+            <Download size={14} />
+            <span>{generatingPdf ? 'Generating PDF...' : 'Download Full PDF Report'}</span>
+          </button>
+        </div>
 
         {(!analytics.candidates || analytics.candidates.length === 0) ? (
           <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#64748B' }}>
@@ -255,80 +281,117 @@ export function TeacherTestAnalyticsPage() {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontSize: '0.76rem', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '0.75rem 1rem' }}>Candidate</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Score</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Percentage</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Result</th>
-                  <th style={{ padding: '0.75rem 1rem' }}>Proctor Warnings</th>
-                  <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Actions</th>
+                <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontSize: '0.74rem', textTransform: 'uppercase' }}>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Student</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Batch</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Submission Time</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Objective Score</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Manual Eval</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Total Score</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Percentage</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Result Status</th>
+                  <th style={{ padding: '0.75rem 0.85rem', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {analytics.candidates.map((c) => (
-                  <tr key={c.attempt_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '0.85rem 1rem' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--color-navy)' }}>{c.student_name}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748B' }}>{c.student_email}</div>
-                    </td>
+                {analytics.candidates.map((c) => {
+                  const isReleased = c.result_status === 'RELEASED';
+                  const isManualPending = c.manual_status === 'Pending';
+                  return (
+                    <tr key={c.attempt_id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                      <td style={{ padding: '0.75rem 0.85rem' }}>
+                        <div style={{ fontWeight: 700, color: 'var(--color-navy)' }}>{c.student_name}</div>
+                        <div style={{ fontSize: '0.74rem', color: '#64748B' }}>{c.student_email}</div>
+                      </td>
 
-                    <td style={{ padding: '0.85rem 1rem', fontWeight: 700, color: '#2563EB' }}>
-                      {c.score} / {analytics.total_marks}
-                    </td>
-
-                    <td style={{ padding: '0.85rem 1rem', fontWeight: 600 }}>
-                      {c.percentage}%
-                    </td>
-
-                    <td style={{ padding: '0.85rem 1rem' }}>
-                      <span style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        padding: '0.15rem 0.5rem',
-                        borderRadius: '999px',
-                        background: c.passed ? '#ECFDF5' : '#FEF2F2',
-                        color: c.passed ? '#059669' : '#DC2626'
-                      }}>
-                        {c.passed ? 'PASSED' : 'FAILED'}
-                      </span>
-                    </td>
-
-                    <td style={{ padding: '0.85rem 1rem' }}>
-                      {c.flagged ? (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.25rem',
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          padding: '0.15rem 0.5rem',
-                          borderRadius: '4px',
-                          background: '#FEF2F2',
-                          color: '#DC2626'
-                        }}>
-                          <AlertTriangle size={12} />
-                          {c.warning_count} Warnings (Flagged)
+                      <td style={{ padding: '0.75rem 0.85rem', color: '#334155' }}>
+                        <span style={{ background: '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.76rem', fontWeight: 600 }}>
+                          {c.batch_name || analytics.test?.batch_name || 'Enrolled'}
                         </span>
-                      ) : (
-                        <span style={{ fontSize: '0.78rem', color: '#64748B' }}>
-                          {c.warning_count || 0} Warnings
-                        </span>
-                      )}
-                    </td>
+                      </td>
 
-                    <td style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>
-                      <Link
-                        to={`/teacher/mock-tests/${id}/attempts/${c.attempt_id}/review`}
-                        className="btn btn-secondary"
-                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.75rem', fontWeight: 600 }}
-                      >
-                        Inspect Proctoring Log
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                      <td style={{ padding: '0.75rem 0.85rem', fontSize: '0.78rem', color: '#64748B' }}>
+                        {c.submitted_at ? new Date(c.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : 'In Progress'}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#2563EB' }}>
+                        {c.objective_score !== undefined ? `${c.objective_score} / ${c.objective_max_score}` : `${c.score} / ${analytics.total_marks}`}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem' }}>
+                        {c.manual_status === 'Pending' ? (
+                          <span style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '999px', background: '#FEF3C7', color: '#B45309' }}>
+                            Pending
+                          </span>
+                        ) : c.manual_status === 'Evaluated' ? (
+                          <span style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '999px', background: '#EFF6FF', color: '#1D4ED8' }}>
+                            {c.manual_score} / {c.manual_max_score}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '0.74rem', color: '#94A3B8' }}>None</span>
+                        )}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>
+                        {isManualPending ? '—' : `${c.score} / ${analytics.total_marks}`}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 600 }}>
+                        {isManualPending ? '—' : `${c.percentage}%`}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem' }}>
+                        {isReleased ? (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: '999px', background: '#ECFDF5', color: '#059669' }}>
+                            Released
+                          </span>
+                        ) : isManualPending ? (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: '999px', background: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A' }}>
+                            Pending
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: '999px', background: '#F0F9FF', color: '#0284C7', border: '1px solid #BAE6FD' }}>
+                            Evaluated
+                          </span>
+                        )}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center' }}>
+                          <Link
+                            to={`/teacher/mock-tests/${id}/attempts/${c.attempt_id}/review?tab=grading`}
+                            className="btn btn-secondary"
+                            style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', fontWeight: 600 }}
+                          >
+                            {isManualPending ? 'Evaluate' : 'View Attempt'}
+                          </Link>
+
+                          {!isReleased && (
+                            <button
+                              onClick={() => handleReleaseIndividualResult(c.attempt_id, c.student_name)}
+                              disabled={isManualPending}
+                              title={isManualPending ? 'Complete manual evaluation first before releasing' : 'Release result to candidate'}
+                              style={{
+                                fontSize: '0.75rem',
+                                padding: '0.3rem 0.65rem',
+                                fontWeight: 700,
+                                borderRadius: '6px',
+                                border: 'none',
+                                cursor: isManualPending ? 'not-allowed' : 'pointer',
+                                background: isManualPending ? '#E2E8F0' : '#10B981',
+                                color: isManualPending ? '#94A3B8' : '#FFFFFF'
+                              }}
+                            >
+                              Release Result
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

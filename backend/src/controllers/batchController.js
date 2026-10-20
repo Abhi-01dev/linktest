@@ -81,8 +81,8 @@ export const batchController = {
     try {
       const { search, status, course_id, limit, offset, sort_by, sort_order } = req.query;
 
-      // If requester is a TEACHER, strictly return only assigned batches
-      if (req.user.role === 'TEACHER') {
+      // If requester is a TEACHER, return assigned batches by default unless all/scope=all is requested
+      if (req.user.role === 'TEACHER' && req.query.all !== 'true' && req.query.scope !== 'all') {
         const teacherBatches = await batchRepository.getBatchesForTeacher(req.user.id);
         return res.status(200).json({
           success: true,

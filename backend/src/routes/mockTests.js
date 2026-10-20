@@ -24,6 +24,7 @@ router.post('/attempts/:attemptId/security-event', authenticateToken, mockTestCo
 router.post('/attempts/:attemptId/submit', authenticateToken, mockTestController.submitAttempt);
 router.get('/attempts/:attemptId/result', authenticateToken, mockTestController.getAttemptResult);
 router.post('/attempts/:attemptId/responses/:questionId/evaluate', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.evaluateResponse);
+router.post('/attempts/:attemptId/questions/:questionId/evaluate', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.evaluateResponse);
 router.post('/attempts/:attemptId/release', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.releaseAttemptResult);
 
 // --- Teacher & Admin Proctoring Event Oversight ---

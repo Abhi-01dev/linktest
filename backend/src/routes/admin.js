@@ -34,6 +34,7 @@ router.get('/teachers/invitations/list', adminController.getInvitations);
 router.put('/teachers/:id', adminController.updateTeacher);
 router.post('/teachers/:id/status', adminController.updateUserStatus);
 router.post('/teachers/:id/assign', adminController.assignTeacher);
+router.post('/teachers/:teacherId/assign', adminController.assignTeacher);
 router.post('/teachers/assign', adminController.assignTeacher);
 router.post('/teachers/assignments', adminController.assignTeacher);
 router.get('/teachers/:id/assignments', adminController.getTeacherAssignments);
