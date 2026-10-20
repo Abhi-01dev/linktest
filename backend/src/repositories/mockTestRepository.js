@@ -103,6 +103,14 @@ export const mockTestRepository = {
     };
   },
 
+  async getQuestionById(questionId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM mock_test_questions WHERE id = $1', [questionId]);
+      return res.rows[0] || null;
+    }
+    return (memoryStore.mock_test_questions || []).find(q => q.id === questionId) || null;
+  },
+
   async createTest(testData, questions = [], sections = []) {
     const testId = testData.id || `mock-${crypto.randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
@@ -850,7 +858,7 @@ export const mockTestRepository = {
       const newStatus = totals.pending_count === 0 ? 'evaluated' : attempt.status;
       const newResultStatus = attempt.result_status === 'RELEASED'
         ? 'RELEASED'
-        : (totals.pending_count === 0 ? 'READY' : 'PENDING_EVALUATION');
+        : (totals.pending_count === 0 ? 'EVALUATED' : 'PENDING_EVALUATION');
 
       await pool.query(
         `UPDATE mock_test_attempts
@@ -911,7 +919,7 @@ export const mockTestRepository = {
       if (pendingCount === 0) {
         attempt.status = 'evaluated';
         if (attempt.result_status !== 'RELEASED') {
-          attempt.result_status = 'READY';
+          attempt.result_status = 'EVALUATED';
         }
       }
       attempt.evaluated_by = evaluatorId || null;
@@ -967,7 +975,7 @@ export const mockTestRepository = {
       `;
       const params = [now, teacherId, testId];
       if (batchId) {
-        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $4)`;
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_enrollments WHERE batch_id = $4 AND status = 'active')`;
         params.push(batchId);
       }
       await pool.query(q, params);
@@ -1003,7 +1011,7 @@ export const mockTestRepository = {
       const params = [testId];
       if (batchId) {
         params.push(batchId);
-        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $2)`;
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_enrollments WHERE batch_id = $2 AND status = 'active')`;
       }
       q += ` ORDER BY a.total_score DESC, u.full_name ASC`;
       const res = await pool.query(q, params);

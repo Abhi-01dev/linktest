@@ -634,5 +634,49 @@ export const batchRepository = {
       return true;
     }
     return false;
+  },
+
+  async isStudentInBatch(studentId, batchId) {
+    if (!studentId || !batchId) return false;
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT 1 FROM batch_enrollments WHERE student_id = $1 AND batch_id = $2 AND status = 'active'
+         UNION
+         SELECT 1 FROM student_class_enrollments WHERE student_id = $1 AND batch_id = $2
+         LIMIT 1`,
+        [studentId, batchId]
+      );
+      return res.rows.length > 0;
+    }
+    return (
+      (memoryStore.batch_enrollments || []).some(
+        be => be.student_id === studentId && be.batch_id === batchId && be.status === 'active'
+      ) ||
+      (memoryStore.student_class_enrollments || []).some(
+        sce => sce.student_id === studentId && sce.batch_id === batchId
+      )
+    );
+  },
+
+  async getStudentBatchIds(studentId) {
+    if (!studentId) return [];
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT batch_id FROM batch_enrollments WHERE student_id = $1 AND status = 'active'
+         UNION
+         SELECT batch_id FROM student_class_enrollments WHERE student_id = $1 AND batch_id IS NOT NULL`,
+        [studentId]
+      );
+      return res.rows.map(r => r.batch_id);
+    }
+    const set = new Set();
+    (memoryStore.batch_enrollments || [])
+      .filter(be => be.student_id === studentId && be.status === 'active')
+      .forEach(be => set.add(be.batch_id));
+    (memoryStore.student_class_enrollments || [])
+      .filter(sce => sce.student_id === studentId && sce.batch_id)
+      .forEach(sce => set.add(sce.batch_id));
+    return Array.from(set);
   }
 };
+

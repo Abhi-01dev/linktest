@@ -4,6 +4,7 @@
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
+import { batchRepository } from '../repositories/batchRepository.js';
 import { mockTestScoringService } from './mockTestScoringService.js';
 import { aiService } from './aiService.js';
 import { generateTestResultsPdf } from './pdfReportService.js';
@@ -18,10 +19,15 @@ export const mockTestService = {
    * Retrieves all published mock tests with student-specific attempt progress
    */
   async getStudentDashboardTests(student, filters = {}) {
-    const tests = await mockTestRepository.getAllTests({
+    const rawTests = await mockTestRepository.getAllTests({
       ...filters,
       status: 'published'
     });
+
+    const studentBatchIds = await batchRepository.getStudentBatchIds(student.id);
+
+    // CRITICAL: Filter out any tests assigned to a specific batch that the student is NOT enrolled in
+    const tests = rawTests.filter(t => !t.batch_id || studentBatchIds.includes(t.batch_id));
 
     const studentAttempts = await mockTestRepository.getAttemptsByStudent(student.id);
 
@@ -117,23 +123,34 @@ export const mockTestService = {
     }
 
     // -------------------------------------------------------------------------
-    // CRITICAL SECURITY: ENFORCE TEACHER JOIN APPROVAL FOR STUDENTS
+    // CRITICAL SECURITY: ENFORCE BATCH AUTHORIZATION & JOIN APPROVAL
     // -------------------------------------------------------------------------
     if (student.role === 'STUDENT') {
-      const activeRequest = await mockTestJoinRequestRepository.findActiveByStudentAndTest(student.id, testId);
-      if (!activeRequest || activeRequest.status !== 'APPROVED') {
-        const latestRequest = await mockTestJoinRequestRepository.getLatestByStudentAndTest(student.id, testId);
-        const err = new Error(
-          latestRequest?.status === 'PENDING'
-            ? 'Your request to join this mock test is still pending teacher approval.'
-            : (latestRequest?.status === 'REJECTED'
-                ? `Your request to join was rejected${latestRequest.rejection_reason ? `: "${latestRequest.rejection_reason}"` : '.'} You may request again.`
-                : 'Teacher approval is required before you can join this mock test.')
-        );
-        err.status = 403;
-        err.statusCode = 403;
-        err.code = 'MOCK_TEST_APPROVAL_REQUIRED';
-        throw err;
+      if (test.batch_id) {
+        const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+        if (!isEnrolled) {
+          const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+          err.status = 403;
+          err.statusCode = 403;
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
+      } else {
+        const activeRequest = await mockTestJoinRequestRepository.findActiveByStudentAndTest(student.id, testId);
+        if (!activeRequest || activeRequest.status !== 'APPROVED') {
+          const latestRequest = await mockTestJoinRequestRepository.getLatestByStudentAndTest(student.id, testId);
+          const err = new Error(
+            latestRequest?.status === 'PENDING'
+              ? 'Your request to join this mock test is still pending teacher approval.'
+              : (latestRequest?.status === 'REJECTED'
+                  ? `Your request to join was rejected${latestRequest.rejection_reason ? `: "${latestRequest.rejection_reason}"` : '.'} You may request again.`
+                  : 'Teacher approval is required before you can join this mock test.')
+          );
+          err.status = 403;
+          err.statusCode = 403;
+          err.code = 'MOCK_TEST_APPROVAL_REQUIRED';
+          throw err;
+        }
       }
     }
 
@@ -198,6 +215,23 @@ export const mockTestService = {
     }
 
     const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Associated examination record not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+        err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
+        throw err;
+      }
+    }
+
     const rawQuestions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
 
     // CRITICAL SECURITY: Questions MUST be sanitized. Answer keys and explanations removed.
@@ -299,7 +333,23 @@ export const mockTestService = {
     }
 
     const question_id = responsePayload.question_id || responsePayload.questionId;
-    const response_data = responsePayload.response_data !== undefined ? responsePayload.response_data : responsePayload.responseData;
+    let response_data = responsePayload.response_data !== undefined
+      ? responsePayload.response_data
+      : (responsePayload.responseData !== undefined ? responsePayload.responseData : null);
+
+    if (response_data === null) {
+      const flat = { ...responsePayload };
+      delete flat.question_id;
+      delete flat.questionId;
+      delete flat.is_marked_for_review;
+      delete flat.isMarkedForReview;
+      delete flat.is_visited;
+      delete flat.isVisited;
+      if (Object.keys(flat).length > 0) {
+        response_data = flat;
+      }
+    }
+
     const is_marked_for_review = responsePayload.is_marked_for_review !== undefined ? responsePayload.is_marked_for_review : responsePayload.isMarkedForReview;
     const is_visited = responsePayload.is_visited !== undefined ? responsePayload.is_visited : (responsePayload.isVisited ?? true);
 
@@ -632,6 +682,23 @@ export const mockTestService = {
     }
 
     const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Associated examination record not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+        err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
+        throw err;
+      }
+    }
+
     const questions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
 
     // Map existing saved candidate responses
@@ -657,13 +724,13 @@ export const mockTestService = {
     const finalStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : (evaluation.pending_review_count > 0 ? 'submitted' : 'evaluated');
     const submissionStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : 'SUBMITTED';
 
-    let resultStatus = 'READY';
+    let resultStatus = 'EVALUATED';
     let releasedAt = null;
     let releasedBy = null;
 
     if (evaluation.pending_review_count > 0) {
       resultStatus = 'PENDING_EVALUATION';
-    } else if (test.results_published || test.allow_instant_result) {
+    } else if (test.results_published || !test.batch_id) {
       resultStatus = 'RELEASED';
       releasedAt = new Date().toISOString();
       releasedBy = test.created_by || null;
@@ -736,13 +803,6 @@ export const mockTestService = {
       throw err;
     }
 
-    // Critical Security: Student can ONLY view their own attempt result
-    if (student.role === 'STUDENT' && attempt.student_id !== student.id) {
-      const err = new Error('You are not authorized to view this result.');
-      err.status = 403;
-      throw err;
-    }
-
     const test = await mockTestRepository.getTestById(attempt.test_id);
     if (!test) {
       const err = new Error('Associated examination record not found.');
@@ -750,12 +810,30 @@ export const mockTestService = {
       throw err;
     }
 
+    // Critical Security: Student can ONLY view their own attempt result and must belong to target batch
+    if (student.role === 'STUDENT') {
+      if (attempt.student_id !== student.id) {
+        const err = new Error('You are not authorized to view this result.');
+        err.status = 403;
+        throw err;
+      }
+      if (test.batch_id) {
+        const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+        if (!isEnrolled) {
+          const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+          err.status = 403;
+          err.statusCode = 403;
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
+      }
+    }
+
     const questions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
     const responses = attempt.responses || [];
 
     const isTeacherOrAdmin = ['TEACHER', 'ADMIN'].includes(student.role);
-    const isPending = attempt.result_status === 'PENDING_EVALUATION';
-    const isReleased = attempt.result_status === 'RELEASED' || (!isPending && (test.results_published || test.allow_instant_result));
+    const isReleased = attempt.result_status === 'RELEASED';
     const resultsReleased = Boolean(isTeacherOrAdmin || isReleased);
 
     // Build question reviews with safe handling for every field
@@ -776,15 +854,14 @@ export const mockTestService = {
         time_limit: parseFloat(q.time_limit || 2.0),
         memory_limit: parseInt(q.memory_limit || 128, 10),
         test_cases: resultsReleased ? (Array.isArray(q.test_cases) ? q.test_cases : []) : [],
-        // Only disclose answers and explanations if results are published or teacher
-        answer_key: resultsReleased ? (q.answer_key || null) : null,
-        explanation: resultsReleased && test.show_explanations ? (q.explanation || null) : null,
+        answer_key: resultsReleased ? (q.answer_key || q.correct_answer || null) : null,
+        explanation: resultsReleased && (test.show_explanations !== false) ? (q.explanation || null) : null,
         candidate_response: r ? r.response_data : null,
         is_marked_for_review: r ? Boolean(r.is_marked_for_review) : false,
-        score_awarded: r ? parseFloat(r.score_awarded || 0) : 0,
-        is_correct: r ? r.is_correct : null,
+        score_awarded: resultsReleased ? (r ? parseFloat(r.score_awarded || 0) : 0) : null,
+        is_correct: resultsReleased ? (r ? r.is_correct : null) : null,
         is_pending_review: r ? Boolean(r.is_pending_review) : false,
-        execution_results: r ? (r.execution_results || (r.response_data && r.response_data.execution_results) || null) : null,
+        execution_results: resultsReleased ? (r ? (r.execution_results || (r.response_data && r.response_data.execution_results) || null) : null) : null,
         evaluation_comment: resultsReleased ? (r ? r.evaluation_comment : null) : null
       };
     });
@@ -824,14 +901,14 @@ export const mockTestService = {
       started_at: attempt.started_at,
       submitted_at: attempt.submitted_at,
       time_spent_seconds: attempt.time_spent_seconds || 0,
-      total_score: parseFloat(attempt.total_score || 0),
+      total_score: resultsReleased ? parseFloat(attempt.total_score || 0) : null,
       max_score: parseFloat(attempt.max_score || test.total_marks || 100),
-      percentage: parseFloat(attempt.percentage || 0),
-      passed: Boolean(attempt.passed),
+      percentage: resultsReleased ? parseFloat(attempt.percentage || 0) : null,
+      passed: resultsReleased ? Boolean(attempt.passed) : null,
       pass_percentage: parseFloat(test.pass_percentage || 40),
-      correct_count: attempt.correct_count || 0,
-      incorrect_count: attempt.incorrect_count || 0,
-      unanswered_count: attempt.unanswered_count || 0,
+      correct_count: resultsReleased ? (attempt.correct_count || 0) : null,
+      incorrect_count: resultsReleased ? (attempt.incorrect_count || 0) : null,
+      unanswered_count: resultsReleased ? (attempt.unanswered_count || 0) : null,
       warning_count: attempt.warning_count || 0,
       proctoring_summary: attempt.proctoring_summary || {},
       questions: questionReviews
@@ -858,6 +935,16 @@ export const mockTestService = {
 
     if (teacher.role === 'TEACHER' && test.created_by && test.created_by !== teacher.id) {
       // Allow teacher if authorized
+    }
+
+    // Verify whether any question is still pending manual review (Requirement 25)
+    const responses = attempt.responses || [];
+    const hasPendingReview = responses.some(r => r.is_pending_review);
+    if (hasPendingReview) {
+      const err = new Error('Cannot release result: manual evaluation of all questions must be completed first.');
+      err.status = 400;
+      err.statusCode = 400;
+      throw err;
     }
 
     await mockTestRepository.releaseAttemptResult(attemptId, teacher.id);
@@ -948,29 +1035,26 @@ export const mockTestService = {
   async getMyResults(student) {
     const rawAttempts = await mockTestRepository.getAttemptsByStudent(student.id);
 
-    // Map attempts into consistent, safe scorecard cards
-    return rawAttempts.map(att => {
-      const isReleased = att.result_status === 'RELEASED' || att.results_published;
-      const statusLabel = att.result_status || (isReleased ? 'RELEASED' : 'PENDING_EVALUATION');
+    // Requirement 17: Student Dashboard: My Results: Display only released results
+    const releasedAttempts = rawAttempts.filter(att => att.result_status === 'RELEASED');
 
-      return {
-        id: att.id,
-        attempt_id: att.id,
-        test_id: att.test_id,
-        test_title: att.test_title || 'Mock Examination',
-        subject: att.subject || 'General',
-        total_score: parseFloat(att.total_score || 0),
-        max_score: parseFloat(att.max_score || 100),
-        percentage: parseFloat(att.percentage || 0),
-        passed: Boolean(att.passed),
-        status: att.status,
-        result_status: statusLabel,
-        is_released: Boolean(isReleased),
-        released_at: att.released_at,
-        submitted_at: att.submitted_at || att.created_at,
-        time_spent_seconds: att.time_spent_seconds || 0
-      };
-    });
+    return releasedAttempts.map(att => ({
+      id: att.id,
+      attempt_id: att.id,
+      test_id: att.test_id,
+      test_title: att.test_title || 'Mock Examination',
+      subject: att.subject || 'General',
+      total_score: parseFloat(att.total_score || 0),
+      max_score: parseFloat(att.max_score || 100),
+      percentage: parseFloat(att.percentage || 0),
+      passed: Boolean(att.passed),
+      status: att.status,
+      result_status: 'RELEASED',
+      is_released: true,
+      released_at: att.released_at,
+      submitted_at: att.submitted_at || att.created_at,
+      time_spent_seconds: att.time_spent_seconds || 0
+    }));
   },
 
   /**
@@ -984,11 +1068,15 @@ export const mockTestService = {
       throw err;
     }
 
-    const attempts = await mockTestRepository.getDetailedAttemptsForReport(testId, batchId);
+    const targetBatchId = batchId || test.batch_id || null;
+    const attempts = await mockTestRepository.getDetailedAttemptsForReport(testId, targetBatchId);
 
     let batch = null;
-    if (batchId) {
-      batch = { id: batchId, name: `Batch #${batchId}` };
+    if (targetBatchId) {
+      batch = await batchRepository.getBatchById(targetBatchId);
+      if (!batch) {
+        batch = { id: targetBatchId, name: `Batch #${targetBatchId}` };
+      }
     }
 
     return generateTestResultsPdf({
@@ -1243,6 +1331,65 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
 
     const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 5);
 
+    const testBatch = test.batch_id ? await batchRepository.getBatchById(test.batch_id) : null;
+    const testBatchName = testBatch ? testBatch.name : 'All Batches';
+
+    const testQuestions = await mockTestRepository.getQuestionsByTestId(testId);
+    const objectiveTypes = ['mcq_single', 'mcq_multiple', 'true_false', 'fill_blank', 'numerical', 'matching'];
+    const manualTypes = ['long_answer', 'subjective', 'coding'];
+
+    const objectiveQIds = new Set(testQuestions.filter(q => objectiveTypes.includes(q.question_type)).map(q => q.id));
+    const manualQIds = new Set(testQuestions.filter(q => manualTypes.includes(q.question_type)).map(q => q.id));
+
+    const objMax = testQuestions.filter(q => objectiveQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
+    const manualMax = testQuestions.filter(q => manualQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
+
+    const candidates = await Promise.all(attempts.map(async a => {
+      const fullAttempt = await mockTestRepository.getAttemptById(a.id);
+      const responses = fullAttempt?.responses || [];
+
+      let objScore = 0;
+      let manScore = 0;
+      let pendingCount = 0;
+
+      responses.forEach(r => {
+        const score = parseFloat(r.score_awarded) || 0;
+        if (objectiveQIds.has(r.question_id)) {
+          objScore += score;
+        } else if (manualQIds.has(r.question_id)) {
+          manScore += score;
+          if (r.is_pending_review) pendingCount++;
+        }
+      });
+
+      let manualStatus = 'N/A';
+      if (manualQIds.size > 0) {
+        manualStatus = (pendingCount > 0 || a.result_status === 'PENDING_EVALUATION' || (a.status === 'submitted' && a.result_status !== 'EVALUATED' && a.result_status !== 'RELEASED')) ? 'Pending' : 'Evaluated';
+      }
+
+      return {
+        attempt_id: a.id,
+        student_id: a.student_id,
+        student_name: a.student_name,
+        student_email: a.student_email,
+        batch_name: testBatchName,
+        score: parseFloat(a.total_score || 0),
+        objective_score: objScore,
+        objective_max_score: objMax,
+        manual_score: manScore,
+        manual_max_score: manualMax,
+        manual_status: manualStatus,
+        percentage: parseFloat(a.percentage || 0),
+        passed: a.passed,
+        status: a.status,
+        result_status: a.result_status || (manualStatus === 'Pending' ? 'PENDING_EVALUATION' : 'EVALUATED'),
+        warning_count: a.warning_count,
+        flagged: Boolean(a.proctoring_summary?.flagged),
+        started_at: a.started_at,
+        submitted_at: a.submitted_at
+      };
+    }));
+
     return {
       test_id: test.id,
       title: test.title,
@@ -1258,20 +1405,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       pass_rate_percentage: passRate,
       flagged_proctoring_count: flaggedAttempts.length,
       score_distribution: distribution,
-      candidates: attempts.map(a => ({
-        attempt_id: a.id,
-        student_id: a.student_id,
-        student_name: a.student_name,
-        student_email: a.student_email,
-        score: a.total_score,
-        percentage: a.percentage,
-        passed: a.passed,
-        status: a.status,
-        warning_count: a.warning_count,
-        flagged: Boolean(a.proctoring_summary?.flagged),
-        started_at: a.started_at,
-        submitted_at: a.submitted_at
-      }))
+      candidates
     };
   }
 };

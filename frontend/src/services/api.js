@@ -252,9 +252,18 @@ class ApiClient {
     return res.data?.stats || res.data || {};
   }
 
-  async getAdminUsers() {
-    const res = await this.request('/admin/users');
-    return res.data.users;
+  async getAdminUsers(params = {}) {
+    const query = new URLSearchParams();
+    if (params.search) query.append('search', params.search);
+    if (params.role && params.role !== 'ALL') query.append('role', params.role);
+    if (params.status && params.status !== 'ALL') query.append('status', params.status);
+    if (params.limit) query.append('limit', params.limit);
+    if (params.offset !== undefined) query.append('offset', params.offset);
+    if (params.page !== undefined) query.append('page', params.page);
+
+    const qs = query.toString();
+    const res = await this.request(`/admin/users${qs ? `?${qs}` : ''}`);
+    return res.data?.users || res.data || [];
   }
 
   async createCourse(courseData) {
@@ -406,6 +415,12 @@ class ApiClient {
   async getAdminBatches(classId) {
     const endpoint = classId ? `/admin/classes/${classId}/batches` : '/batches';
     const res = await this.request(endpoint);
+    return res.data?.batches || (Array.isArray(res.data) ? res.data : []);
+  }
+
+  async getBatches(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    const res = await this.request(`/batches${query ? `?${query}` : ''}`);
     return res.data?.batches || (Array.isArray(res.data) ? res.data : []);
   }
 

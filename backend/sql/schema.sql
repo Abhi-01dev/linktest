@@ -387,13 +387,21 @@ CREATE TABLE notifications (
     user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
-    type VARCHAR(30) NOT NULL DEFAULT 'info',
+    type VARCHAR(30) NOT NULL DEFAULT 'INFO',
     link TEXT,
     read BOOLEAN NOT NULL DEFAULT false,
+    priority VARCHAR(20) DEFAULT 'NORMAL',
+    related_entity_type VARCHAR(50),
+    related_entity_id VARCHAR(64),
+    action_url TEXT,
+    action_label VARCHAR(100),
+    event_key VARCHAR(128),
+    dismissed BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_notifications_user_read ON notifications(user_id, read);
+CREATE UNIQUE INDEX idx_notifications_event_key ON notifications(event_key);
 
 -- 19. LEAVE REQUESTS
 CREATE TABLE leave_requests (
