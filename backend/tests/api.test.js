@@ -8,10 +8,12 @@ import { userRepository } from '../src/repositories/userRepository.js';
 import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
 import { setGoogleOAuthClient, getGoogleOAuthClient } from '../src/services/authService.js';
 import { config } from '../src/config/env.js';
+import jwt from 'jsonwebtoken';
 
 let server;
 let baseUrl;
 let studentToken;
+let teacherToken;
 let adminToken;
 let originalGoogleClient;
 
@@ -1113,5 +1115,142 @@ describe('LinkTest API End-to-End Suite', () => {
     assert.strictEqual(loginBody.success, true);
     assert.strictEqual(loginBody.data.user.email, studentEmail);
     assert.ok(loginBody.data.token);
+  });
+
+  // =========================================================================
+  // Issue #5: Server-Side Role Authorization & Access Control Tests
+  // =========================================================================
+
+  test('31. Authorization — Missing, malformed, invalid, or expired tokens reject with 401 UNAUTHORIZED', async () => {
+    // A. Missing Authorization header
+    const missingRes = await fetch(`${baseUrl}/api/admin/dashboard`);
+    assert.strictEqual(missingRes.status, 401);
+    const missingBody = await missingRes.json();
+    assert.strictEqual(missingBody.success, false);
+    assert.strictEqual(missingBody.error.code, 'UNAUTHORIZED');
+    assert.strictEqual(missingBody.error.message, 'Unauthorized');
+
+    // B. Malformed Bearer header
+    const malformedRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: { Authorization: 'Basic not-bearer-token' }
+    });
+    assert.strictEqual(malformedRes.status, 401);
+    const malformedBody = await malformedRes.json();
+    assert.strictEqual(malformedBody.error.code, 'UNAUTHORIZED');
+
+    // C. Invalid JWT signature
+    const invalidToken = jwt.sign({ id: 'any-id', role: 'ADMIN' }, 'invalid-secret-key-xyz');
+    const invalidRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: { Authorization: `Bearer ${invalidToken}` }
+    });
+    assert.strictEqual(invalidRes.status, 401);
+    const invalidBody = await invalidRes.json();
+    assert.strictEqual(invalidBody.error.code, 'UNAUTHORIZED');
+
+    // D. Expired JWT
+    const expiredToken = jwt.sign(
+      { id: 'user-admin-001', role: 'ADMIN' },
+      config.jwtSecret,
+      { expiresIn: -1 }
+    );
+    const expiredRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: { Authorization: `Bearer ${expiredToken}` }
+    });
+    assert.strictEqual(expiredRes.status, 401);
+    const expiredBody = await expiredRes.json();
+    assert.strictEqual(expiredBody.error.code, 'UNAUTHORIZED');
+  });
+
+  test('32. Role Authorization — STUDENT cannot access TEACHER or ADMIN endpoints (403 FORBIDDEN)', async () => {
+    // E. Student accessing ADMIN endpoint
+    const adminEndpointRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(adminEndpointRes.status, 403);
+    const adminEndpointBody = await adminEndpointRes.json();
+    assert.strictEqual(adminEndpointBody.success, false);
+    assert.strictEqual(adminEndpointBody.error.code, 'FORBIDDEN');
+    assert.strictEqual(adminEndpointBody.error.message, 'Forbidden');
+
+    // F. Student accessing TEACHER endpoint
+    const teacherEndpointRes = await fetch(`${baseUrl}/api/teacher/classes`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(teacherEndpointRes.status, 403);
+    const teacherEndpointBody = await teacherEndpointRes.json();
+    assert.strictEqual(teacherEndpointBody.success, false);
+    assert.strictEqual(teacherEndpointBody.error.code, 'FORBIDDEN');
+    assert.strictEqual(teacherEndpointBody.error.message, 'Forbidden');
+  });
+
+  test('33. Role Authorization — TEACHER access to TEACHER routes allowed, ADMIN-only rejected', async () => {
+    // Authenticate seeded Teacher
+    const tLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'teacher@linktest.io', password: 'Teacher123!' })
+    });
+    assert.strictEqual(tLogin.status, 200);
+    const tData = await tLogin.json();
+    teacherToken = tData.data.token;
+    assert.strictEqual(tData.data.user.role, 'TEACHER');
+
+    // G. TEACHER accessing TEACHER endpoint is allowed
+    const tClassesRes = await fetch(`${baseUrl}/api/teacher/classes`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(tClassesRes.status, 200);
+    const tClassesBody = await tClassesRes.json();
+    assert.strictEqual(tClassesBody.success, true);
+
+    // H. TEACHER accessing ADMIN-only endpoint is rejected (403 FORBIDDEN)
+    const tAdminRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(tAdminRes.status, 403);
+    const tAdminBody = await tAdminRes.json();
+    assert.strictEqual(tAdminBody.success, false);
+    assert.strictEqual(tAdminBody.error.code, 'FORBIDDEN');
+
+    // J. ADMIN accessing appropriate management endpoints (requireAnyRole ADMIN, TEACHER) is allowed
+    const adminBatchesRes = await fetch(`${baseUrl}/api/batches`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminBatchesRes.status, 200);
+    const adminBatchesBody = await adminBatchesRes.json();
+    assert.strictEqual(adminBatchesBody.success, true);
+  });
+
+  test('34. Role Spoofing Protection — Client cannot escalate privileges via body, query, or headers', async () => {
+    // K. Student sends role spoofing attempts
+    // Via request body
+    const bodySpoofRes = await fetch(`${baseUrl}/api/batches`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${studentToken}`
+      },
+      body: JSON.stringify({ role: 'ADMIN', name: 'Spoofed Batch', code: 'SPOOF01' })
+    });
+    assert.strictEqual(bodySpoofRes.status, 403);
+    const bodySpoofBody = await bodySpoofRes.json();
+    assert.strictEqual(bodySpoofBody.error.code, 'FORBIDDEN');
+
+    // Via query parameter
+    const querySpoofRes = await fetch(`${baseUrl}/api/admin/dashboard?role=ADMIN`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(querySpoofRes.status, 403);
+
+    // Via custom headers
+    const headerSpoofRes = await fetch(`${baseUrl}/api/admin/dashboard`, {
+      headers: {
+        Authorization: `Bearer ${studentToken}`,
+        'X-Role': 'ADMIN',
+        'X-User-Role': 'ADMIN',
+        Role: 'ADMIN'
+      }
+    });
+    assert.strictEqual(headerSpoofRes.status, 403);
   });
 });
