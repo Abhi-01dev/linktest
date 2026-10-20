@@ -1218,7 +1218,7 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
   const studentCount = users.filter(u => u.role === 'STUDENT').length;
   const teacherCount = users.filter(u => u.role === 'TEACHER').length;
 
-  const allAttempts = [
+  let allAttempts = [
     ...quizAttempts.map(qa => {
       const q = quizzes.find(x => x.id === qa.quiz_id);
       const u = users.find(x => x.id === qa.user_id);
@@ -1262,6 +1262,18 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
       };
     })
   ].sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+
+  if (start_date) {
+    const startObj = new Date(start_date);
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) >= startObj);
+  }
+  if (end_date) {
+    const endObj = new Date(end_date);
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) <= endObj);
+  }
+  if (course_id && course_id !== 'ALL') {
+    allAttempts = allAttempts.filter(a => a.course_id === course_id);
+  }
 
   const totalAttempts = allAttempts.length;
   const passedAttempts = allAttempts.filter(a => a.passed).length;

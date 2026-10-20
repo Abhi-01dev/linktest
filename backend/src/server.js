@@ -10,32 +10,6 @@ async function startServer() {
   // Initialize Database connection (PostgreSQL with fallback)
   await initDb();
 
-  // Ensure default administrator account is always provisioned on startup
-  try {
-    if (pool) {
-      const bcrypt = (await import('bcryptjs')).default;
-      const adminEmail = (process.env.ADMIN_EMAIL || 'admin@linktest.io').toLowerCase().trim();
-      const adminPass = process.env.ADMIN_PASSWORD || 'Admin123!';
-      const hash = await bcrypt.hash(adminPass, 10);
-      const now = new Date().toISOString();
-      await pool.query(
-        `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
-         VALUES ('user-admin-001', 'Dr. Priya Patel', $1, $2, 'ADMIN', 'active', true, $3, $3)
-         ON CONFLICT (email) DO UPDATE
-         SET role = 'ADMIN', status = 'active', email_verified = true`,
-        [adminEmail, hash, now]
-      );
-      await pool.query(
-        `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
-         VALUES ('user-admin-002', 'Dr. Priya Patel', 'admin@linktest.com', $1, 'ADMIN', 'active', true, $2, $2)
-         ON CONFLICT (email) DO UPDATE
-         SET role = 'ADMIN', status = 'active', email_verified = true`,
-        [hash, now]
-      );
-    }
-  } catch (adminErr) {
-    console.warn('[LinkTest Server] Admin auto-provision notice:', adminErr.message);
-  }
 
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[LinkTest Server] Ready and listening on port ${config.port} (0.0.0.0)`);

@@ -595,6 +595,12 @@ export const batchRepository = {
           }
 
           if (!memoryStore.batch_enrollments) memoryStore.batch_enrollments = [];
+          const existing = memoryStore.batch_enrollments.find(be => be.batch_id === batchId && be.student_id === studentId && be.status === 'active');
+          if (existing) {
+            failed.push({ student_id: studentId, reason: 'Student is already enrolled in this batch.' });
+            continue;
+          }
+
           const existingIdx = memoryStore.batch_enrollments.findIndex(be => be.batch_id === batchId && be.student_id === studentId);
           if (existingIdx !== -1) {
             memoryStore.batch_enrollments[existingIdx].status = 'active';

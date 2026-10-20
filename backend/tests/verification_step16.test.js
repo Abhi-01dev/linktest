@@ -1,7 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
-import { initDb, pool } from '../src/db/index.js';
+import { initDb, pool, isPostgresConnected, memoryStore } from '../src/db/index.js';
 import { userRepository } from '../src/repositories/userRepository.js';
 import { invitationRepository } from '../src/repositories/invitationRepository.js';
 import { authService, setGoogleOAuthClient, getGoogleOAuthClient } from '../src/services/authService.js';
@@ -394,9 +394,12 @@ describe('Step 16: End-to-End Verification Matrix', () => {
     assert.strictEqual(body2.data.is_new_user, false, 'is_new_user must be false on subsequent logins');
 
     // Verify 4: Database query confirms NO duplicate record was created
-    if (pool) {
+    if (isPostgresConnected && pool) {
       const dbCheck = await pool.query('SELECT count(*)::int as count FROM users WHERE email = $1', [dupEmail]);
       assert.strictEqual(dbCheck.rows[0].count, 1, 'Database must have exactly 1 record for this Google email');
+    } else {
+      const memMatches = (memoryStore.users || []).filter(u => u.email === dupEmail);
+      assert.strictEqual(memMatches.length, 1, 'In-memory store must have exactly 1 record for this Google email');
     }
 
     // Verify 5: Both login events generated audit & security entries

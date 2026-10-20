@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { initDb, query } from '../src/db/index.js';
+import { userRepository } from '../src/repositories/userRepository.js';
 
 let server;
 let baseUrl;
@@ -81,8 +82,8 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
     const body = await regRes.json();
     assert.strictEqual(body.success, true);
     // User record in database must be strictly STUDENT
-    const dbRes = await query('SELECT role FROM users WHERE email = $1', [randomEmail]);
-    assert.strictEqual(dbRes.rows[0].role, 'STUDENT');
+    const user = await userRepository.findByEmail(randomEmail);
+    assert.strictEqual(user.role, 'STUDENT');
   });
 
   test('2. Admin batch creation endpoint rejects unauthenticated or unauthorized users (401/403)', async () => {
