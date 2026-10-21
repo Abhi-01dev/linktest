@@ -12,6 +12,35 @@ Core Responsibilities:
 5. If you do not know an answer or if a query is ambiguous, honestly admit uncertainty and ask clarifying questions.
 6. Always maintain a professional, motivating, and educational tone.`;
 
+/**
+ * Safely resolves the OpenAI-compatible chat completions endpoint.
+ * Prevents malformed paths such as duplicate /openai/v1 or /chat/completions.
+ */
+export function resolveCloudEndpoint(rawBaseUrl, provider = '') {
+  const p = (provider || '').trim().toLowerCase();
+  let base = (rawBaseUrl || '').trim();
+
+  if (!base) {
+    if (p === 'openai') return 'https://api.openai.com/v1/chat/completions';
+    return 'https://api.groq.com/openai/v1/chat/completions';
+  }
+
+  // Strip trailing slashes
+  base = base.replace(/\/+$/, '');
+
+  // If already ends in /chat/completions, return as-is
+  if (base.endsWith('/chat/completions')) {
+    return base;
+  }
+
+  // If user entered only domain for groq (e.g. https://api.groq.com)
+  if (base === 'https://api.groq.com' || (p === 'groq' && !base.includes('/openai/v1'))) {
+    return `${base}/openai/v1/chat/completions`;
+  }
+
+  return `${base}/chat/completions`;
+}
+
 export const aiService = {
   /**
    * Diagnostic check for AI availability
@@ -22,13 +51,28 @@ export const aiService = {
 
     // Check Cloud AI provider first if configured
     if (config.cloudAi.apiKey) {
+      const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, config.cloudAi.provider);
       return {
         available: true,
-        provider: config.cloudAi.provider || 'cloud_llm',
+        provider: config.cloudAi.provider || 'groq',
         model: config.cloudAi.model,
-        endpoint: config.cloudAi.baseUrl || 'https://api.groq.com/openai/v1',
+        endpoint,
         is_cloud: true,
-        status_message: `Cloud AI provider is configured with model ${config.cloudAi.model}.`
+        status_message: `Cloud AI provider (${config.cloudAi.provider || 'groq'}) is configured with model ${config.cloudAi.model}.`
+      };
+    }
+
+    // Check if Cloud AI was requested but API key is missing
+    if (config.cloudAi.provider && !config.cloudAi.apiKey) {
+      const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, config.cloudAi.provider);
+      return {
+        available: false,
+        provider: config.cloudAi.provider,
+        model: config.cloudAi.model,
+        endpoint,
+        is_cloud: true,
+        error: 'Missing API key',
+        status_message: `Cloud AI provider '${config.cloudAi.provider}' is configured, but CLOUD_AI_API_KEY is not set.`
       };
     }
 
@@ -204,11 +248,26 @@ export const aiService = {
           conversation_id: activeConversationId,
           model: config.cloudAi.model,
           ai_available: true,
-          provider: 'cloud',
+          provider: config.cloudAi.provider || 'cloud',
           created_at: new Date().toISOString()
         };
       } catch (cloudErr) {
         console.warn('[AIService] Cloud AI call failed:', cloudErr.message);
+        const errMsg = `Cloud AI Tutor error: ${cloudErr.message}`;
+        await aiRepository.saveMessage({
+          userId,
+          conversationId: activeConversationId,
+          role: 'assistant',
+          message: errMsg
+        });
+
+        return {
+          reply: errMsg,
+          conversation_id: activeConversationId,
+          model: config.cloudAi.model,
+          ai_available: false,
+          created_at: new Date().toISOString()
+        };
       }
     }
 
@@ -308,9 +367,16 @@ To enable AI tutoring:
   /**
    * Helper: Call OpenAI-compatible Cloud AI endpoint
    */
-  async _chatWithCloud({ messages }) {
-    const baseUrl = config.cloudAi.baseUrl || 'https://api.groq.com/openai/v1';
-    const endpoint = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  async _chatWithCloud({ messages, modelOverride } = {}) {
+    const provider = config.cloudAi.provider || 'groq';
+    let targetModel = modelOverride || config.cloudAi.model;
+
+    // Safety fallback for decommissioned models
+    if (provider === 'groq' && targetModel === 'llama-3.1-8b-instant') {
+      targetModel = 'qwen/qwen3.8-27b';
+    }
+
+    const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, provider);
 
     const chatMessages = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -318,25 +384,53 @@ To enable AI tutoring:
     ];
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.cloudAi.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: config.cloudAi.model,
-        messages: chatMessages,
-        temperature: 0.7
-      }),
-      signal: controller.signal
-    });
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.cloudAi.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: chatMessages,
+          temperature: 0.7
+        }),
+        signal: controller.signal
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('Cloud AI request timed out after 35 seconds.');
+      }
+      throw fetchErr;
+    }
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`Cloud AI provider returned HTTP ${response.status}`);
+      const errBody = await response.json().catch(() => ({}));
+      const detailedMsg = errBody?.error?.message || errBody?.message || response.statusText;
+      const errorCode = errBody?.error?.code || '';
+
+      // Log safe diagnostic (NEVER log API keys or Authorization headers)
+      console.error(
+        `[AIService] Cloud AI request failed\n` +
+        `Provider: ${provider}\n` +
+        `Model: ${targetModel}\n` +
+        `Status: ${response.status}\n` +
+        `Message: ${detailedMsg}`
+      );
+
+      // If Groq returns 404 model_not_found and we were not already using qwen/qwen3.8-27b, retry once with fallback
+      if (provider === 'groq' && response.status === 404 && errorCode === 'model_not_found' && targetModel !== 'qwen/qwen3.8-27b') {
+        console.warn(`[AIService] Model '${targetModel}' was not found on Groq. Retrying with fallback model 'qwen/qwen3.8-27b'...`);
+        return this._chatWithCloud({ messages, modelOverride: 'qwen/qwen3.8-27b' });
+      }
+
+      throw new Error(`Cloud AI provider (${provider}) returned HTTP ${response.status}: ${detailedMsg}`);
     }
 
     const data = await response.json();
@@ -375,6 +469,12 @@ Output ONLY valid JSON adhering strictly to this schema, with no preamble or mar
         };
       } catch (err) {
         console.warn('[AIService] Cloud quiz generation failed:', err.message);
+        return {
+          available: false,
+          topic,
+          questions: [],
+          message: `Cloud AI quiz generation failed: ${err.message}`
+        };
       }
     }
 

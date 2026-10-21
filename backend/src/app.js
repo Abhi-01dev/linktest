@@ -30,6 +30,9 @@ import crypto from 'crypto';
 
 const app = express();
 
+// Configure trust proxy for reverse proxies (Render, Cloudflare, AWS) before rate limiters
+app.set('trust proxy', 1);
+
 // Request ID tracking & structured request logging
 app.use((req, res, next) => {
   req.id = req.headers['x-request-id'] || crypto.randomUUID();

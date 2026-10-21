@@ -115,10 +115,16 @@ export function buildConfig(rawEnv = process.env) {
       apiSecret: rawEnv.LIVEKIT_API_SECRET || ''
     },
     cloudAi: {
-      provider: rawEnv.CLOUD_AI_PROVIDER || '', // 'groq' | 'openai' | ''
-      apiKey: rawEnv.CLOUD_AI_API_KEY || '',
-      baseUrl: rawEnv.CLOUD_AI_BASE_URL || '',
-      model: rawEnv.CLOUD_AI_MODEL || 'llama-3.1-8b-instant'
+      provider: (rawEnv.CLOUD_AI_PROVIDER || '').trim().toLowerCase(), // 'groq' | 'openai' | ''
+      apiKey: (rawEnv.CLOUD_AI_API_KEY || '').trim(),
+      baseUrl: (rawEnv.CLOUD_AI_BASE_URL || '').trim(),
+      model: (() => {
+        const m = (rawEnv.CLOUD_AI_MODEL || '').trim();
+        if (!m || m === 'llama-3.1-8b-instant') {
+          return 'qwen/qwen3.8-27b';
+        }
+        return m;
+      })()
     },
     google: {
       clientId: rawEnv.GOOGLE_CLIENT_ID || '',
