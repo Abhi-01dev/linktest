@@ -607,6 +607,8 @@ export const mockTestRepository = {
       warning_count: 0,
       security_warning_count: 0,
       fullscreen_exit_count: 0,
+      integrity_trust_index: 100,
+      disqualified: false,
       submission_status: null,
       submission_reason: null,
       test_snapshot: attemptData.test_snapshot || {},
@@ -617,6 +619,7 @@ export const mockTestRepository = {
         fullscreen_exit_events: 0,
         camera_disconnect_events: 0,
         total_events: 0,
+        integrity_trust_index: 100,
         flagged: false
       },
       evaluator_remarks: null,
@@ -665,6 +668,7 @@ export const mockTestRepository = {
         'submitted_at', 'status', 'total_score', 'max_score', 'percentage', 'passed',
         'correct_count', 'incorrect_count', 'unanswered_count', 'time_spent_seconds',
         'warning_count', 'security_warning_count', 'fullscreen_exit_count',
+        'integrity_trust_index', 'disqualified',
         'submission_status', 'submission_reason',
         'result_status', 'released_at', 'released_by',
         'proctoring_summary', 'evaluator_remarks', 'evaluated_by', 'evaluated_at'
