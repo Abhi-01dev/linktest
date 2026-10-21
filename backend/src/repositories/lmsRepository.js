@@ -1,5 +1,6 @@
 import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import crypto from 'crypto';
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 export const lmsRepository = {
   // ============================================================
@@ -93,14 +94,15 @@ export const lmsRepository = {
   async createBatch({ classId, name, capacity, classTeacherId }) {
     const id = crypto.randomUUID();
     const created_at = new Date().toISOString();
+    const normalizedClassTeacherId = sanitizeOptionalString(classTeacherId);
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO batches (id, class_id, name, capacity, class_teacher_id, created_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [id, classId, name, capacity || 50, classTeacherId || null, created_at]
+        [id, classId, name, capacity || 50, normalizedClassTeacherId, created_at]
       );
       return res.rows[0];
     }
-    const batch = { id, class_id: classId, name, capacity: capacity || 50, class_teacher_id: classTeacherId || null, created_at };
+    const batch = { id, class_id: classId, name, capacity: capacity || 50, class_teacher_id: normalizedClassTeacherId, created_at };
     memoryStore.batches.push(batch);
     return batch;
   },
@@ -265,11 +267,12 @@ export const lmsRepository = {
   },
 
   async assignTeacher({ teacherId, classId, batchId, subjectId }) {
+    const normalizedBatchId = sanitizeOptionalString(batchId);
     if (isPostgresConnected && pool) {
       // Check if duplicate assignment exists
       const exists = await pool.query(
         `SELECT id FROM teacher_assignments WHERE teacher_id=$1 AND class_id=$2 AND subject_id=$3 AND (batch_id=$4 OR (batch_id IS NULL AND $4 IS NULL))`,
-        [teacherId, classId, subjectId, batchId || null]
+        [teacherId, classId, subjectId, normalizedBatchId]
       );
       if (exists.rows.length > 0) {
         const err = new Error('This subject is already assigned to this teacher for the specified class/batch.');
@@ -281,13 +284,13 @@ export const lmsRepository = {
       const now = new Date().toISOString();
       await pool.query(
         `INSERT INTO teacher_assignments (id, teacher_id, class_id, batch_id, subject_id, assigned_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-        [id, teacherId, classId, batchId || null, subjectId, now]
+        [id, teacherId, classId, normalizedBatchId, subjectId, now]
       );
       return this.getAssignmentById(id);
     }
     if (!memoryStore.teacher_assignments) memoryStore.teacher_assignments = [];
     const existing = memoryStore.teacher_assignments.find(
-      ta => ta.teacher_id === teacherId && ta.class_id === classId && ta.subject_id === subjectId && ta.batch_id === (batchId || null)
+      ta => ta.teacher_id === teacherId && ta.class_id === classId && ta.subject_id === subjectId && ta.batch_id === normalizedBatchId
     );
     if (existing) {
       const err = new Error('This subject is already assigned to this teacher for the specified class/batch.');
@@ -297,7 +300,7 @@ export const lmsRepository = {
     }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    const ta = { id, teacher_id: teacherId, class_id: classId, batch_id: batchId || null, subject_id: subjectId, assigned_at: now };
+    const ta = { id, teacher_id: teacherId, class_id: classId, batch_id: normalizedBatchId, subject_id: subjectId, assigned_at: now };
     memoryStore.teacher_assignments.push(ta);
     return this.getAssignmentById(id);
   },
@@ -438,15 +441,17 @@ export const lmsRepository = {
   async createTimetableEntry({ classId, batchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room, academicSessionId }) {
     const id = crypto.randomUUID();
     const created_at = new Date().toISOString();
+    const normalizedBatchId = sanitizeOptionalString(batchId);
+    const normalizedAcademicSessionId = sanitizeOptionalString(academicSessionId);
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO timetable_entries (id, class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-        [id, classId, batchId || null, subjectId, teacherId, dayOfWeek, startTime, endTime, room || null, academicSessionId || null, created_at]
+        [id, classId, normalizedBatchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room || null, normalizedAcademicSessionId, created_at]
       );
       return res.rows[0];
     }
-    const entry = { id, class_id: classId, batch_id: batchId || null, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: room || null, academic_session_id: academicSessionId || null, created_at };
+    const entry = { id, class_id: classId, batch_id: normalizedBatchId, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: room || null, academic_session_id: normalizedAcademicSessionId, created_at };
     memoryStore.timetable_entries.push(entry);
     return entry;
   },
@@ -471,25 +476,27 @@ export const lmsRepository = {
     for (const r of records) {
       const id = crypto.randomUUID();
       const created_at = new Date().toISOString();
+      const batchId = sanitizeOptionalString(r.batchId);
+      const subjectId = sanitizeOptionalString(r.subjectId);
       if (isPostgresConnected && pool) {
         const res = await pool.query(
           `INSERT INTO attendance_records (id, student_id, class_id, batch_id, subject_id, date, status, marked_by, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
            ON CONFLICT (student_id, class_id, subject_id, date) DO UPDATE SET status = EXCLUDED.status, marked_by = EXCLUDED.marked_by
            RETURNING *`,
-          [id, r.studentId, r.classId, r.batchId || null, r.subjectId || null, r.date, r.status, r.markedBy, created_at]
+          [id, r.studentId, r.classId, batchId, subjectId, r.date, r.status, r.markedBy, created_at]
         );
         results.push(res.rows[0]);
       } else {
         const existing = memoryStore.attendance_records.find(
-          a => a.student_id === r.studentId && a.class_id === r.classId && a.date === r.date && (a.subject_id === r.subjectId || (!a.subject_id && !r.subjectId))
+          a => a.student_id === r.studentId && a.class_id === r.classId && a.date === r.date && (a.subject_id === subjectId || (!a.subject_id && !subjectId))
         );
         if (existing) {
           existing.status = r.status;
           existing.marked_by = r.markedBy;
           results.push(existing);
         } else {
-          const record = { id, student_id: r.studentId, class_id: r.classId, batch_id: r.batchId || null, subject_id: r.subjectId || null, date: r.date, status: r.status, marked_by: r.markedBy, correction_reason: null, corrected_at: null, corrected_by: null, created_at };
+          const record = { id, student_id: r.studentId, class_id: r.classId, batch_id: batchId, subject_id: subjectId, date: r.date, status: r.status, marked_by: r.markedBy, correction_reason: null, corrected_at: null, corrected_by: null, created_at };
           memoryStore.attendance_records.push(record);
           results.push(record);
         }
@@ -574,15 +581,17 @@ export const lmsRepository = {
   async createAssignment({ title, instructions, subjectId, classId, batchId, teacherId, issueDate, dueDate, maxMarks, status }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const normalizedSubjectId = sanitizeOptionalString(subjectId);
+    const normalizedBatchId = sanitizeOptionalString(batchId);
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO assignments (id, title, instructions, subject_id, class_id, batch_id, teacher_id, issue_date, due_date, max_marks, status, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING *`,
-        [id, title, instructions, subjectId || null, classId, batchId || null, teacherId, issueDate, dueDate, maxMarks || 100, status || 'draft', now]
+        [id, title, instructions, normalizedSubjectId, classId, normalizedBatchId, teacherId, issueDate, dueDate, maxMarks || 100, status || 'draft', now]
       );
       return res.rows[0];
     }
-    const assignment = { id, title, instructions, subject_id: subjectId || null, class_id: classId, batch_id: batchId || null, teacher_id: teacherId, issue_date: issueDate, due_date: dueDate, max_marks: maxMarks || 100, status: status || 'draft', created_at: now, updated_at: now };
+    const assignment = { id, title, instructions, subject_id: normalizedSubjectId, class_id: classId, batch_id: normalizedBatchId, teacher_id: teacherId, issue_date: issueDate, due_date: dueDate, max_marks: maxMarks || 100, status: status || 'draft', created_at: now, updated_at: now };
     memoryStore.assignments.push(assignment);
     return assignment;
   },
@@ -717,15 +726,19 @@ export const lmsRepository = {
   async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, courseId, lessonId, uploadedBy }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const normalizedSubjectId = sanitizeOptionalString(subjectId);
+    const normalizedClassId = sanitizeOptionalString(classId);
+    const normalizedCourseId = sanitizeOptionalString(courseId);
+    const normalizedLessonId = sanitizeOptionalString(lessonId);
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO study_materials (id, title, description, type, file_path, file_name, file_size, external_url, subject_id, class_id, course_id, lesson_id, uploaded_by, published, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false,$14,$14) RETURNING *`,
-        [id, title, description || null, type || 'document', filePath || null, fileName || null, fileSize || null, externalUrl || null, subjectId || null, classId || null, courseId || null, lessonId || null, uploadedBy, now]
+        [id, title, description || null, type || 'document', filePath || null, fileName || null, fileSize || null, externalUrl || null, normalizedSubjectId, normalizedClassId, normalizedCourseId, normalizedLessonId, uploadedBy, now]
       );
       return res.rows[0];
     }
-    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: subjectId || null, class_id: classId || null, course_id: courseId || null, lesson_id: lessonId || null, uploaded_by: uploadedBy, published: false, created_at: now, updated_at: now };
+    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: normalizedSubjectId, class_id: normalizedClassId, course_id: normalizedCourseId, lesson_id: normalizedLessonId, uploaded_by: uploadedBy, published: false, created_at: now, updated_at: now };
     memoryStore.study_materials.push(mat);
     return mat;
   },
@@ -1045,15 +1058,19 @@ export const lmsRepository = {
   async createLiveClass({ title, description, teacherId, classId, batchId, subjectId, courseId, scheduledAt, meetingUrl, meetingProvider = 'livekit' }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const normalizedClassId = sanitizeOptionalString(classId);
+    const normalizedBatchId = sanitizeOptionalString(batchId);
+    const normalizedSubjectId = sanitizeOptionalString(subjectId);
+    const normalizedCourseId = sanitizeOptionalString(courseId);
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO live_class_sessions (id, title, description, teacher_id, class_id, batch_id, subject_id, course_id, scheduled_at, meeting_url, meeting_provider, status, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'scheduled',$12) RETURNING *`,
-        [id, title, description || null, teacherId, classId || null, batchId || null, subjectId || null, courseId || null, scheduledAt, meetingUrl || null, meetingProvider || 'livekit', now]
+        [id, title, description || null, teacherId, normalizedClassId, normalizedBatchId, normalizedSubjectId, normalizedCourseId, scheduledAt, meetingUrl || null, meetingProvider || 'livekit', now]
       );
       return res.rows[0];
     }
-    const session = { id, title, description: description || null, teacher_id: teacherId, class_id: classId || null, batch_id: batchId || null, subject_id: subjectId || null, course_id: courseId || null, scheduled_at: scheduledAt, started_at: null, ended_at: null, meeting_url: meetingUrl || null, meeting_provider: meetingProvider || 'livekit', status: 'scheduled', created_at: now };
+    const session = { id, title, description: description || null, teacher_id: teacherId, class_id: normalizedClassId, batch_id: normalizedBatchId, subject_id: normalizedSubjectId, course_id: normalizedCourseId, scheduled_at: scheduledAt, started_at: null, ended_at: null, meeting_url: meetingUrl || null, meeting_provider: meetingProvider || 'livekit', status: 'scheduled', created_at: now };
     if (!memoryStore.live_class_sessions) memoryStore.live_class_sessions = [];
     memoryStore.live_class_sessions.push(session);
     return session;
