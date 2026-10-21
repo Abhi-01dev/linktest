@@ -367,24 +367,47 @@ To enable AI tutoring:
   /**
    * Helper: Call OpenAI-compatible Cloud AI endpoint
    */
-  async _chatWithCloud({ messages, modelOverride } = {}) {
+  async _chatWithCloud({
+    messages = [],
+    modelOverride,
+    temperature = 0.7,
+    maxTokens,
+    responseFormat,
+    systemPrompt
+  } = {}) {
     const provider = config.cloudAi.provider || 'groq';
     let targetModel = modelOverride || config.cloudAi.model;
 
-    // Safety fallback for decommissioned models
-    if (provider === 'groq' && targetModel === 'llama-3.1-8b-instant') {
-      targetModel = 'qwen/qwen3.8-27b';
+    // Sanitize any invalid or stale Groq models
+    if (provider === 'groq') {
+      if (!targetModel || targetModel === 'qwen/qwen3.8-27b') {
+        targetModel = 'llama-3.3-70b-versatile';
+      }
     }
 
     const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, provider);
 
     const chatMessages = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...messages.map(m => ({ role: m.role, content: m.message }))
+      { role: 'system', content: systemPrompt || SYSTEM_PROMPT },
+      ...messages.map(m => ({ role: m.role || 'user', content: m.content || m.message || '' }))
     ];
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 35000);
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    const requestPayload = {
+      model: targetModel,
+      messages: chatMessages,
+      temperature
+    };
+
+    if (maxTokens) {
+      requestPayload.max_tokens = maxTokens;
+    }
+
+    if (responseFormat) {
+      requestPayload.response_format = responseFormat;
+    }
 
     let response;
     try {
@@ -394,43 +417,89 @@ To enable AI tutoring:
           'Authorization': `Bearer ${config.cloudAi.apiKey}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          model: targetModel,
-          messages: chatMessages,
-          temperature: 0.7
-        }),
+        body: JSON.stringify(requestPayload),
         signal: controller.signal
       });
     } catch (fetchErr) {
       clearTimeout(timeoutId);
       if (fetchErr.name === 'AbortError') {
-        throw new Error('Cloud AI request timed out after 35 seconds.');
+        const timeoutErr = new Error('Cloud AI request timed out after 45 seconds.');
+        timeoutErr.status = 504;
+        timeoutErr.code = 'AI_SERVICE_ERROR';
+        timeoutErr.isAiError = true;
+        throw timeoutErr;
       }
-      throw fetchErr;
+      const netErr = new Error(`Cloud AI connection error: ${fetchErr.message}`);
+      netErr.status = 502;
+      netErr.code = 'AI_SERVICE_ERROR';
+      netErr.isAiError = true;
+      throw netErr;
     }
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}));
-      const detailedMsg = errBody?.error?.message || errBody?.message || response.statusText;
-      const errorCode = errBody?.error?.code || '';
-
-      // Log safe diagnostic (NEVER log API keys or Authorization headers)
-      console.error(
-        `[AIService] Cloud AI request failed\n` +
-        `Provider: ${provider}\n` +
-        `Model: ${targetModel}\n` +
-        `Status: ${response.status}\n` +
-        `Message: ${detailedMsg}`
-      );
-
-      // If Groq returns 404 model_not_found and we were not already using qwen/qwen3.8-27b, retry once with fallback
-      if (provider === 'groq' && response.status === 404 && errorCode === 'model_not_found' && targetModel !== 'qwen/qwen3.8-27b') {
-        console.warn(`[AIService] Model '${targetModel}' was not found on Groq. Retrying with fallback model 'qwen/qwen3.8-27b'...`);
-        return this._chatWithCloud({ messages, modelOverride: 'qwen/qwen3.8-27b' });
+      const rawText = await response.text().catch(() => '');
+      let errBody = {};
+      try {
+        errBody = JSON.parse(rawText);
+      } catch {
+        errBody = { raw: rawText };
       }
 
-      throw new Error(`Cloud AI provider (${provider}) returned HTTP ${response.status}: ${detailedMsg}`);
+      const detailedMsg = errBody?.error?.message || errBody?.message || rawText || response.statusText;
+      const errorCode = errBody?.error?.code || '';
+
+      // Redact any secrets or auth tokens before logging
+      const safeBody = (typeof errBody === 'object' ? JSON.stringify(errBody) : String(rawText))
+        .replace(/Bearer\s+[A-Za-z0-9_\-\.]+/gi, 'Bearer [REDACTED]')
+        .replace(/gsk_[A-Za-z0-9]+/gi, 'gsk_[REDACTED]')
+        .replace(/sk-[A-Za-z0-9]+/gi, 'sk-[REDACTED]');
+
+      // Task 6: Production logs contain HTTP status, Groq error message, requested model, provider, endpoint, sanitized body
+      console.error(
+        `[AIService] Cloud AI request failed:\n` +
+        `  Provider: ${provider}\n` +
+        `  Endpoint: ${endpoint}\n` +
+        `  Requested Model: ${targetModel}\n` +
+        `  HTTP Status: ${response.status}\n` +
+        `  Groq Error Message: ${detailedMsg}\n` +
+        `  Response Body: ${safeBody}`
+      );
+
+      // If model not found or decommissioned, retry once with fallback model (llama-3.1-8b-instant)
+      if (provider === 'groq' && (response.status === 404 || errorCode === 'model_not_found') && targetModel !== 'llama-3.1-8b-instant') {
+        console.warn(`[AIService] Model '${targetModel}' failed on Groq (${detailedMsg}). Retrying with fallback model 'llama-3.1-8b-instant'...`);
+        return this._chatWithCloud({
+          messages,
+          modelOverride: 'llama-3.1-8b-instant',
+          temperature,
+          maxTokens,
+          responseFormat,
+          systemPrompt
+        });
+      }
+
+      // If response_format json_object caused 400 Bad Request on provider, retry once without response_format
+      if (responseFormat && response.status === 400 && String(detailedMsg).toLowerCase().includes('response_format')) {
+        console.warn(`[AIService] response_format was rejected by ${provider}. Retrying with prompt-based JSON instructions only...`);
+        return this._chatWithCloud({
+          messages,
+          modelOverride: targetModel,
+          temperature,
+          maxTokens,
+          responseFormat: null,
+          systemPrompt
+        });
+      }
+
+      const clientErr = new Error(`Cloud AI provider (${provider}) error: ${detailedMsg}`);
+      clientErr.status = response.status === 429 ? 429 : 502;
+      clientErr.code = 'AI_SERVICE_ERROR';
+      clientErr.isAiError = true;
+      clientErr.provider = provider;
+      clientErr.providerStatus = response.status;
+      clientErr.providerError = detailedMsg;
+      throw clientErr;
     }
 
     const data = await response.json();

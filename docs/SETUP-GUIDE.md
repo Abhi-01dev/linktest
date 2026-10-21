@@ -226,9 +226,9 @@ It should return:
   "data": {
     "available": true,
     "provider": "groq",
-    "model": "qwen/qwen3.8-27b",
+    "model": "llama-3.3-70b-versatile",
     "is_cloud": true,
-    "status_message": "Cloud AI provider (groq) is configured with model qwen/qwen3.8-27b."
+    "status_message": "Cloud AI provider (groq) is configured with model llama-3.3-70b-versatile."
   }
 }
 ```

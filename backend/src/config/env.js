@@ -115,13 +115,21 @@ export function buildConfig(rawEnv = process.env) {
       apiSecret: rawEnv.LIVEKIT_API_SECRET || ''
     },
     cloudAi: {
-      provider: (rawEnv.CLOUD_AI_PROVIDER || '').trim().toLowerCase(), // 'groq' | 'openai' | ''
+      provider: (() => {
+        const p = (rawEnv.CLOUD_AI_PROVIDER || '').trim().toLowerCase();
+        if (p) return p;
+        const key = (rawEnv.CLOUD_AI_API_KEY || '').trim();
+        if (key.startsWith('gsk_')) return 'groq';
+        if (key.startsWith('sk-')) return 'openai';
+        return 'groq';
+      })(),
       apiKey: (rawEnv.CLOUD_AI_API_KEY || '').trim(),
       baseUrl: (rawEnv.CLOUD_AI_BASE_URL || '').trim(),
       model: (() => {
         const m = (rawEnv.CLOUD_AI_MODEL || '').trim();
-        if (!m || m === 'llama-3.1-8b-instant') {
-          return 'qwen/qwen3.8-27b';
+        // Disallow invalid/unsupported model identifiers; default to Groq's active production model
+        if (!m || m === 'qwen/qwen3.8-27b') {
+          return 'llama-3.3-70b-versatile';
         }
         return m;
       })()
