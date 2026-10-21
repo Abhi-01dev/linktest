@@ -4,6 +4,7 @@
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
+import { lmsRepository } from '../repositories/lmsRepository.js';
 import { mockTestScoringService } from './mockTestScoringService.js';
 import { aiService } from './aiService.js';
 import { generateTestResultsPdf } from './pdfReportService.js';
@@ -736,10 +737,19 @@ export const mockTestService = {
       throw err;
     }
 
-    // Critical Security: Student can ONLY view their own attempt result
+    // Critical Security: Students can only view their own result.
     if (student.role === 'STUDENT' && attempt.student_id !== student.id) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
       const err = new Error('You are not authorized to view this result.');
       err.status = 403;
+      err.code = 'FORBIDDEN';
       throw err;
     }
 
@@ -747,6 +757,25 @@ export const mockTestService = {
     if (!test) {
       const err = new Error('Associated examination record not found.');
       err.status = 404;
+      throw err;
+    }
+
+    if (
+      student.role === 'TEACHER' &&
+      test.created_by !== student.id &&
+      !(await lmsRepository.isTeacherAssignedToStudent(student.id, attempt.student_id))
+    ) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
+      const err = new Error('You are not authorized to view this result.');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
       throw err;
     }
 

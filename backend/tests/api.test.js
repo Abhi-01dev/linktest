@@ -1,5 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
 import { emailService } from '../src/services/emailService.js';
@@ -13,6 +14,7 @@ let server;
 let baseUrl;
 let studentToken;
 let adminToken;
+let quizAttemptId;
 let originalGoogleClient;
 
 describe('LinkTest API End-to-End Suite', () => {
@@ -700,6 +702,47 @@ describe('LinkTest API End-to-End Suite', () => {
     assert.strictEqual(body.data.percentage, 100);
     assert.strictEqual(body.data.passed, true);
     assert.ok(body.data.results.length === 5);
+    quizAttemptId = body.data.attempt_id;
+  });
+
+  test('16a. Quiz scorecards enforce ownership and log unauthorized access', async () => {
+    const ownRes = await fetch(`${baseUrl}/api/quizzes/attempts/${quizAttemptId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(ownRes.status, 200);
+
+    const otherStudent = await userRepository.create({
+      fullName: 'Other Scorecard Candidate',
+      email: `scorecard.other.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherStudentToken = jwt.sign(
+      { id: otherStudent.id, email: otherStudent.email, role: 'STUDENT' },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const logCountBefore = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+
+    const forbiddenRes = await fetch(`${baseUrl}/api/quizzes/attempts/${quizAttemptId}`, {
+      headers: { Authorization: `Bearer ${otherStudentToken}` }
+    });
+    assert.strictEqual(forbiddenRes.status, 403);
+    const forbiddenBody = await forbiddenRes.json();
+    assert.strictEqual(forbiddenBody.error.code, 'FORBIDDEN');
+
+    const logCountAfter = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+    assert.strictEqual(logCountAfter, logCountBefore + 1);
+
+    const adminRes = await fetch(`${baseUrl}/api/quizzes/attempts/${quizAttemptId}`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
   });
 
   test('17. Lesson Progress persistence updates course percentage', async () => {

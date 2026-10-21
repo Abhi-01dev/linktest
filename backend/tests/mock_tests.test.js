@@ -1,7 +1,11 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
+import { config } from '../src/config/env.js';
+import { userRepository } from '../src/repositories/userRepository.js';
+import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
 
 let server;
 let baseUrl;
@@ -409,5 +413,45 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
       method: 'POST'
     });
     assert.strictEqual(res.status, 401);
+  });
+
+  test('12. Scorecard access is owner-only for students and audited', async () => {
+    const otherStudent = await userRepository.create({
+      fullName: 'Other Scorecard Candidate',
+      email: `scorecard.other.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherStudentToken = jwt.sign(
+      { id: otherStudent.id, email: otherStudent.email, role: 'STUDENT' },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const logCountBefore = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+
+    const forbiddenRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${otherStudentToken}` }
+    });
+    assert.strictEqual(forbiddenRes.status, 403);
+    const forbiddenBody = await forbiddenRes.json();
+    assert.strictEqual(forbiddenBody.error.code, 'FORBIDDEN');
+
+    const logCountAfter = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+    assert.strictEqual(logCountAfter, logCountBefore + 1);
+
+    const teacherRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(teacherRes.status, 200);
+
+    const adminRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
   });
 });
