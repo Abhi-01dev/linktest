@@ -13,7 +13,8 @@ import { z } from 'zod';
 
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
-  full_name: z.string().min(2).max(150)
+  full_name: z.string().min(2).max(150),
+  department: z.string().trim().min(2).max(150)
 });
 
 const updateStatusSchema = z.object({
@@ -271,10 +272,11 @@ export const adminController = {
 
   async inviteTeacher(req, res, next) {
     try {
-      const { email, full_name } = inviteTeacherSchema.parse(req.body);
+      const { email, full_name, department } = inviteTeacherSchema.parse(req.body);
       const result = await authService.inviteTeacher({
         email,
         fullName: full_name,
+        department,
         invitedBy: req.user.id,
         inviterName: req.user.full_name
       });

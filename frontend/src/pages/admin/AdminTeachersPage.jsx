@@ -24,6 +24,7 @@ export function AdminTeachersPage() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteFullName, setInviteFullName] = useState('');
+  const [inviteDepartment, setInviteDepartment] = useState('');
   const [inviting, setInviting] = useState(false);
 
   // Assign Modal State
@@ -62,11 +63,12 @@ export function AdminTeachersPage() {
     e.preventDefault();
     setInviting(true);
     try {
-      const res = await api.inviteTeacher(inviteEmail, inviteFullName);
+      await api.inviteTeacher(inviteEmail, inviteFullName, inviteDepartment);
       showToast(`Invitation sent to ${inviteEmail}`, 'success');
       setShowInviteModal(false);
       setInviteEmail('');
       setInviteFullName('');
+      setInviteDepartment('');
       loadData();
     } catch (err) {
       showToast(err.message || 'Failed to send teacher invitation', 'error');
@@ -282,7 +284,7 @@ export function AdminTeachersPage() {
               Invite New Faculty Member
             </h3>
             <p style={{ color: '#64748B', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-              An invitation email containing a secure 7-day token link will be sent to the teacher.
+              An invitation email containing a secure 48-hour link will be sent. Assign classes and subjects after the teacher accepts.
             </p>
 
             <form onSubmit={handleInviteSubmit}>
@@ -306,6 +308,19 @@ export function AdminTeachersPage() {
                   placeholder="e.g. rajesh@linktest.io"
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Department</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Computer Science"
+                  value={inviteDepartment}
+                  onChange={(e) => setInviteDepartment(e.target.value)}
+                  maxLength={150}
                   required
                 />
               </div>

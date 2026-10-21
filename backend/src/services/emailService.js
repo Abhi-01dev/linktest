@@ -251,6 +251,12 @@ export const emailService = {
       console.log(`[LinkTest Email] Teacher invitation sent to ${email}`);
       return { success: true, messageId: info.messageId };
     }
+    if (config.nodeEnv === 'production') {
+      const err = new Error('Teacher invitation email delivery is unavailable.');
+      err.statusCode = 503;
+      err.code = 'EMAIL_DELIVERY_UNAVAILABLE';
+      throw err;
+    }
     console.log('================================================================');
     console.log('  [LinkTest Email Simulator] TEACHER INVITATION SENT');
     console.log('----------------------------------------------------------------');

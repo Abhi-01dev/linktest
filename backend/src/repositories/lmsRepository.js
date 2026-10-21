@@ -1138,11 +1138,12 @@ export const lmsRepository = {
     return memoryStore.teacher_profiles.find(p => p.user_id === userId) || null;
   },
 
-  async upsertTeacherProfile(userId, { employeeId, department, qualification, specialization, joiningDate }) {
+  async upsertTeacherProfile(userId, { employeeId, department, qualification, specialization, joiningDate }, client = null) {
     const now = new Date().toISOString();
     if (isPostgresConnected && pool) {
       const id = crypto.randomUUID();
-      const res = await pool.query(
+      const db = client || pool;
+      const res = await db.query(
         `INSERT INTO teacher_profiles (id, user_id, employee_id, department, qualification, specialization, joining_date, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
          ON CONFLICT (user_id) DO UPDATE SET employee_id=EXCLUDED.employee_id, department=EXCLUDED.department, qualification=EXCLUDED.qualification, specialization=EXCLUDED.specialization, joining_date=EXCLUDED.joining_date, updated_at=$8
