@@ -280,6 +280,8 @@ Authorization: Bearer <jwt_token>
 | `PUT` | `/api/admin/leave-requests/:id` | Admin | Approve or reject teacher leave |
 | `GET` | `/api/admin/audit-logs` | Admin | View tamper-evident audit logs |
 
+`GET /api/admin/dashboard` returns KPI counts under `data.stats`, including `totalStudents`, `totalTeachers`, `activeBatches`, `totalCourses`, `totalExams`, and `systemUptime` (application uptime in seconds). `totalExams` is the configured mock-test count; `conductedExams` counts submitted or evaluated mock-test attempts. Legacy snake_case dashboard fields remain available.
+
 ---
 
 ### 3.6 Teacher Portal (`/api/teacher/*`)
@@ -341,4 +343,3 @@ Authorization: Bearer <jwt_token>
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/livekit/status` | Public | Provider status & external meeting fallback report |
 | `POST` | `/api/livekit/token` | Authenticated | Generate WebRTC room token for live lecture |
-

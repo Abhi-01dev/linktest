@@ -31,86 +31,138 @@ export const adminController = {
   // ── Dashboard ──────────────────────────────────────────────
   async getDashboardStats(req, res, next) {
     try {
-      let stats;
+      let counts;
+      let recentActivity;
       if (isPostgresConnected && pool) {
-        const [uCounts, cRes, qRes, aRes, classRes, liveRes, assignRes, batchRes] = await Promise.all([
-          pool.query(`SELECT role, status, COUNT(*)::int as count FROM users GROUP BY role, status`),
-          pool.query(`SELECT COUNT(*)::int as count FROM courses WHERE published = true`),
-          pool.query(`SELECT COUNT(*)::int as count FROM quizzes`),
-          pool.query(`SELECT COUNT(*)::int as count FROM quiz_attempts`),
-          pool.query(`SELECT COUNT(*)::int as count FROM classes`),
-          pool.query(`SELECT COUNT(*)::int as count FROM live_class_sessions WHERE status = 'scheduled' AND scheduled_at > NOW()`),
-          pool.query(`SELECT COUNT(*)::int as count FROM assignments WHERE status = 'published' AND due_date >= CURRENT_DATE`),
-          pool.query(`SELECT COUNT(*)::int as count FROM batches WHERE status = 'Active'`)
-        ]);
-
-        const byRoleStatus = {};
-        uCounts.rows.forEach(r => {
-          if (!byRoleStatus[r.role]) byRoleStatus[r.role] = { total: 0, active: 0 };
-          byRoleStatus[r.role].total += r.count;
-          if (r.status === 'active') byRoleStatus[r.role].active += r.count;
-        });
-
+        const countResult = await pool.query(`
+          WITH user_metrics AS (
+            SELECT
+              COUNT(*) FILTER (WHERE role = 'STUDENT')::int AS total_students,
+              COUNT(*) FILTER (WHERE role = 'STUDENT' AND status = 'active')::int AS active_students,
+              COUNT(*) FILTER (WHERE role = 'TEACHER')::int AS total_teachers,
+              COUNT(*) FILTER (WHERE role = 'TEACHER' AND status = 'active')::int AS active_teachers,
+              COUNT(*)::int AS user_count
+            FROM users
+          ),
+          course_metrics AS (
+            SELECT COUNT(*)::int AS course_count,
+                   COUNT(*) FILTER (WHERE published = true)::int AS active_courses
+            FROM courses
+          ),
+          quiz_metrics AS (SELECT COUNT(*)::int AS quiz_count FROM quizzes),
+          quiz_attempt_metrics AS (SELECT COUNT(*)::int AS attempt_count FROM quiz_attempts),
+          class_metrics AS (SELECT COUNT(*)::int AS class_count FROM classes),
+          batch_metrics AS (
+            SELECT COUNT(*) FILTER (WHERE LOWER(status) = 'active')::int AS batch_count
+            FROM batches
+          ),
+          lesson_metrics AS (SELECT COUNT(*)::int AS lesson_count FROM lessons),
+          live_class_metrics AS (
+            SELECT COUNT(*)::int AS upcoming_live_classes
+            FROM live_class_sessions
+            WHERE status = 'scheduled' AND scheduled_at > NOW()
+          ),
+          assignment_metrics AS (
+            SELECT COUNT(*)::int AS pending_assignments
+            FROM assignments
+            WHERE status = 'published' AND due_date >= CURRENT_DATE
+          ),
+          mock_test_metrics AS (SELECT COUNT(*)::int AS mock_test_count FROM mock_tests),
+          mock_attempt_metrics AS (
+            SELECT COUNT(*)::int AS mock_test_attempt_count,
+                   COUNT(*) FILTER (WHERE status IN ('submitted', 'evaluated'))::int AS conducted_exams
+            FROM mock_test_attempts
+          )
+          SELECT * FROM user_metrics
+          CROSS JOIN course_metrics
+          CROSS JOIN quiz_metrics
+          CROSS JOIN quiz_attempt_metrics
+          CROSS JOIN class_metrics
+          CROSS JOIN batch_metrics
+          CROSS JOIN lesson_metrics
+          CROSS JOIN live_class_metrics
+          CROSS JOIN assignment_metrics
+          CROSS JOIN mock_test_metrics
+          CROSS JOIN mock_attempt_metrics
+        `);
+        counts = countResult.rows[0];
         const recentAttempts = await pool.query(
           `SELECT qa.id, qa.score, qa.total_questions, qa.submitted_at, u.full_name as student_name, q.title as quiz_title
            FROM quiz_attempts qa JOIN users u ON qa.user_id = u.id JOIN quizzes q ON qa.quiz_id = q.id
            ORDER BY qa.submitted_at DESC LIMIT 5`
         );
-
-        stats = {
-          total_students: byRoleStatus['STUDENT']?.total || 0,
-          active_students: byRoleStatus['STUDENT']?.active || 0,
-          total_teachers: byRoleStatus['TEACHER']?.total || 0,
-          active_teachers: byRoleStatus['TEACHER']?.active || 0,
-          active_courses: cRes.rows[0]?.count || 0,
-          course_count: cRes.rows[0]?.count || 0,
-          user_count: (byRoleStatus['STUDENT']?.total || 0) + (byRoleStatus['TEACHER']?.total || 0) + (byRoleStatus['ADMIN']?.total || 0),
-          quiz_count: qRes.rows[0]?.count || 0,
-          attempt_count: aRes.rows[0]?.count || 0,
-          class_count: classRes.rows[0]?.count || 0,
-          batch_count: batchRes.rows[0]?.count || 0,
-          upcoming_live_classes: liveRes.rows[0]?.count || 0,
-          pending_assignments: assignRes.rows[0]?.count || 0,
-          recent_activity: recentAttempts.rows,
-          database: getDbStatus()
-        };
+        recentActivity = recentAttempts.rows;
       } else {
-        const roleCounts = await userRepository.countByRole();
-        const activeStudents = memoryStore.users.filter(u => u.role === 'STUDENT' && u.status === 'active').length;
-        const activeTeachers = memoryStore.users.filter(u => u.role === 'TEACHER' && u.status === 'active').length;
+        const users = memoryStore.users || [];
+        const courses = memoryStore.courses || [];
+        const quizzes = memoryStore.quizzes || [];
+        const quizAttempts = memoryStore.quiz_attempts || [];
+        const mockTests = memoryStore.mock_tests || [];
+        const mockTestAttempts = memoryStore.mock_test_attempts || [];
         const now = new Date();
-        const upcoming = memoryStore.live_class_sessions.filter(
+        const upcoming = (memoryStore.live_class_sessions || []).filter(
           s => s.status === 'scheduled' && new Date(s.scheduled_at) > now
         ).length;
-        const pendingAssign = memoryStore.assignments.filter(
+        const pendingAssign = (memoryStore.assignments || []).filter(
           a => a.status === 'published' && new Date(a.due_date) >= now
         ).length;
-        const recent = [...memoryStore.quiz_attempts].reverse().slice(0, 5).map(qa => {
-          const u = memoryStore.users.find(user => user.id === qa.user_id);
-          const q = memoryStore.quizzes.find(quiz => quiz.id === qa.quiz_id);
+        recentActivity = [...quizAttempts].reverse().slice(0, 5).map(qa => {
+          const u = users.find(user => user.id === qa.user_id);
+          const q = quizzes.find(quiz => quiz.id === qa.quiz_id);
           return { id: qa.id, score: qa.score, total_questions: qa.total_questions, submitted_at: qa.submitted_at, student_name: u?.full_name || 'Student', quiz_title: q?.title || 'Assessment' };
         });
-
-        stats = {
-          total_students: roleCounts.STUDENT,
-          active_students: activeStudents,
-          total_teachers: roleCounts.TEACHER,
-          active_teachers: activeTeachers,
-          active_courses: memoryStore.courses.filter(c => c.published).length,
-          course_count: memoryStore.courses.length,
-          user_count: memoryStore.users.length,
-          lesson_count: memoryStore.lessons.length,
-          quiz_count: memoryStore.quizzes.length,
-          attempt_count: memoryStore.quiz_attempts.length,
-          class_count: memoryStore.classes.length,
-          batch_count: (memoryStore.batches || []).filter(b => b.status === 'Active').length,
+        counts = {
+          total_students: users.filter(user => user.role === 'STUDENT').length,
+          active_students: users.filter(user => user.role === 'STUDENT' && user.status === 'active').length,
+          total_teachers: users.filter(user => user.role === 'TEACHER').length,
+          active_teachers: users.filter(user => user.role === 'TEACHER' && user.status === 'active').length,
+          user_count: users.length,
+          course_count: courses.length,
+          active_courses: courses.filter(course => course.published).length,
+          quiz_count: quizzes.length,
+          attempt_count: quizAttempts.length,
+          class_count: (memoryStore.classes || []).length,
+          batch_count: (memoryStore.batches || []).filter(batch => String(batch.status).toLowerCase() === 'active').length,
+          lesson_count: (memoryStore.lessons || []).length,
           upcoming_live_classes: upcoming,
           pending_assignments: pendingAssign,
-          recent_activity: recent,
-          database: getDbStatus()
+          mock_test_count: mockTests.length,
+          mock_test_attempt_count: mockTestAttempts.length,
+          conducted_exams: mockTestAttempts.filter(attempt => ['submitted', 'evaluated'].includes(attempt.status)).length
         };
       }
 
+      const stats = {
+        total_students: counts.total_students,
+        active_students: counts.active_students,
+        total_teachers: counts.total_teachers,
+        active_teachers: counts.active_teachers,
+        active_courses: counts.active_courses,
+        course_count: counts.course_count,
+        user_count: counts.user_count,
+        lesson_count: counts.lesson_count,
+        quiz_count: counts.quiz_count,
+        attempt_count: counts.attempt_count,
+        class_count: counts.class_count,
+        batch_count: counts.batch_count,
+        upcoming_live_classes: counts.upcoming_live_classes,
+        pending_assignments: counts.pending_assignments,
+        mock_test_count: counts.mock_test_count,
+        mock_test_attempt_count: counts.mock_test_attempt_count,
+        totalStudents: counts.total_students,
+        totalTeachers: counts.total_teachers,
+        activeTeachers: counts.active_teachers,
+        activeBatches: counts.batch_count,
+        totalCourses: counts.course_count,
+        totalExams: counts.mock_test_count,
+        conductedExams: counts.conducted_exams,
+        totalExamAttempts: counts.mock_test_attempt_count,
+        student_count: counts.total_students,
+        teacher_count: counts.total_teachers,
+        systemUptime: Math.floor(process.uptime()),
+        recent_activity: recentActivity,
+        database: getDbStatus()
+      };
       return res.status(200).json({ success: true, data: { stats }, message: 'Admin dashboard statistics.' });
     } catch (err) { next(err); }
   },
