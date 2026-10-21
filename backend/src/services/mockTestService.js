@@ -1150,10 +1150,10 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     try {
       if (status.is_cloud) {
         rawResponse = await aiService._chatWithCloud({
-          systemPrompt: 'You are LinkTest AI Examination Architect. Generate rigorous, valid academic assessment questions strictly in JSON format adhering to the schema requested.',
+          systemPrompt: 'You are LinkTest AI Examination Architect. Generate rigorous, valid academic assessment questions strictly in JSON format adhering to the schema requested. Return ONLY a valid JSON object with a "questions" array. No chat, no markdown fences.',
           messages: [{ role: 'user', message: prompt }],
           temperature: 0.3,
-          maxTokens: Math.min(4096, Math.max(800, count * 500)),
+          maxTokens: Math.min(8192, Math.max(1500, count * 600)),
           responseFormat: { type: 'json_object' }
         });
       } else {
@@ -1225,9 +1225,9 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       throw new Error('AI provider returned an empty response.');
     }
 
-    // 1. Resilient JSON cleanup: strip reasoning tags, code fences, and isolate outer brackets
+    // 1. Resilient JSON cleanup: strip reasoning tags (even if unclosed), code fences, and isolate outer brackets
     let cleanJson = String(rawResponse || '')
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
       .replace(/```json/gi, '')
       .replace(/```/gi, '')
       .trim();
@@ -1360,14 +1360,62 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
 
   _extractQuestionsRegexFallback(text) {
     const questions = [];
-    const blockRegex = /\{\s*"question(?:_text)?"\s*:\s*"([^"]+)"[\s\S]*?\}/g;
-    let match;
-    while ((match = blockRegex.exec(text)) !== null) {
-      try {
-        const parsed = JSON.parse(match[0]);
-        if (parsed) questions.push(parsed);
-      } catch {
-        // ignore incomplete match
+    let startIndex = 0;
+    while ((startIndex = text.indexOf('{', startIndex)) !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let endIndex = -1;
+
+      for (let i = startIndex; i < text.length; i++) {
+        const char = text[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (char === '{') depth++;
+          else if (char === '}') {
+            depth--;
+            if (depth === 0) {
+              endIndex = i;
+              break;
+            }
+          }
+        }
+      }
+
+      if (endIndex !== -1) {
+        const chunk = text.slice(startIndex, endIndex + 1);
+        try {
+          const parsed = JSON.parse(chunk);
+          if (parsed && (parsed.question_text || parsed.question)) {
+            questions.push(parsed);
+          } else if (parsed && Array.isArray(parsed.questions)) {
+            questions.push(...parsed.questions);
+          }
+        } catch {
+          try {
+            const repaired = chunk.replace(/,\s*([}\]])/g, '$1');
+            const parsed = JSON.parse(repaired);
+            if (parsed && (parsed.question_text || parsed.question)) {
+              questions.push(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        startIndex = endIndex + 1;
+      } else {
+        break;
       }
     }
     return questions.length > 0 ? { questions } : null;

@@ -11,22 +11,15 @@ describe('AI Question Generation & Groq Integration Suite', () => {
   // 1. Model Configuration & Groq Supported Model Validation
   // =========================================================================
   test('1. Configured Groq model is a valid active production model', () => {
-    // Must NOT be invalid/decommissioned qwen/qwen3.8-27b
-    assert.notStrictEqual(
-      config.cloudAi.model,
-      'qwen/qwen3.8-27b',
-      'qwen/qwen3.8-27b is not an authorized production model for Groq in LinkTest'
-    );
-
     const validProductionModels = [
-      'llama-3.3-70b-versatile',
-      'llama-3.1-8b-instant',
+      'qwen/qwen3.8-27b',
       'openai/gpt-oss-120b',
-      'openai/gpt-oss-20b'
+      'openai/gpt-oss-20b',
+      'llama-3.3-70b-versatile'
     ];
 
     assert.ok(
-      validProductionModels.includes(config.cloudAi.model) || config.cloudAi.model.startsWith('llama-'),
+      validProductionModels.includes(config.cloudAi.model) || config.cloudAi.model.startsWith('qwen'),
       `Configured model '${config.cloudAi.model}' must be a recognized production model`
     );
   });

@@ -127,9 +127,9 @@ export function buildConfig(rawEnv = process.env) {
       baseUrl: (rawEnv.CLOUD_AI_BASE_URL || '').trim(),
       model: (() => {
         const m = (rawEnv.CLOUD_AI_MODEL || '').trim();
-        // Disallow invalid/unsupported model identifiers; default to Groq's active production model
-        if (!m || m === 'qwen/qwen3.8-27b') {
-          return 'llama-3.3-70b-versatile';
+        // If decommissioned Groq models are configured or if empty, default to active qwen/qwen3.8-27b
+        if (!m || m === 'llama-3.1-8b-instant' || m === 'llama-3.3-70b-versatile') {
+          return 'qwen/qwen3.8-27b';
         }
         return m;
       })()

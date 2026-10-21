@@ -52,10 +52,28 @@ export const aiService = {
     // Check Cloud AI provider first if configured
     if (config.cloudAi.apiKey) {
       const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, config.cloudAi.provider);
+      let supportedModels = [];
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const modelsRes = await fetch('https://api.groq.com/openai/v1/models', {
+          headers: { 'Authorization': `Bearer ${config.cloudAi.apiKey}` },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (modelsRes.ok) {
+          const modelsData = await modelsRes.json();
+          supportedModels = (modelsData.data || []).map(m => m.id);
+        }
+      } catch {
+        // ignore diagnostic failure
+      }
+
       return {
         available: true,
         provider: config.cloudAi.provider || 'groq',
         model: config.cloudAi.model,
+        supported_models: supportedModels.length > 0 ? supportedModels : ['qwen/qwen3.8-27b', 'openai/gpt-oss-20b'],
         endpoint,
         is_cloud: true,
         status_message: `Cloud AI provider (${config.cloudAi.provider || 'groq'}) is configured with model ${config.cloudAi.model}.`
@@ -376,12 +394,12 @@ To enable AI tutoring:
     systemPrompt
   } = {}) {
     const provider = config.cloudAi.provider || 'groq';
-    let targetModel = modelOverride || config.cloudAi.model;
+    let targetModel = modelOverride || config.cloudAi.model || 'qwen/qwen3.8-27b';
 
-    // Sanitize any invalid or stale Groq models
+    // Normalize decommissioned legacy Llama models on Groq to active qwen/qwen3.8-27b
     if (provider === 'groq') {
-      if (!targetModel || targetModel === 'qwen/qwen3.8-27b') {
-        targetModel = 'llama-3.3-70b-versatile';
+      if (!targetModel || targetModel === 'llama-3.1-8b-instant' || targetModel === 'llama-3.3-70b-versatile') {
+        targetModel = 'qwen/qwen3.8-27b';
       }
     }
 
@@ -466,17 +484,26 @@ To enable AI tutoring:
         `  Response Body: ${safeBody}`
       );
 
-      // If model not found or decommissioned, retry once with fallback model (llama-3.1-8b-instant)
-      if (provider === 'groq' && (response.status === 404 || errorCode === 'model_not_found') && targetModel !== 'llama-3.1-8b-instant') {
-        console.warn(`[AIService] Model '${targetModel}' failed on Groq (${detailedMsg}). Retrying with fallback model 'llama-3.1-8b-instant'...`);
-        return this._chatWithCloud({
-          messages,
-          modelOverride: 'llama-3.1-8b-instant',
-          temperature,
-          maxTokens,
-          responseFormat,
-          systemPrompt
-        });
+      // Fallback chain for Groq models: qwen/qwen3.8-27b -> openai/gpt-oss-20b
+      if (provider === 'groq' && (response.status === 404 || errorCode === 'model_not_found')) {
+        let fallbackModel = null;
+        if (targetModel !== 'qwen/qwen3.8-27b') {
+          fallbackModel = 'qwen/qwen3.8-27b';
+        } else if (targetModel !== 'openai/gpt-oss-20b') {
+          fallbackModel = 'openai/gpt-oss-20b';
+        }
+
+        if (fallbackModel && fallbackModel !== targetModel) {
+          console.warn(`[AIService] Model '${targetModel}' was not found on Groq (${detailedMsg}). Retrying with fallback model '${fallbackModel}'...`);
+          return this._chatWithCloud({
+            messages,
+            modelOverride: fallbackModel,
+            temperature,
+            maxTokens,
+            responseFormat,
+            systemPrompt
+          });
+        }
       }
 
       // If response_format json_object caused 400 Bad Request on provider, retry once without response_format
