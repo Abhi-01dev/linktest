@@ -27,9 +27,15 @@ export const quizController = {
           error: { code: 'NOT_FOUND', message: 'Quiz not found.' }
         });
       }
+      const canViewAnswerKeys = req.user.role === 'ADMIN' ||
+        (req.user.role === 'TEACHER' && quiz.teacher_id === req.user.id);
+      const quizDetails = canViewAnswerKeys
+        ? await quizRepository.getQuizForTaker(id, { includeAnswerKey: true })
+        : quiz;
+
       return res.status(200).json({
         success: true,
-        data: { quiz },
+        data: { quiz: quizDetails },
         message: 'Quiz questions retrieved.'
       });
     } catch (err) {
@@ -103,7 +109,8 @@ export const quizController = {
         courseId,
         title,
         description: description || '',
-        questions: questions || []
+        questions: questions || [],
+        teacherId: req.user.id
       });
       return res.status(201).json({
         success: true,

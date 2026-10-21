@@ -1,5 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
 import { emailService } from '../src/services/emailService.js';
@@ -672,6 +673,47 @@ describe('LinkTest API End-to-End Suite', () => {
       assert.strictEqual(q.correct_option_index, undefined, 'correct_option_index leaked before submission!');
       assert.strictEqual(q.explanation, undefined, 'explanation leaked before submission!');
     }
+
+    const owner = await userRepository.findById('user-teacher-001');
+    const ownerToken = jwt.sign(
+      { id: owner.id, email: owner.email, role: owner.role },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const ownerRes = await fetch(`${baseUrl}/api/quizzes/quiz-web-dev-01`, {
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.strictEqual(ownerRes.status, 200);
+    const ownerQuiz = (await ownerRes.json()).data.quiz;
+    assert.ok(ownerQuiz.questions.every(q => q.correct_option_index !== undefined));
+    assert.ok(ownerQuiz.questions.every(q => q.explanation));
+
+    const adminRes = await fetch(`${baseUrl}/api/quizzes/quiz-web-dev-01`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
+    assert.ok((await adminRes.json()).data.quiz.questions.every(q => q.correct_option_index !== undefined));
+
+    const otherTeacher = await userRepository.create({
+      fullName: 'Unassigned Quiz Teacher',
+      email: `quiz.other.teacher.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      role: 'TEACHER',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherTeacherToken = jwt.sign(
+      { id: otherTeacher.id, email: otherTeacher.email, role: otherTeacher.role },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const otherTeacherRes = await fetch(`${baseUrl}/api/quizzes/quiz-web-dev-01`, {
+      headers: { Authorization: `Bearer ${otherTeacherToken}` }
+    });
+    assert.strictEqual(otherTeacherRes.status, 200);
+    const otherTeacherQuiz = (await otherTeacherRes.json()).data.quiz;
+    assert.ok(otherTeacherQuiz.questions.every(q => q.correct_option_index === undefined));
+    assert.ok(otherTeacherQuiz.questions.every(q => q.explanation === undefined));
   });
 
   test('16. Quiz Submission evaluates on server and calculates score', async () => {
