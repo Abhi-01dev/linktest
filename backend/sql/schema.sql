@@ -104,6 +104,8 @@ CREATE TABLE student_profiles (
 );
 
 CREATE INDEX idx_student_profiles_user ON student_profiles(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_profiles_enrollment_number
+    ON student_profiles(enrollment_number);
 
 -- 4. ACADEMIC SESSIONS
 CREATE TABLE academic_sessions (
@@ -831,4 +833,3 @@ CREATE TABLE mock_test_audit_logs (
 
 CREATE INDEX idx_mock_audit_test ON mock_test_audit_logs(test_id);
 CREATE INDEX idx_mock_audit_attempt ON mock_test_audit_logs(attempt_id);
-

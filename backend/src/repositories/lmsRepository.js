@@ -1177,6 +1177,14 @@ export const lmsRepository = {
     return memoryStore.student_profiles.find(p => p.user_id === userId) || null;
   },
 
+  async getStudentProfileByEnrollmentNumber(enrollmentNumber) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM student_profiles WHERE enrollment_number = $1', [enrollmentNumber]);
+      return res.rows[0] || null;
+    }
+    return memoryStore.student_profiles.find(profile => profile.enrollment_number === enrollmentNumber) || null;
+  },
+
   async upsertStudentProfile(userId, { enrollmentNumber, dateOfBirth, guardianName, guardianContact, address }) {
     const now = new Date().toISOString();
     if (isPostgresConnected && pool) {
@@ -1189,6 +1197,14 @@ export const lmsRepository = {
         [id, userId, enrollmentNumber || null, dateOfBirth || null, guardianName || null, guardianContact || null, address || null, now]
       );
       return res.rows[0];
+    }
+    const duplicate = memoryStore.student_profiles.find(
+      profile => profile.enrollment_number === enrollmentNumber && profile.user_id !== userId
+    );
+    if (duplicate) {
+      const err = new Error('A student with this enrollment ID already exists.');
+      err.code = '23505';
+      throw err;
     }
     const existing = memoryStore.student_profiles.find(p => p.user_id === userId);
     if (existing) {
