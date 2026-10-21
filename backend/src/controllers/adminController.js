@@ -27,6 +27,19 @@ const assignTeacherSchema = z.object({
   subject_id: z.string().optional().nullable()
 });
 
+const subjectQuerySchema = z.object({
+  status: z.enum(['active', 'inactive']).optional(),
+  department: z.string().trim().min(1).max(150).optional()
+});
+
+const createSubjectSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  code: z.string().trim().toUpperCase().min(2).max(50).regex(/^[A-Z0-9]+$/, 'Subject code must contain only letters and numbers'),
+  description: z.string().trim().max(2000).optional().nullable(),
+  department: z.string().trim().min(1).max(150).optional().nullable(),
+  status: z.enum(['active', 'inactive']).default('active')
+});
+
 export const adminController = {
   // ── Dashboard ──────────────────────────────────────────────
   async getDashboardStats(req, res, next) {
@@ -646,16 +659,16 @@ export const adminController = {
   // ── Subjects ───────────────────────────────────────────────
   async getSubjects(req, res, next) {
     try {
-      const subjects = await lmsRepository.getSubjects();
+      const { status, department } = subjectQuerySchema.parse(req.query);
+      const subjects = await lmsRepository.getSubjects({ status, department });
       return res.status(200).json({ success: true, data: { subjects }, message: 'Subjects retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createSubject(req, res, next) {
     try {
-      const { name, code, description } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject name is required.' } });
-      const subject = await lmsRepository.createSubject({ name, code, description });
+      const { name, code, description, department, status } = createSubjectSchema.parse(req.body);
+      const subject = await lmsRepository.createSubject({ name, code, description, department, status });
       await logAudit({
         actorId: req.user.id,
         actorEmail: req.user.email,
