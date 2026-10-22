@@ -391,10 +391,10 @@ class ApiClient {
     return res.data?.teachers || (Array.isArray(res.data) ? res.data : []);
   }
 
-  async inviteTeacher(email, fullName) {
+  async inviteTeacher(email, fullName, department) {
     const res = await this.request('/admin/teachers/invite', {
       method: 'POST',
-      body: JSON.stringify({ email, full_name: fullName })
+      body: JSON.stringify({ email, full_name: fullName, department })
     });
     return res.data;
   }

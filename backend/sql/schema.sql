@@ -467,12 +467,15 @@ CREATE TABLE teacher_invitations (
     id VARCHAR(64) PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(150) NOT NULL,
+    department VARCHAR(150),
     invited_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     accepted_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE teacher_invitations ADD COLUMN IF NOT EXISTS department VARCHAR(150);
 
 CREATE INDEX idx_teacher_invitations_token ON teacher_invitations(token_hash);
 CREATE INDEX idx_teacher_invitations_email ON teacher_invitations(email);
