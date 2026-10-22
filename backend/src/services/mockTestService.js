@@ -492,7 +492,7 @@ export const mockTestService = {
     summary.total_events = (summary.total_events || 0) + 1;
 
     // Strict separate counters
-    const MAX_WARNINGS = 5;
+    const MAX_WARNINGS = 3;
     const MAX_FULLSCREEN_EXITS = 2;
 
     let newSecurityWarningCount = attempt.security_warning_count || 0;
@@ -557,7 +557,7 @@ export const mockTestService = {
       };
     }
 
-    // Limit 2: Fifth security warning -> MAX_SECURITY_WARNINGS
+    // Limit 2: Third security warning -> MAX_SECURITY_WARNINGS
     if (newSecurityWarningCount >= MAX_WARNINGS) {
       await mockTestRepository.updateAttempt(attemptId, {
         warning_count: newWarningCount,
@@ -584,7 +584,7 @@ export const mockTestService = {
         severity: 'CRITICAL',
         userId: student.id,
         userEmail: student.email,
-        details: `Candidate reached maximum security warnings (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
+        details: `Candidate reached maximum security strikes (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
         metadata: { attemptId, testId: attempt.test_id, warning_count: newSecurityWarningCount }
       });
 
@@ -636,7 +636,7 @@ export const mockTestService = {
       userEmail: student.email,
       details: isFullscreenExit
         ? `Fullscreen exit 1/${MAX_FULLSCREEN_EXITS} recorded.`
-        : `Security warning ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
+        : `Security strike ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
       metadata: {
         attemptId,
         testId: attempt.test_id,
@@ -1150,7 +1150,11 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     try {
       if (status.is_cloud) {
         rawResponse = await aiService._chatWithCloud({
-          messages: [{ role: 'user', message: prompt }]
+          systemPrompt: 'You are LinkTest AI Examination Architect. Generate rigorous, valid academic assessment questions strictly in JSON format adhering to the schema requested. Return ONLY a valid JSON object with a "questions" array. No chat, no markdown fences.',
+          messages: [{ role: 'user', message: prompt }],
+          temperature: 0.3,
+          maxTokens: Math.min(8192, Math.max(1500, count * 600)),
+          responseFormat: { type: 'json_object' }
         });
       } else {
         const controller = new AbortController();
@@ -1188,89 +1192,11 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
         }
       }
 
-      // Resilient JSON cleanup: strip reasoning tags, code fences, and isolate outer brackets
-      let cleanJson = String(rawResponse || '')
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')
-        .replace(/```json/gi, '')
-        .replace(/```/gi, '')
-        .trim();
-
-      const firstBrace = cleanJson.indexOf('{');
-      const lastBrace = cleanJson.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleanJson = cleanJson.slice(firstBrace, lastBrace + 1);
-      }
-
-      const parsed = JSON.parse(cleanJson);
-      let rawQuestions = [];
-      if (Array.isArray(parsed.questions)) {
-        rawQuestions = parsed.questions;
-      } else if (Array.isArray(parsed)) {
-        rawQuestions = parsed;
-      } else if (typeof parsed === 'object' && parsed !== null) {
-        const values = Object.values(parsed);
-        if (values.length > 0 && typeof values[0] === 'object') {
-          rawQuestions = values;
-        }
-      }
-
-      if (rawQuestions.length === 0) {
-        throw new Error('AI returned an empty question list. Please try again with a more specific topic.');
-      }
-
-      // Robust server-side validation and normalization
-      const validated = rawQuestions.map((q, idx) => {
-        const qText = String(q.question_text || q.question || '').trim();
-        if (!qText) {
-          throw new Error(`Generated question #${idx + 1} is missing question text.`);
-        }
-
-        // Normalize options
-        let normalizedOptions = [];
-        if (Array.isArray(q.options)) {
-          normalizedOptions = q.options.map(opt =>
-            (typeof opt === 'object' && opt !== null ? (opt.text || opt.label || JSON.stringify(opt)) : String(opt)).trim()
-          );
-        } else if (q.options && typeof q.options === 'object') {
-          normalizedOptions = Object.values(q.options).map(o => String(o).trim());
-        }
-
-        // Normalize answer_key
-        let answerKey = typeof q.answer_key === 'object' && q.answer_key !== null ? { ...q.answer_key } : {};
-        if (answerKey.correct_index === undefined && q.correct_index !== undefined) {
-          answerKey.correct_index = parseInt(q.correct_index, 10);
-        }
-        if (answerKey.correct_index === undefined && (q.correct_answer !== undefined || answerKey.correct_answer !== undefined)) {
-          const ca = q.correct_answer !== undefined ? q.correct_answer : answerKey.correct_answer;
-          if (typeof ca === 'number') {
-            answerKey.correct_index = ca;
-          } else if (typeof ca === 'string') {
-            const letterMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
-            if (letterMap[ca.trim()] !== undefined) {
-              answerKey.correct_index = letterMap[ca.trim()];
-            } else {
-              const foundIdx = normalizedOptions.findIndex(o => o.toLowerCase() === ca.toLowerCase());
-              answerKey.correct_index = foundIdx >= 0 ? foundIdx : 0;
-            }
-          }
-        }
-        if ((q.question_type === 'mcq_single' || !q.question_type) && answerKey.correct_index === undefined && normalizedOptions.length > 0) {
-          answerKey.correct_index = 0;
-        }
-
-        return {
-          id: `ai-gen-${crypto.randomUUID().slice(0, 10)}`,
-          question_text: qText,
-          question_type: q.question_type || 'mcq_single',
-          options: normalizedOptions,
-          answer_key: answerKey,
-          marks: parseFloat(q.marks || 4.0),
-          negative_marks: parseFloat(q.negative_marks || 1.0),
-          explanation: String(q.explanation || 'Self-explanatory concept.').trim(),
-          topic: q.topic || topic,
-          difficulty: q.difficulty || difficulty,
-          order_index: idx + 1
-        };
+      // Robust parsing and normalization of generated questions
+      const validated = this.parseAndValidateGeneratedQuestions(rawResponse, {
+        topic,
+        difficulty,
+        count
       });
 
       return {
@@ -1283,9 +1209,216 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     } catch (err) {
       console.error('[MockTestService] AI Question Generation Error:', err.message);
       const customErr = new Error(`AI generation failed: ${err.message}. You can also create questions manually.`);
-      customErr.status = 500;
+      customErr.status = err.status || 502;
+      customErr.code = 'AI_SERVICE_ERROR';
+      customErr.isAiError = true;
       throw customErr;
     }
+  },
+
+  /**
+   * Resilient question parser supporting clean JSON, markdown-wrapped JSON,
+   * thinking tags, and schema normalization
+   */
+  parseAndValidateGeneratedQuestions(rawResponse, { topic = '', difficulty = 'medium', count = 5 } = {}) {
+    if (!rawResponse || typeof rawResponse !== 'string' || !rawResponse.trim()) {
+      throw new Error('AI provider returned an empty response.');
+    }
+
+    // 1. Resilient JSON cleanup: strip reasoning tags (even if unclosed), code fences, and isolate outer brackets
+    let cleanJson = String(rawResponse || '')
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+      .replace(/```json/gi, '')
+      .replace(/```/gi, '')
+      .trim();
+
+    const firstBrace = cleanJson.indexOf('{');
+    const lastBrace = cleanJson.lastIndexOf('}');
+    const firstBracket = cleanJson.indexOf('[');
+    const lastBracket = cleanJson.lastIndexOf(']');
+
+    if (firstBracket !== -1 && lastBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      cleanJson = cleanJson.slice(firstBracket, lastBracket + 1);
+    } else if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanJson = cleanJson.slice(firstBrace, lastBrace + 1);
+    }
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(cleanJson);
+    } catch (parseErr) {
+      // Attempt repair by removing trailing commas before closing braces/brackets
+      const repaired = cleanJson.replace(/,\s*([}\]])/g, '$1');
+      try {
+        parsed = JSON.parse(repaired);
+      } catch {
+        parsed = this._extractQuestionsRegexFallback(cleanJson);
+      }
+    }
+
+    if (!parsed) {
+      throw new Error('Could not parse valid JSON from AI response.');
+    }
+
+    let rawQuestions = [];
+    if (Array.isArray(parsed.questions)) {
+      rawQuestions = parsed.questions;
+    } else if (Array.isArray(parsed.data?.questions)) {
+      rawQuestions = parsed.data.questions;
+    } else if (Array.isArray(parsed.items)) {
+      rawQuestions = parsed.items;
+    } else if (Array.isArray(parsed.quiz)) {
+      rawQuestions = parsed.quiz;
+    } else if (Array.isArray(parsed)) {
+      rawQuestions = parsed;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      const values = Object.values(parsed);
+      if (values.length > 0 && typeof values[0] === 'object') {
+        rawQuestions = values.filter(v => typeof v === 'object' && v !== null);
+      }
+    }
+
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+      throw new Error('AI returned an empty question list. Please try again with a more specific topic.');
+    }
+
+    // 2. Normalize and validate each question
+    const validated = [];
+    for (let idx = 0; idx < rawQuestions.length; idx++) {
+      const q = rawQuestions[idx];
+      if (!q || typeof q !== 'object') continue;
+
+      const qText = String(q.question_text || q.question || q.prompt || q.text || q.title || '').trim();
+      if (!qText) continue;
+
+      // Normalize options
+      let normalizedOptions = [];
+      if (Array.isArray(q.options)) {
+        normalizedOptions = q.options.map(opt =>
+          (typeof opt === 'object' && opt !== null ? (opt.text || opt.label || opt.value || JSON.stringify(opt)) : String(opt)).trim()
+        ).filter(Boolean);
+      } else if (q.options && typeof q.options === 'object') {
+        normalizedOptions = Object.values(q.options).map(o => String(o).trim()).filter(Boolean);
+      }
+
+      const qType = q.question_type || q.type || 'mcq_single';
+
+      // For single-choice MCQs, ensure at least 2 options exist
+      if (qType === 'mcq_single' && normalizedOptions.length < 2) {
+        normalizedOptions = ['Option A', 'Option B', 'Option C', 'Option D'];
+      }
+
+      // Normalize answer_key
+      let correctIdx = 0;
+      if (q.answer_key?.correct_index !== undefined) {
+        correctIdx = parseInt(q.answer_key.correct_index, 10);
+      } else if (q.correct_index !== undefined) {
+        correctIdx = parseInt(q.correct_index, 10);
+      } else if (q.correct_option_index !== undefined) {
+        correctIdx = parseInt(q.correct_option_index, 10);
+      } else if (q.correct_answer !== undefined || q.answer !== undefined) {
+        const ca = q.correct_answer !== undefined ? q.correct_answer : q.answer;
+        if (typeof ca === 'number') {
+          correctIdx = ca;
+        } else if (typeof ca === 'string') {
+          const letterMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
+          if (letterMap[ca.trim()] !== undefined) {
+            correctIdx = letterMap[ca.trim()];
+          } else {
+            const found = normalizedOptions.findIndex(o => o.toLowerCase() === ca.trim().toLowerCase());
+            correctIdx = found >= 0 ? found : 0;
+          }
+        }
+      }
+
+      // Bound check correct index
+      if (isNaN(correctIdx) || correctIdx < 0 || (normalizedOptions.length > 0 && correctIdx >= normalizedOptions.length)) {
+        correctIdx = 0;
+      }
+
+      validated.push({
+        id: `ai-gen-${crypto.randomUUID().slice(0, 10)}`,
+        question_text: qText,
+        question_type: qType,
+        options: normalizedOptions,
+        answer_key: { correct_index: correctIdx },
+        marks: parseFloat(q.marks || 4.0),
+        negative_marks: parseFloat(q.negative_marks || 1.0),
+        explanation: String(q.explanation || q.solution || 'Correct answer verified.').trim(),
+        topic: q.topic || topic,
+        difficulty: q.difficulty || difficulty,
+        order_index: validated.length + 1
+      });
+    }
+
+    if (validated.length === 0) {
+      throw new Error('AI question generation returned questions without valid text prompts. Please try again.');
+    }
+
+    return validated;
+  },
+
+  _extractQuestionsRegexFallback(text) {
+    const questions = [];
+    let startIndex = 0;
+    while ((startIndex = text.indexOf('{', startIndex)) !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let endIndex = -1;
+
+      for (let i = startIndex; i < text.length; i++) {
+        const char = text[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (char === '{') depth++;
+          else if (char === '}') {
+            depth--;
+            if (depth === 0) {
+              endIndex = i;
+              break;
+            }
+          }
+        }
+      }
+
+      if (endIndex !== -1) {
+        const chunk = text.slice(startIndex, endIndex + 1);
+        try {
+          const parsed = JSON.parse(chunk);
+          if (parsed && (parsed.question_text || parsed.question)) {
+            questions.push(parsed);
+          } else if (parsed && Array.isArray(parsed.questions)) {
+            questions.push(...parsed.questions);
+          }
+        } catch {
+          try {
+            const repaired = chunk.replace(/,\s*([}\]])/g, '$1');
+            const parsed = JSON.parse(repaired);
+            if (parsed && (parsed.question_text || parsed.question)) {
+              questions.push(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        startIndex = endIndex + 1;
+      } else {
+        break;
+      }
+    }
+    return questions.length > 0 ? { questions } : null;
   },
 
   /**
@@ -1329,7 +1462,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       else distribution[4].count++;
     });
 
-    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 5);
+    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 3);
 
     const testBatch = test.batch_id ? await batchRepository.getBatchById(test.batch_id) : null;
     const testBatchName = testBatch ? testBatch.name : 'All Batches';

@@ -115,10 +115,24 @@ export function buildConfig(rawEnv = process.env) {
       apiSecret: rawEnv.LIVEKIT_API_SECRET || ''
     },
     cloudAi: {
-      provider: rawEnv.CLOUD_AI_PROVIDER || '', // 'groq' | 'openai' | ''
-      apiKey: rawEnv.CLOUD_AI_API_KEY || '',
-      baseUrl: rawEnv.CLOUD_AI_BASE_URL || '',
-      model: rawEnv.CLOUD_AI_MODEL || 'llama-3.1-8b-instant'
+      provider: (() => {
+        const p = (rawEnv.CLOUD_AI_PROVIDER || '').trim().toLowerCase();
+        if (p) return p;
+        const key = (rawEnv.CLOUD_AI_API_KEY || '').trim();
+        if (key.startsWith('gsk_')) return 'groq';
+        if (key.startsWith('sk-')) return 'openai';
+        return 'groq';
+      })(),
+      apiKey: (rawEnv.CLOUD_AI_API_KEY || '').trim(),
+      baseUrl: (rawEnv.CLOUD_AI_BASE_URL || '').trim(),
+      model: (() => {
+        const m = (rawEnv.CLOUD_AI_MODEL || '').trim();
+        // If decommissioned Groq models are configured or if empty, default to active qwen/qwen3.8-27b
+        if (!m || m === 'llama-3.1-8b-instant' || m === 'llama-3.3-70b-versatile') {
+          return 'qwen/qwen3.8-27b';
+        }
+        return m;
+      })()
     },
     google: {
       clientId: rawEnv.GOOGLE_CLIENT_ID || '',

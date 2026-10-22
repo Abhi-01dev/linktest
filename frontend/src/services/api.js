@@ -391,10 +391,10 @@ class ApiClient {
     return res.data?.teachers || (Array.isArray(res.data) ? res.data : []);
   }
 
-  async inviteTeacher(email, fullName) {
+  async inviteTeacher(email, fullName, department) {
     const res = await this.request('/admin/teachers/invite', {
       method: 'POST',
-      body: JSON.stringify({ email, full_name: fullName })
+      body: JSON.stringify({ email, full_name: fullName, department })
     });
     return res.data;
   }
@@ -433,13 +433,14 @@ class ApiClient {
     return res.data?.batch || res.data;
   }
 
-  async getAdminSubjects() {
-    const res = await this.request('/subjects');
+  async getAdminSubjects(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    const res = await this.request(`/subjects${query ? `?${query}` : ''}`);
     return res.data?.subjects || (Array.isArray(res.data) ? res.data : []);
   }
 
   async createAdminSubject(data) {
-    const res = await this.request('/admin/subjects', {
+    const res = await this.request('/subjects', {
       method: 'POST',
       body: JSON.stringify(data)
     });
