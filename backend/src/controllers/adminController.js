@@ -42,6 +42,14 @@ const createSubjectSchema = z.object({
   status: z.enum(['active', 'inactive']).default('active')
 });
 
+const createClassSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  description: z.string().trim().max(2000).optional().default(''),
+  academic_session_id: z.string().optional().nullable().transform(value =>
+    typeof value === 'string' && value.trim() ? value.trim() : null
+  )
+});
+
 export const adminController = {
   // ── Dashboard ──────────────────────────────────────────────
   async getDashboardStats(req, res, next) {
@@ -584,9 +592,17 @@ export const adminController = {
 
   async createClass(req, res, next) {
     try {
-      const { name, description, academic_session_id } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Class name is required.' } });
-      const cls = await lmsRepository.createClass({ name, description, academicSessionId: academic_session_id });
+      const { name, description, academic_session_id: academicSessionId } = createClassSchema.parse(req.body);
+      if (academicSessionId) {
+        const sessions = await lmsRepository.getAcademicSessions();
+        if (!sessions.some(session => session.id === academicSessionId)) {
+          const err = new Error(`Academic session '${academicSessionId}' does not exist.`);
+          err.statusCode = 400;
+          err.code = 'INVALID_ACADEMIC_SESSION';
+          throw err;
+        }
+      }
+      const cls = await lmsRepository.createClass({ name, description, academicSessionId });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'CLASS_CREATED', resourceType: 'class', resourceId: cls.id, summary: `Class '${name}' created` });
       return res.status(201).json({ success: true, data: { class: cls }, message: 'Class created.' });
     } catch (err) { next(err); }

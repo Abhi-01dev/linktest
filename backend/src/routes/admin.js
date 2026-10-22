@@ -3,6 +3,7 @@ import { adminController } from '../controllers/adminController.js';
 import { courseController } from '../controllers/courseController.js';
 import { lessonController } from '../controllers/lessonController.js';
 import { quizController } from '../controllers/quizController.js';
+import { batchController } from '../controllers/batchController.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = Router();
@@ -53,7 +54,7 @@ router.put('/classes/:id', adminController.updateClass);
 router.get('/classes/:id/students', adminController.getClassStudents);
 router.post('/classes/:id/students', adminController.enrollStudent);
 router.get('/classes/:classId/batches', adminController.getBatches);
-router.post('/classes/:classId/batches', adminController.createBatch);
+router.post('/classes/:classId/batches', batchController.createBatch);
 
 // ── Subjects ───────────────────────────────────────────────
 router.get('/subjects', adminController.getSubjects);

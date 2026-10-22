@@ -346,13 +346,15 @@ export const batchRepository = {
   },
 
   async deleteBatch(id) {
-    const batch = await this.getBatchById(id);
-    if (!batch) return { success: false, code: 'NOT_FOUND', message: 'Batch not found.' };
-
     if (isPostgresConnected && pool) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const batch = await client.query('SELECT id FROM batches WHERE id = $1 FOR UPDATE', [id]);
+        if (batch.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return { success: false, code: 'NOT_FOUND', message: 'Batch not found.' };
+        }
         await client.query('DELETE FROM batch_enrollments WHERE batch_id = $1', [id]);
         await client.query('DELETE FROM batch_teachers WHERE batch_id = $1', [id]);
         await client.query('DELETE FROM student_class_enrollments WHERE batch_id = $1', [id]);
@@ -371,17 +373,24 @@ export const batchRepository = {
       }
     }
 
-    if (memoryStore.batch_enrollments) {
-      memoryStore.batch_enrollments = memoryStore.batch_enrollments.filter(e => e.batch_id !== id);
-    }
-    if (memoryStore.batch_teachers) {
-      memoryStore.batch_teachers = memoryStore.batch_teachers.filter(t => t.batch_id !== id);
-    }
-    if (memoryStore.student_class_enrollments) {
-      memoryStore.student_class_enrollments = memoryStore.student_class_enrollments.filter(e => e.batch_id !== id);
-    }
     const idx = (memoryStore.batches || []).findIndex(b => b.id === id);
-    if (idx !== -1) memoryStore.batches.splice(idx, 1);
+    if (idx === -1) return { success: false, code: 'NOT_FOUND', message: 'Batch not found.' };
+    memoryStore.batch_enrollments = (memoryStore.batch_enrollments || []).filter(enrollment => enrollment.batch_id !== id);
+    memoryStore.batch_teachers = (memoryStore.batch_teachers || []).filter(teacher => teacher.batch_id !== id);
+    memoryStore.student_class_enrollments = (memoryStore.student_class_enrollments || []).filter(enrollment => enrollment.batch_id !== id);
+    for (const collection of [
+      'teacher_assignments',
+      'timetable_entries',
+      'attendance_records',
+      'assignments',
+      'live_class_sessions',
+      'mock_tests'
+    ]) {
+      for (const record of memoryStore[collection] || []) {
+        if (record.batch_id === id) record.batch_id = null;
+      }
+    }
+    memoryStore.batches.splice(idx, 1);
     return { success: true };
   },
 
@@ -544,49 +553,72 @@ export const batchRepository = {
   },
 
   async enrollStudentsBulkInBatch({ batchId, studentIds, enrolledBy }) {
-    const batch = await this.getBatchById(batchId);
-    if (!batch) {
-      const err = new Error('Batch not found.');
-      err.statusCode = 404;
-      err.code = 'NOT_FOUND';
-      throw err;
-    }
-
-    if (batch.status === 'Archived' || batch.status === 'Completed') {
-      const err = new Error(`Cannot enroll students into ${batch.status.toLowerCase()} batch.`);
-      err.statusCode = 400;
-      err.code = 'BATCH_NOT_OPEN';
-      throw err;
-    }
-
-    const currentEnrolledCount = batch.enrolled_count || 0;
-    const capacity = batch.capacity || 50;
-
     const enrolled = [];
     const failed = [];
+    const capacityError = capacity => {
+      const err = new Error(`Enrollment would exceed batch capacity (${capacity}). No students were enrolled.`);
+      err.statusCode = 400;
+      err.code = 'BATCH_CAPACITY_EXCEEDED';
+      return err;
+    };
 
-    for (const studentId of studentIds) {
-      // Check remaining capacity
-      if (currentEnrolledCount + enrolled.length >= capacity) {
-        failed.push({ student_id: studentId, reason: `Batch capacity (${capacity}) reached.` });
-        continue;
-      }
-
+    if (isPostgresConnected && pool) {
+      const client = await pool.connect();
       try {
-        const id = `be-${crypto.randomUUID().slice(0, 8)}`;
-        const now = new Date().toISOString();
+        await client.query('BEGIN');
+        const batchRes = await client.query(
+          'SELECT id, capacity, status FROM batches WHERE id = $1 FOR UPDATE',
+          [batchId]
+        );
+        const batch = batchRes.rows[0];
+        if (!batch) {
+          const err = new Error('Batch not found.');
+          err.statusCode = 404;
+          err.code = 'NOT_FOUND';
+          throw err;
+        }
+        if (batch.status === 'Archived' || batch.status === 'Completed') {
+          const err = new Error(`Cannot enroll students into ${batch.status.toLowerCase()} batch.`);
+          err.statusCode = 400;
+          err.code = 'BATCH_NOT_OPEN';
+          throw err;
+        }
 
-        if (isPostgresConnected && pool) {
-          // Check student validity
-          const studentRes = await pool.query('SELECT id, full_name, role FROM users WHERE id = $1', [studentId]);
+        const capacity = Number(batch.capacity) || 40;
+        const [countRes, usersRes, activeRes] = await Promise.all([
+          client.query(
+            "SELECT COUNT(*)::int as count FROM batch_enrollments WHERE batch_id = $1 AND status = 'active'",
+            [batchId]
+          ),
+          client.query(
+            "SELECT id FROM users WHERE id = ANY($1::varchar[]) AND role = 'STUDENT'",
+            [[...new Set(studentIds)]]
+          ),
+          client.query(
+            "SELECT student_id FROM batch_enrollments WHERE batch_id = $1 AND status = 'active'",
+            [batchId]
+          )
+        ]);
+        const currentEnrolledCount = countRes.rows[0].count;
+        const validStudentIds = new Set(usersRes.rows.map(user => user.id));
+        const activeStudentIds = new Set(activeRes.rows.map(enrollment => enrollment.student_id));
+        const additionalStudents = new Set(studentIds.filter(studentId =>
+          validStudentIds.has(studentId) && !activeStudentIds.has(studentId)
+        ));
+        if (currentEnrolledCount + additionalStudents.size > capacity) throw capacityError(capacity);
+
+        for (const studentId of studentIds) {
+          const studentRes = await client.query(
+            "SELECT id, full_name FROM users WHERE id = $1 AND role = 'STUDENT'",
+            [studentId]
+          );
           const student = studentRes.rows[0];
-          if (!student || student.role !== 'STUDENT') {
+          if (!student) {
             failed.push({ student_id: studentId, reason: 'Eligible student account not found.' });
             continue;
           }
 
-          // Check if already actively enrolled in this batch
-          const existingRes = await pool.query(
+          const existingRes = await client.query(
             "SELECT id FROM batch_enrollments WHERE batch_id = $1 AND student_id = $2 AND status = 'active'",
             [batchId, studentId]
           );
@@ -595,45 +627,94 @@ export const batchRepository = {
             continue;
           }
 
-          const insertRes = await pool.query(
+          const now = new Date().toISOString();
+          const insertRes = await client.query(
             `INSERT INTO batch_enrollments (id, batch_id, student_id, enrolled_by, status, enrolled_at)
              VALUES ($1, $2, $3, $4, 'active', $5)
              ON CONFLICT (batch_id, student_id) DO UPDATE SET status = 'active'
              RETURNING *`,
-            [id, batchId, studentId, enrolledBy, now]
+            [`be-${crypto.randomUUID().slice(0, 8)}`, batchId, studentId, enrolledBy, now]
           );
-
           enrolled.push({
             enrollment: insertRes.rows[0],
             student_id: studentId,
             full_name: student.full_name
           });
-        } else {
-          const student = memoryStore.users.find(u => u.id === studentId && u.role === 'STUDENT');
-          if (!student) {
-            failed.push({ student_id: studentId, reason: 'Eligible student account not found.' });
-            continue;
-          }
-
-          if (!memoryStore.batch_enrollments) memoryStore.batch_enrollments = [];
-          const existing = memoryStore.batch_enrollments.find(be => be.batch_id === batchId && be.student_id === studentId && be.status === 'active');
-          if (existing) {
-            failed.push({ student_id: studentId, reason: 'Student is already enrolled in this batch.' });
-            continue;
-          }
-
-          const existingIdx = memoryStore.batch_enrollments.findIndex(be => be.batch_id === batchId && be.student_id === studentId);
-          if (existingIdx !== -1) {
-            memoryStore.batch_enrollments[existingIdx].status = 'active';
-            enrolled.push({ enrollment: memoryStore.batch_enrollments[existingIdx], student_id: studentId, full_name: student.full_name });
-          } else {
-            const rec = { id, batch_id: batchId, student_id: studentId, enrolled_by: enrolledBy, status: 'active', enrolled_at: now };
-            memoryStore.batch_enrollments.push(rec);
-            enrolled.push({ enrollment: rec, student_id: studentId, full_name: student.full_name });
-          }
         }
+        await client.query('COMMIT');
       } catch (err) {
-        failed.push({ student_id: studentId, reason: err.message });
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } else {
+      const batch = memoryStore.batches.find(item => item.id === batchId);
+      if (!batch) {
+        const err = new Error('Batch not found.');
+        err.statusCode = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+      if (batch.status === 'Archived' || batch.status === 'Completed') {
+        const err = new Error(`Cannot enroll students into ${batch.status.toLowerCase()} batch.`);
+        err.statusCode = 400;
+        err.code = 'BATCH_NOT_OPEN';
+        throw err;
+      }
+
+      if (!memoryStore.batch_enrollments) memoryStore.batch_enrollments = [];
+      const capacity = Number(batch.capacity) || 40;
+      const activeEnrollments = memoryStore.batch_enrollments.filter(enrollment =>
+        enrollment.batch_id === batchId && enrollment.status === 'active'
+      );
+      const activeStudentIds = new Set(activeEnrollments.map(enrollment => enrollment.student_id));
+      const additionalStudents = new Set(studentIds.filter(studentId =>
+        memoryStore.users.some(user => user.id === studentId && user.role === 'STUDENT') &&
+        !activeStudentIds.has(studentId)
+      ));
+      if (activeEnrollments.length + additionalStudents.size > capacity) throw capacityError(capacity);
+
+      for (const studentId of studentIds) {
+        const student = memoryStore.users.find(user => user.id === studentId && user.role === 'STUDENT');
+        if (!student) {
+          failed.push({ student_id: studentId, reason: 'Eligible student account not found.' });
+          continue;
+        }
+
+        const existing = memoryStore.batch_enrollments.find(enrollment =>
+          enrollment.batch_id === batchId &&
+          enrollment.student_id === studentId &&
+          enrollment.status === 'active'
+        );
+        if (existing) {
+          failed.push({ student_id: studentId, reason: 'Student is already enrolled in this batch.' });
+          continue;
+        }
+
+        const now = new Date().toISOString();
+        const existingIdx = memoryStore.batch_enrollments.findIndex(enrollment =>
+          enrollment.batch_id === batchId && enrollment.student_id === studentId
+        );
+        if (existingIdx !== -1) {
+          memoryStore.batch_enrollments[existingIdx].status = 'active';
+          enrolled.push({
+            enrollment: memoryStore.batch_enrollments[existingIdx],
+            student_id: studentId,
+            full_name: student.full_name
+          });
+        } else {
+          const record = {
+            id: `be-${crypto.randomUUID().slice(0, 8)}`,
+            batch_id: batchId,
+            student_id: studentId,
+            enrolled_by: enrolledBy,
+            status: 'active',
+            enrolled_at: now
+          };
+          memoryStore.batch_enrollments.push(record);
+          enrolled.push({ enrollment: record, student_id: studentId, full_name: student.full_name });
+        }
       }
     }
 
