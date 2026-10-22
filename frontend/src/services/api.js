@@ -730,10 +730,10 @@ class ApiClient {
     return res.data;
   }
 
-  async markTeacherAttendance(records) {
+  async markTeacherAttendance(attendance) {
     const res = await this.request('/teacher/attendance', {
       method: 'POST',
-      body: JSON.stringify({ records })
+      body: JSON.stringify(attendance)
     });
     return res.data;
   }

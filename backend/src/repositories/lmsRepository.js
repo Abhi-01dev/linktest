@@ -759,39 +759,104 @@ export const lmsRepository = {
   // ============================================================
   // ATTENDANCE
   // ============================================================
+  async getAttendanceBatch(batchId, teacherId, subjectId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT b.id, b.class_id,
+                EXISTS (
+                  SELECT 1 FROM teacher_assignments ta
+                  WHERE ta.teacher_id = $2
+                    AND ta.class_id = b.class_id
+                    AND ta.batch_id = b.id
+                    AND ta.subject_id = $3
+                ) as is_assigned
+         FROM batches b
+         WHERE b.id = $1`,
+        [batchId, teacherId, subjectId]
+      );
+      return res.rows[0] || null;
+    }
+
+    const batch = memoryStore.batches.find(item => item.id === batchId);
+    if (!batch) return null;
+    const isAssigned = memoryStore.teacher_assignments.some(assignment =>
+      assignment.teacher_id === teacherId &&
+      assignment.class_id === batch.class_id &&
+      assignment.batch_id === batch.id &&
+      assignment.subject_id === subjectId
+    );
+    return { id: batch.id, class_id: batch.class_id, is_assigned: isAssigned };
+  },
+
   async markAttendance(records) {
-    // records: [{ studentId, classId, batchId, subjectId, date, status, markedBy }]
-    const results = [];
-    for (const r of records) {
-      const id = crypto.randomUUID();
-      const created_at = new Date().toISOString();
-      const batchId = sanitizeOptionalString(r.batchId);
-      const subjectId = sanitizeOptionalString(r.subjectId);
-      if (isPostgresConnected && pool) {
-        const res = await pool.query(
-          `INSERT INTO attendance_records (id, student_id, class_id, batch_id, subject_id, date, status, marked_by, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (student_id, class_id, subject_id, date) DO UPDATE SET status = EXCLUDED.status, marked_by = EXCLUDED.marked_by
-           RETURNING *`,
-          [id, r.studentId, r.classId, batchId, subjectId, r.date, r.status, r.markedBy, created_at]
-        );
-        results.push(res.rows[0]);
-      } else {
-        const existing = memoryStore.attendance_records.find(
-          a => a.student_id === r.studentId && a.class_id === r.classId && a.date === r.date && (a.subject_id === subjectId || (!a.subject_id && !subjectId))
-        );
-        if (existing) {
-          existing.status = r.status;
-          existing.marked_by = r.markedBy;
-          results.push(existing);
-        } else {
-          const record = { id, student_id: r.studentId, class_id: r.classId, batch_id: batchId, subject_id: subjectId, date: r.date, status: r.status, marked_by: r.markedBy, correction_reason: null, corrected_at: null, corrected_by: null, created_at };
-          memoryStore.attendance_records.push(record);
-          results.push(record);
+    if (isPostgresConnected && pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const results = [];
+        for (const record of records) {
+          const id = crypto.randomUUID();
+          const createdAt = new Date().toISOString();
+          const batchId = sanitizeOptionalString(record.batchId);
+          const subjectId = sanitizeOptionalString(record.subjectId);
+          const res = await client.query(
+            `INSERT INTO attendance_records (id, student_id, class_id, batch_id, subject_id, date, status, remarks, marked_by, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             ON CONFLICT (student_id, class_id, subject_id, date)
+             DO UPDATE SET status = EXCLUDED.status, batch_id = EXCLUDED.batch_id, remarks = EXCLUDED.remarks, marked_by = EXCLUDED.marked_by
+             RETURNING *`,
+            [id, record.studentId, record.classId, batchId, subjectId, record.date, record.status, record.remarks ?? null, record.markedBy, createdAt]
+          );
+          results.push(res.rows[0]);
         }
+        await client.query('COMMIT');
+        return results;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
     }
-    return results;
+
+    const updates = records.map(record => {
+      const batchId = sanitizeOptionalString(record.batchId);
+      const subjectId = sanitizeOptionalString(record.subjectId);
+      const existing = memoryStore.attendance_records.find(
+        attendance => attendance.student_id === record.studentId &&
+          attendance.class_id === record.classId &&
+          attendance.date === record.date &&
+          (attendance.subject_id === subjectId || (!attendance.subject_id && !subjectId))
+      );
+      const createdAt = new Date().toISOString();
+      return existing
+        ? { existing, values: { status: record.status, batch_id: batchId, subject_id: subjectId, remarks: record.remarks ?? null, marked_by: record.markedBy } }
+        : {
+            record: {
+              id: crypto.randomUUID(),
+              student_id: record.studentId,
+              class_id: record.classId,
+              batch_id: batchId,
+              subject_id: subjectId,
+              date: record.date,
+              status: record.status,
+              remarks: record.remarks ?? null,
+              marked_by: record.markedBy,
+              correction_reason: null,
+              corrected_at: null,
+              corrected_by: null,
+              created_at: createdAt
+            }
+          };
+    });
+    return updates.map(update => {
+      if (update.existing) {
+        Object.assign(update.existing, update.values);
+        return update.existing;
+      }
+      memoryStore.attendance_records.push(update.record);
+      return update.record;
+    });
   },
 
   async getAttendance({ studentId, classId, batchId, subjectId, date, fromDate, toDate } = {}) {
@@ -800,6 +865,7 @@ export const lmsRepository = {
       const params = [];
       if (studentId) { params.push(studentId); where += ` AND ar.student_id = $${params.length}`; }
       if (classId) { params.push(classId); where += ` AND ar.class_id = $${params.length}`; }
+      if (batchId) { params.push(batchId); where += ` AND ar.batch_id = $${params.length}`; }
       if (subjectId) { params.push(subjectId); where += ` AND ar.subject_id = $${params.length}`; }
       if (date) { params.push(date); where += ` AND ar.date = $${params.length}`; }
       if (fromDate) { params.push(fromDate); where += ` AND ar.date >= $${params.length}`; }
@@ -817,6 +883,7 @@ export const lmsRepository = {
     let records = [...memoryStore.attendance_records];
     if (studentId) records = records.filter(r => r.student_id === studentId);
     if (classId) records = records.filter(r => r.class_id === classId);
+    if (batchId) records = records.filter(r => r.batch_id === batchId);
     if (subjectId) records = records.filter(r => r.subject_id === subjectId);
     if (date) records = records.filter(r => r.date === date);
     if (fromDate) records = records.filter(r => r.date >= fromDate);

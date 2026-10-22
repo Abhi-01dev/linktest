@@ -52,6 +52,25 @@ const createLeaveRequestSchema = z.object({
   reason: z.string().min(5).max(1000)
 });
 
+const markAttendanceSchema = z.object({
+  batch_id: z.string().min(1),
+  date: z.string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must use YYYY-MM-DD format')
+    .refine(value => {
+      const parsedDate = new Date(`${value}T00:00:00.000Z`);
+      return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
+    }, 'date must be a valid calendar date'),
+  subject_id: z.string().min(1),
+  records: z.array(z.object({
+    student_id: z.string().min(1),
+    status: z.enum(['present', 'absent', 'late', 'excused']),
+    remarks: z.string().max(1000).optional().default('')
+  })).min(1).max(500).refine(
+    records => new Set(records.map(record => record.student_id)).size === records.length,
+    'Each student can only appear once'
+  )
+});
+
 export const teacherController = {
   // ── Dashboard Overview ──────────────────────────────────────────────
   async getDashboard(req, res, next) {
@@ -163,22 +182,40 @@ export const teacherController = {
 
   async markAttendance(req, res, next) {
     try {
-      const { records } = req.body;
-      if (!Array.isArray(records) || records.length === 0) {
-        return res.status(400).json({
+      const { batch_id: batchId, date, subject_id: subjectId, records } = markAttendanceSchema.parse(req.body);
+      const batch = await lmsRepository.getAttendanceBatch(batchId, req.user.id, subjectId);
+      if (!batch) {
+        return res.status(404).json({
           success: false,
-          error: { code: 'INVALID_INPUT', message: 'records array is required' }
+          error: { code: 'NOT_FOUND', message: 'Batch not found' }
         });
       }
 
-      const formattedRecords = records.map(r => ({
-        studentId: r.student_id,
-        classId: r.class_id,
-        batchId: r.batch_id || null,
-        subjectId: r.subject_id || null,
-        date: r.date,
-        status: r.status,
-        remarks: r.remarks || '',
+      if (!batch.is_assigned) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'You are not assigned to this batch and subject' }
+        });
+      }
+
+      const enrolledStudents = await lmsRepository.getStudentsInClass(batch.class_id, batchId);
+      const enrolledStudentIds = new Set(enrolledStudents.map(student => student.id));
+      const unassignedStudent = records.find(record => !enrolledStudentIds.has(record.student_id));
+      if (unassignedStudent) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'STUDENT_NOT_ENROLLED', message: `Student ${unassignedStudent.student_id} is not enrolled in this batch` }
+        });
+      }
+
+      const formattedRecords = records.map(record => ({
+        studentId: record.student_id,
+        classId: batch.class_id,
+        batchId,
+        subjectId,
+        date,
+        status: record.status,
+        remarks: record.remarks,
         markedBy: req.user.id
       }));
 
