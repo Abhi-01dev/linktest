@@ -10,21 +10,60 @@ import { authService } from '../services/authService.js';
 import { getDbStatus, pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import crypto from 'node:crypto';
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
-  full_name: z.string().min(2).max(150)
+  full_name: z.string().min(2).max(150),
+  department: z.string().trim().min(2).max(150)
 });
 
 const updateStatusSchema = z.object({
   status: z.enum(['active', 'suspended', 'deactivated'])
 });
 
+const createStudentSchema = z.object({
+  full_name: z.string().trim().min(2).max(150),
+  email: z.string().trim().email().transform(value => value.toLowerCase()),
+  password: z.string().min(8).max(128).optional(),
+  enrollment_id: z.string().trim().min(1).max(64).optional(),
+  phone: z.string().trim().max(32).optional()
+});
+
+const studentStatusSchema = z.object({
+  status: z.preprocess(
+    value => typeof value === 'string' ? value.toLowerCase() : value,
+    z.enum(['active', 'suspended'])
+  )
+});
+
 const assignTeacherSchema = z.object({
-  teacher_id: z.string().min(1, 'teacher_id is required').optional(),
-  class_id: z.string().optional().nullable(),
-  batch_id: z.string().optional().nullable(),
-  subject_id: z.string().optional().nullable()
+  teacher_id: z.string().trim().min(1, 'teacher_id is required').optional(),
+  class_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  batch_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  subject_id: z.string().optional().nullable().transform(sanitizeOptionalString)
+});
+
+const subjectQuerySchema = z.object({
+  status: z.enum(['active', 'inactive']).optional(),
+  department: z.string().trim().min(1).max(150).optional()
+});
+
+const createSubjectSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  code: z.string().trim().toUpperCase().min(2).max(50).regex(/^[A-Z0-9]+$/, 'Subject code must contain only letters and numbers'),
+  description: z.string().trim().max(2000).optional().nullable(),
+  department: z.string().trim().min(1).max(150).optional().nullable(),
+  status: z.enum(['active', 'inactive']).default('active')
+});
+
+const createClassSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  description: z.string().trim().max(2000).optional().default(''),
+  academic_session_id: z.string().optional().nullable().transform(value =>
+    typeof value === 'string' && value.trim() ? value.trim() : null
+  )
 });
 
 export const adminController = {
@@ -194,13 +233,19 @@ export const adminController = {
 
   async createStudent(req, res, next) {
     try {
-      const { email, full_name, password = 'StudentDefault123!', phone } = req.body;
-      if (!email || !full_name) {
-        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'email and full_name are required.' } });
-      }
+      const { email, full_name, password: providedPassword, enrollment_id, phone } = createStudentSchema.parse(req.body);
       const existing = await userRepository.findByEmail(email);
       if (existing) {
         return res.status(409).json({ success: false, error: { code: 'EMAIL_ALREADY_EXISTS', message: 'A user with this email already exists.' } });
+      }
+      const password = providedPassword || crypto.randomBytes(24).toString('base64url');
+      const generatedEnrollmentId = enrollment_id || `LT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      const existingEnrollment = await lmsRepository.getStudentProfileByEnrollmentNumber(generatedEnrollmentId);
+      if (existingEnrollment) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'ENROLLMENT_ID_ALREADY_EXISTS', message: 'A student with this enrollment ID already exists.' }
+        });
       }
       const passwordHash = await bcrypt.hash(password, 10);
       const student = await userRepository.create({
@@ -212,6 +257,7 @@ export const adminController = {
         emailVerifiedAt: new Date().toISOString(),
         status: 'active'
       });
+      await lmsRepository.upsertStudentProfile(student.id, { enrollmentNumber: generatedEnrollmentId });
       if (phone) {
         await userRepository.updateProfile(student.id, { phone });
       }
@@ -221,9 +267,17 @@ export const adminController = {
         action: 'STUDENT_CREATED',
         resourceType: 'user',
         resourceId: student.id,
-        summary: `Admin created student account for ${email}`
+        summary: `Admin created student account with enrollment ID ${generatedEnrollmentId}`
       });
-      return res.status(201).json({ success: true, data: { student }, message: 'Student created successfully.' });
+      return res.status(201).json({
+        success: true,
+        data: {
+          student,
+          enrollment_id: generatedEnrollmentId,
+          ...(providedPassword ? {} : { temporary_password: password })
+        },
+        message: 'Student created successfully.'
+      });
     } catch (err) { next(err); }
   },
 
@@ -257,6 +311,47 @@ export const adminController = {
       if (!updated) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found.' } });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'USER_STATUS_CHANGED', resourceType: 'user', resourceId: id, summary: `User ${updated.email} status changed to ${status}` });
       return res.status(200).json({ success: true, data: { user: updated }, message: `User status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async updateStudentStatus(req, res, next) {
+    try {
+      const { status } = studentStatusSchema.parse(req.body);
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const updated = await userRepository.updateStatus(student.id, status);
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_STATUS_CHANGED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: `Student status changed to ${status}`,
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: { student: updated }, message: `Student status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async resetStudentPassword(req, res, next) {
+    try {
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const result = await authService.sendAdminPasswordReset({ user: student });
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_CREDENTIAL_RESET_REQUESTED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: 'Admin requested a secure password reset link for student',
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: result, message: result.message });
     } catch (err) { next(err); }
   },
 
@@ -323,10 +418,11 @@ export const adminController = {
 
   async inviteTeacher(req, res, next) {
     try {
-      const { email, full_name } = inviteTeacherSchema.parse(req.body);
+      const { email, full_name, department } = inviteTeacherSchema.parse(req.body);
       const result = await authService.inviteTeacher({
         email,
         fullName: full_name,
+        department,
         invitedBy: req.user.id,
         inviterName: req.user.full_name
       });
@@ -359,14 +455,16 @@ export const adminController = {
 
   async assignTeacher(req, res, next) {
     try {
-      const teacherId = req.params.teacherId || req.params.id || req.body.teacher_id || req.body.teacherId;
+      const validated = assignTeacherSchema.parse({
+        teacher_id: req.params.teacherId || req.params.id || req.body.teacher_id || req.body.teacherId,
+        class_id: req.body.class_id || req.body.classId,
+        batch_id: req.body.batch_id || req.body.batchId,
+        subject_id: req.body.subject_id || req.body.subjectId || req.body.subject || req.body.subject_code || req.body.code
+      });
+      const { teacher_id: teacherId, class_id: rawClass, batch_id: rawBatch, subject_id: rawSubject } = validated;
       if (!teacherId) {
         return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'teacher_id is required.' } });
       }
-
-      const rawSubject = req.body.subject_id || req.body.subjectId || req.body.subject || req.body.subject_code || req.body.code;
-      const rawBatch = req.body.batch_id || req.body.batchId;
-      const rawClass = req.body.class_id || req.body.classId;
 
       // 1. Validate Teacher
       const teacher = await userRepository.findById(teacherId);
@@ -618,9 +716,17 @@ export const adminController = {
 
   async createClass(req, res, next) {
     try {
-      const { name, description, academic_session_id } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Class name is required.' } });
-      const cls = await lmsRepository.createClass({ name, description, academicSessionId: academic_session_id });
+      const { name, description, academic_session_id: academicSessionId } = createClassSchema.parse(req.body);
+      if (academicSessionId) {
+        const sessions = await lmsRepository.getAcademicSessions();
+        if (!sessions.some(session => session.id === academicSessionId)) {
+          const err = new Error(`Academic session '${academicSessionId}' does not exist.`);
+          err.statusCode = 400;
+          err.code = 'INVALID_ACADEMIC_SESSION';
+          throw err;
+        }
+      }
+      const cls = await lmsRepository.createClass({ name, description, academicSessionId });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'CLASS_CREATED', resourceType: 'class', resourceId: cls.id, summary: `Class '${name}' created` });
       return res.status(201).json({ success: true, data: { class: cls }, message: 'Class created.' });
     } catch (err) { next(err); }
@@ -698,16 +804,16 @@ export const adminController = {
   // ── Subjects ───────────────────────────────────────────────
   async getSubjects(req, res, next) {
     try {
-      const subjects = await lmsRepository.getSubjects();
+      const { status, department } = subjectQuerySchema.parse(req.query);
+      const subjects = await lmsRepository.getSubjects({ status, department });
       return res.status(200).json({ success: true, data: { subjects }, message: 'Subjects retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createSubject(req, res, next) {
     try {
-      const { name, code, description } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject name is required.' } });
-      const subject = await lmsRepository.createSubject({ name, code, description });
+      const { name, code, description, department, status } = createSubjectSchema.parse(req.body);
+      const subject = await lmsRepository.createSubject({ name, code, description, department, status });
       await logAudit({
         actorId: req.user.id,
         actorEmail: req.user.email,
@@ -731,7 +837,12 @@ export const adminController = {
 
   async createTimetableEntry(req, res, next) {
     try {
-      const { class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id } = req.body;
+      const class_id = sanitizeOptionalString(req.body.class_id);
+      const batch_id = sanitizeOptionalString(req.body.batch_id);
+      const subject_id = sanitizeOptionalString(req.body.subject_id);
+      const teacher_id = sanitizeOptionalString(req.body.teacher_id);
+      const { day_of_week, start_time, end_time, room } = req.body;
+      const academic_session_id = sanitizeOptionalString(req.body.academic_session_id);
       if (!class_id || !subject_id || !teacher_id || day_of_week === undefined || !start_time || !end_time) {
         return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'class_id, subject_id, teacher_id, day_of_week, start_time, end_time are required.' } });
       }
@@ -815,11 +926,11 @@ export const adminController = {
       const session = await lmsRepository.createLiveClass({
         title,
         description: description || '',
-        teacherId: teacher_id || req.user.id,
-        classId: class_id || null,
-        batchId: batch_id || null,
-        subjectId: subject_id || null,
-        courseId: course_id || null,
+        teacherId: sanitizeOptionalString(teacher_id) || req.user.id,
+        classId: sanitizeOptionalString(class_id),
+        batchId: sanitizeOptionalString(batch_id),
+        subjectId: sanitizeOptionalString(subject_id),
+        courseId: sanitizeOptionalString(course_id),
         scheduledAt: scheduled_at,
         meetingUrl: meeting_url || null,
         meetingProvider: 'livekit'

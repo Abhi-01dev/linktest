@@ -98,14 +98,22 @@ export function QuestionBankPage() {
   };
 
   const fetchFilterOptions = async () => {
-    try {
-      const filters = await api.getQuestionBankFilters();
-      if (filters?.subjects) {
-        setAvailableSubjects(filters.subjects);
-      }
-    } catch (err) {
-      // Non-blocking
+    const [filtersResult, catalogResult] = await Promise.allSettled([
+      api.getQuestionBankFilters(),
+      api.getAdminSubjects()
+    ]);
+    const subjectNames = new Set();
+    if (filtersResult.status === 'fulfilled' && Array.isArray(filtersResult.value?.subjects)) {
+      filtersResult.value.subjects.forEach(subject => subjectNames.add(subject));
+    } else if (filtersResult.status === 'rejected') {
+      console.error('Failed to load existing question bank subjects', filtersResult.reason);
     }
+    if (catalogResult.status === 'fulfilled') {
+      catalogResult.value.forEach(subject => subjectNames.add(subject.name));
+    } else {
+      showToast('Failed to load the curriculum subject catalog', 'error');
+    }
+    setAvailableSubjects([...subjectNames].filter(Boolean).sort((left, right) => left.localeCompare(right)));
   };
 
   useEffect(() => {
@@ -837,14 +845,17 @@ export function QuestionBankPage() {
                   <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.2rem' }}>
                     Subject *
                   </label>
-                  <input
-                    type="text"
+                  <select
                     required
                     value={newQuestion.subject}
                     onChange={(e) => setNewQuestion({ ...newQuestion, subject: e.target.value })}
-                    placeholder="e.g. Computer Science Fundamentals"
                     style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #CBD5E1' }}
-                  />
+                  >
+                    <option value="">Select a subject</option>
+                    {availableSubjects.map(subject => (
+                      <option key={subject} value={subject}>{subject}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>

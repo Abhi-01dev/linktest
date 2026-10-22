@@ -134,9 +134,42 @@ Authorization: Bearer <jwt_token>
   ```
 - **Response `data`**: Same as `verify-email` with JWT token.
 
+### 3.2 Admin Student Lifecycle
+All endpoints in this section require an authenticated administrator.
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/admin/students` | Admin | Create a verified student account with an enrollment ID and password |
+| `PUT` | `/api/admin/students/:id/status` | Admin | Set a student account to `Active` or `Suspended` |
+| `POST` | `/api/admin/students/:id/reset-password` | Admin | Email the student a one-hour secure password-reset link |
+
+#### `POST /api/admin/students`
+- **Request Body** (`password` and `enrollment_id` are optional; secure values are generated when omitted):
+  ```json
+  {
+    "full_name": "Aarav Sharma",
+    "email": "aarav@example.com",
+    "password": "Password123!",
+    "enrollment_id": "LT-20261011-1234ABCD"
+  }
+  ```
+- **Response `data`** includes the student, the enrollment ID, and a generated `temporary_password` only when the request omitted a password. The generated password is returned once to the authenticated administrator and is not stored or audited in plaintext.
+- Duplicate email addresses return `409 EMAIL_ALREADY_EXISTS`.
+
+#### `PUT /api/admin/students/:id/status`
+- **Request Body**:
+  ```json
+  { "status": "Suspended" }
+  ```
+- Accepts `Active` or `Suspended` (case-insensitive). Suspended students are denied login with `403 ACCOUNT_SUSPENDED`.
+- Each successful lifecycle action is recorded in the audit log with the acting administrator, target student, and timestamp.
+
+#### `POST /api/admin/students/:id/reset-password`
+- Sends the existing expiring, single-use password-reset link to the student's verified email address. The reset token is never returned by this endpoint.
+
 ---
 
-### 3.2 Courses & Lessons
+### 3.3 Courses & Lessons
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/courses` | Public | Browse courses (optional `?search=`, `?category=`, `?published=`) |
@@ -165,7 +198,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.3 Quizzes & Assessments
+### 3.4 Quizzes & Assessments
 > [!IMPORTANT]
 > To preserve assessment integrity, `GET /api/quizzes/:courseId` **MUST NEVER** return `correct_option_index` or explanations before submission. Answers are computed and verified strictly on the server.
 
@@ -212,7 +245,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.4 AI Tutor & Testing
+### 3.5 AI Tutor & Testing
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/ai/status` | Public | Check Ollama availability and loaded model |
@@ -251,7 +284,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.5 Admin Management
+### 3.6 Admin Management
 > [!CAUTION]
 > All endpoints under `/api/admin/*` strictly require `role: ADMIN`. Non-admins receive HTTP 403 Forbidden.
 
@@ -259,6 +292,9 @@ Authorization: Bearer <jwt_token>
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/admin/dashboard` | Admin | Overview statistics (users, courses, quizzes, attempts) |
 | `GET` | `/api/admin/users` | Admin | List registered users with roles and enrollment counts |
+| `POST` | `/api/batches` | Admin | Create a batch; blank optional relationship IDs are stored as `null` |
+| `PATCH` | `/api/batches/:batchId` | Admin | Update a batch; blank optional relationship IDs clear the association |
+| `DELETE` | `/api/batches/:batchId` | Admin | Delete a batch and its teacher, student, and class-enrollment joins atomically |
 | `POST` | `/api/admin/courses` | Admin | Create a new course |
 | `PUT` | `/api/admin/courses/:id` | Admin | Update course metadata and published status |
 | `DELETE` | `/api/admin/courses/:id` | Admin | Archive or delete a course |
@@ -282,9 +318,11 @@ Authorization: Bearer <jwt_token>
 
 `GET /api/admin/dashboard` returns KPI counts under `data.stats`, including `totalStudents`, `totalTeachers`, `activeBatches`, `totalCourses`, `totalExams`, and `systemUptime` (application uptime in seconds). `totalExams` is the configured mock-test count; `conductedExams` counts submitted or evaluated mock-test attempts. Legacy snake_case dashboard fields remain available.
 
+Optional foreign-key fields in admin timetable and live-class payloads normalize empty or whitespace-only strings to `null`.
+
 ---
 
-### 3.6 Teacher Portal (`/api/teacher/*`)
+### 3.7 Teacher Portal (`/api/teacher/*`)
 > [!NOTE]
 > All endpoints under `/api/teacher/*` require role `TEACHER` or `ADMIN`.
 
@@ -311,7 +349,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.7 Student Portal (`/api/student/*`)
+### 3.8 Student Portal (`/api/student/*`)
 > [!NOTE]
 > All endpoints under `/api/student/*` require authenticated `STUDENT` session.
 
@@ -330,7 +368,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.8 File Uploads (`/api/upload/*`)
+### 3.9 File Uploads (`/api/upload/*`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/api/upload` | Authenticated | Upload file (multipart/form-data, field `file`, `category`) |
@@ -338,7 +376,7 @@ Authorization: Bearer <jwt_token>
 
 ---
 
-### 3.9 LiveKit WebRTC Video (`/api/livekit/*`)
+### 3.10 LiveKit WebRTC Video (`/api/livekit/*`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/livekit/status` | Public | Provider status & external meeting fallback report |

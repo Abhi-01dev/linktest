@@ -5,8 +5,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
-
-const sanitizeOptionalString = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const normalizeStatus = (val) => {
   if (!val) return 'Active';
@@ -115,7 +114,10 @@ export const batchController = {
   // ── Create Batch ─────────────────────────────────────────────────────────
   async createBatch(req, res, next) {
     try {
-      const validated = createBatchSchema.parse(req.body);
+      const validated = createBatchSchema.parse({
+        ...req.body,
+        ...(req.params.classId ? { class_id: req.params.classId } : {})
+      });
 
       // Validate referenced course exists
       if (validated.course_id) {
@@ -357,7 +359,13 @@ export const batchController = {
   async deleteBatch(req, res, next) {
     try {
       const { batchId } = req.params;
-      await batchRepository.deleteBatch(batchId);
+      const result = await batchRepository.deleteBatch(batchId);
+      if (!result.success) {
+        const err = new Error(result.message || 'Batch not found.');
+        err.statusCode = 404;
+        err.code = result.code || 'NOT_FOUND';
+        throw err;
+      }
 
       await logAudit({
         actorId: req.user.id,
