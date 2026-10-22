@@ -10,10 +10,12 @@ import { authService } from '../services/authService.js';
 import { getDbStatus, pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
-  full_name: z.string().min(2).max(150)
+  full_name: z.string().min(2).max(150),
+  department: z.string().trim().min(2).max(150)
 });
 
 const updateStatusSchema = z.object({
@@ -21,10 +23,23 @@ const updateStatusSchema = z.object({
 });
 
 const assignTeacherSchema = z.object({
-  teacher_id: z.string().min(1, 'teacher_id is required').optional(),
-  class_id: z.string().optional().nullable(),
-  batch_id: z.string().optional().nullable(),
-  subject_id: z.string().optional().nullable()
+  teacher_id: z.string().trim().min(1, 'teacher_id is required').optional(),
+  class_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  batch_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  subject_id: z.string().optional().nullable().transform(sanitizeOptionalString)
+});
+
+const subjectQuerySchema = z.object({
+  status: z.enum(['active', 'inactive']).optional(),
+  department: z.string().trim().min(1).max(150).optional()
+});
+
+const createSubjectSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  code: z.string().trim().toUpperCase().min(2).max(50).regex(/^[A-Z0-9]+$/, 'Subject code must contain only letters and numbers'),
+  description: z.string().trim().max(2000).optional().nullable(),
+  department: z.string().trim().min(1).max(150).optional().nullable(),
+  status: z.enum(['active', 'inactive']).default('active')
 });
 
 const createClassSchema = z.object({
@@ -279,10 +294,11 @@ export const adminController = {
 
   async inviteTeacher(req, res, next) {
     try {
-      const { email, full_name } = inviteTeacherSchema.parse(req.body);
+      const { email, full_name, department } = inviteTeacherSchema.parse(req.body);
       const result = await authService.inviteTeacher({
         email,
         fullName: full_name,
+        department,
         invitedBy: req.user.id,
         inviterName: req.user.full_name
       });
@@ -315,14 +331,16 @@ export const adminController = {
 
   async assignTeacher(req, res, next) {
     try {
-      const teacherId = req.params.teacherId || req.params.id || req.body.teacher_id || req.body.teacherId;
+      const validated = assignTeacherSchema.parse({
+        teacher_id: req.params.teacherId || req.params.id || req.body.teacher_id || req.body.teacherId,
+        class_id: req.body.class_id || req.body.classId,
+        batch_id: req.body.batch_id || req.body.batchId,
+        subject_id: req.body.subject_id || req.body.subjectId || req.body.subject || req.body.subject_code || req.body.code
+      });
+      const { teacher_id: teacherId, class_id: rawClass, batch_id: rawBatch, subject_id: rawSubject } = validated;
       if (!teacherId) {
         return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'teacher_id is required.' } });
       }
-
-      const rawSubject = req.body.subject_id || req.body.subjectId || req.body.subject || req.body.subject_code || req.body.code;
-      const rawBatch = req.body.batch_id || req.body.batchId;
-      const rawClass = req.body.class_id || req.body.classId;
 
       // 1. Validate Teacher
       const teacher = await userRepository.findById(teacherId);
@@ -662,16 +680,16 @@ export const adminController = {
   // ── Subjects ───────────────────────────────────────────────
   async getSubjects(req, res, next) {
     try {
-      const subjects = await lmsRepository.getSubjects();
+      const { status, department } = subjectQuerySchema.parse(req.query);
+      const subjects = await lmsRepository.getSubjects({ status, department });
       return res.status(200).json({ success: true, data: { subjects }, message: 'Subjects retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createSubject(req, res, next) {
     try {
-      const { name, code, description } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject name is required.' } });
-      const subject = await lmsRepository.createSubject({ name, code, description });
+      const { name, code, description, department, status } = createSubjectSchema.parse(req.body);
+      const subject = await lmsRepository.createSubject({ name, code, description, department, status });
       await logAudit({
         actorId: req.user.id,
         actorEmail: req.user.email,
@@ -695,7 +713,12 @@ export const adminController = {
 
   async createTimetableEntry(req, res, next) {
     try {
-      const { class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id } = req.body;
+      const class_id = sanitizeOptionalString(req.body.class_id);
+      const batch_id = sanitizeOptionalString(req.body.batch_id);
+      const subject_id = sanitizeOptionalString(req.body.subject_id);
+      const teacher_id = sanitizeOptionalString(req.body.teacher_id);
+      const { day_of_week, start_time, end_time, room } = req.body;
+      const academic_session_id = sanitizeOptionalString(req.body.academic_session_id);
       if (!class_id || !subject_id || !teacher_id || day_of_week === undefined || !start_time || !end_time) {
         return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'class_id, subject_id, teacher_id, day_of_week, start_time, end_time are required.' } });
       }
@@ -779,11 +802,11 @@ export const adminController = {
       const session = await lmsRepository.createLiveClass({
         title,
         description: description || '',
-        teacherId: teacher_id || req.user.id,
-        classId: class_id || null,
-        batchId: batch_id || null,
-        subjectId: subject_id || null,
-        courseId: course_id || null,
+        teacherId: sanitizeOptionalString(teacher_id) || req.user.id,
+        classId: sanitizeOptionalString(class_id),
+        batchId: sanitizeOptionalString(batch_id),
+        subjectId: sanitizeOptionalString(subject_id),
+        courseId: sanitizeOptionalString(course_id),
         scheduledAt: scheduled_at,
         meetingUrl: meeting_url || null,
         meetingProvider: 'livekit'

@@ -93,7 +93,6 @@ test('batch deletion removes enrollment rows and clears dependent batch referenc
 
   const dependentCollections = [
     'teacher_assignments',
-    'student_class_enrollments',
     'timetable_entries',
     'attendance_records',
     'assignments',
@@ -108,6 +107,7 @@ test('batch deletion removes enrollment rows and clears dependent batch referenc
   assert.equal(memoryStore.batches.some(batch => batch.id === batchId), false);
   assert.equal(memoryStore.batch_enrollments.some(enrollment => enrollment.batch_id === batchId), false);
   assert.equal(memoryStore.batch_teachers.some(teacher => teacher.batch_id === batchId), false);
+  assert.equal(memoryStore.student_class_enrollments.some(enrollment => enrollment.batch_id === batchId), false);
   for (const collection of dependentCollections) {
     const dependent = memoryStore[collection].find(record => record.id === `${batchId}-${collection}`);
     assert.equal(dependent.batch_id, null, `${collection} should no longer reference the deleted batch`);

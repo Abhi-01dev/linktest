@@ -1064,8 +1064,10 @@ export function TeacherTestBuilderPage() {
                 }}></span>
                 <span>
                   {aiStatus?.available
-                    ? `Ollama Active: ${aiStatus.model || 'qwen2.5:0.5b'} (${aiStatus.endpoint || 'http://localhost:11434'})`
-                    : (aiStatus?.status_message || 'Checking local AI service...')}
+                    ? (aiStatus.is_cloud
+                        ? `Cloud AI Active: ${aiStatus.model} (${aiStatus.provider || 'Groq'})`
+                        : `Ollama Active: ${aiStatus.model || 'qwen2.5:0.5b'} (${aiStatus.endpoint || 'http://localhost:11434'})`)
+                    : (aiStatus?.status_message || 'Checking AI service...')}
                 </span>
               </div>
               <button
