@@ -4,6 +4,8 @@
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
+import { lmsRepository } from '../repositories/lmsRepository.js';
+import { batchRepository } from '../repositories/batchRepository.js';
 import { mockTestScoringService } from './mockTestScoringService.js';
 import { aiService } from './aiService.js';
 import { generateTestResultsPdf } from './pdfReportService.js';
@@ -18,10 +20,15 @@ export const mockTestService = {
    * Retrieves all published mock tests with student-specific attempt progress
    */
   async getStudentDashboardTests(student, filters = {}) {
-    const tests = await mockTestRepository.getAllTests({
+    const rawTests = await mockTestRepository.getAllTests({
       ...filters,
       status: 'published'
     });
+
+    const studentBatchIds = await batchRepository.getStudentBatchIds(student.id);
+
+    // CRITICAL: Filter out any tests assigned to a specific batch that the student is NOT enrolled in
+    const tests = rawTests.filter(t => !t.batch_id || studentBatchIds.includes(t.batch_id));
 
     const studentAttempts = await mockTestRepository.getAttemptsByStudent(student.id);
 
@@ -117,23 +124,34 @@ export const mockTestService = {
     }
 
     // -------------------------------------------------------------------------
-    // CRITICAL SECURITY: ENFORCE TEACHER JOIN APPROVAL FOR STUDENTS
+    // CRITICAL SECURITY: ENFORCE BATCH AUTHORIZATION & JOIN APPROVAL
     // -------------------------------------------------------------------------
     if (student.role === 'STUDENT') {
-      const activeRequest = await mockTestJoinRequestRepository.findActiveByStudentAndTest(student.id, testId);
-      if (!activeRequest || activeRequest.status !== 'APPROVED') {
-        const latestRequest = await mockTestJoinRequestRepository.getLatestByStudentAndTest(student.id, testId);
-        const err = new Error(
-          latestRequest?.status === 'PENDING'
-            ? 'Your request to join this mock test is still pending teacher approval.'
-            : (latestRequest?.status === 'REJECTED'
-                ? `Your request to join was rejected${latestRequest.rejection_reason ? `: "${latestRequest.rejection_reason}"` : '.'} You may request again.`
-                : 'Teacher approval is required before you can join this mock test.')
-        );
-        err.status = 403;
-        err.statusCode = 403;
-        err.code = 'MOCK_TEST_APPROVAL_REQUIRED';
-        throw err;
+      if (test.batch_id) {
+        const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+        if (!isEnrolled) {
+          const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+          err.status = 403;
+          err.statusCode = 403;
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
+      } else {
+        const activeRequest = await mockTestJoinRequestRepository.findActiveByStudentAndTest(student.id, testId);
+        if (!activeRequest || activeRequest.status !== 'APPROVED') {
+          const latestRequest = await mockTestJoinRequestRepository.getLatestByStudentAndTest(student.id, testId);
+          const err = new Error(
+            latestRequest?.status === 'PENDING'
+              ? 'Your request to join this mock test is still pending teacher approval.'
+              : (latestRequest?.status === 'REJECTED'
+                  ? `Your request to join was rejected${latestRequest.rejection_reason ? `: "${latestRequest.rejection_reason}"` : '.'} You may request again.`
+                  : 'Teacher approval is required before you can join this mock test.')
+          );
+          err.status = 403;
+          err.statusCode = 403;
+          err.code = 'MOCK_TEST_APPROVAL_REQUIRED';
+          throw err;
+        }
       }
     }
 
@@ -198,6 +216,23 @@ export const mockTestService = {
     }
 
     const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Associated examination record not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+        err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
+        throw err;
+      }
+    }
+
     const rawQuestions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
 
     // CRITICAL SECURITY: Questions MUST be sanitized. Answer keys and explanations removed.
@@ -243,7 +278,9 @@ export const mockTestService = {
         started_at: attempt.started_at,
         warning_count: attempt.warning_count || 0,
         security_warning_count: attempt.security_warning_count || 0,
-        fullscreen_exit_count: attempt.fullscreen_exit_count || 0
+        fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+        integrity_trust_index: attempt.integrity_trust_index ?? 100,
+        disqualified: Boolean(attempt.disqualified)
       },
       test_id: test.id,
       test_title: test.title,
@@ -259,6 +296,8 @@ export const mockTestService = {
       warning_count: attempt.warning_count || 0,
       security_warning_count: attempt.security_warning_count || 0,
       fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+      integrity_trust_index: attempt.integrity_trust_index ?? 100,
+      disqualified: Boolean(attempt.disqualified),
       questions: sanitizedQuestions,
       responses: responsesMap
     };
@@ -299,7 +338,23 @@ export const mockTestService = {
     }
 
     const question_id = responsePayload.question_id || responsePayload.questionId;
-    const response_data = responsePayload.response_data !== undefined ? responsePayload.response_data : responsePayload.responseData;
+    let response_data = responsePayload.response_data !== undefined
+      ? responsePayload.response_data
+      : (responsePayload.responseData !== undefined ? responsePayload.responseData : null);
+
+    if (response_data === null) {
+      const flat = { ...responsePayload };
+      delete flat.question_id;
+      delete flat.questionId;
+      delete flat.is_marked_for_review;
+      delete flat.isMarkedForReview;
+      delete flat.is_visited;
+      delete flat.isVisited;
+      if (Object.keys(flat).length > 0) {
+        response_data = flat;
+      }
+    }
+
     const is_marked_for_review = responsePayload.is_marked_for_review !== undefined ? responsePayload.is_marked_for_review : responsePayload.isMarkedForReview;
     const is_visited = responsePayload.is_visited !== undefined ? responsePayload.is_visited : (responsePayload.isVisited ?? true);
 
@@ -348,7 +403,12 @@ export const mockTestService = {
     }
 
     // Support both event_type and eventType
-    const rawType = (eventData.event_type || eventData.eventType || '').trim().toUpperCase();
+    const submittedType = (eventData.event_type || eventData.eventType || '').trim().toUpperCase();
+    const eventTypeAliases = {
+      TAB_SWITCH: 'TAB_HIDDEN',
+      NO_FACE: 'FACE_NOT_DETECTED'
+    };
+    const rawType = eventTypeAliases[submittedType] || submittedType;
 
     const validEventTypes = [
       'FACE_NOT_DETECTED',
@@ -391,8 +451,11 @@ export const mockTestService = {
 
     // Check for duplicate debouncing: ignore identical event if received within 3.5 seconds
     const existingEvents = await mockTestRepository.getProctoringEvents(attemptId);
+    const isTabSwitchSignal = ['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(rawType);
     const lastMatching = existingEvents
-      .filter(e => e.event_type === rawType)
+      .filter(e => isTabSwitchSignal
+        ? ['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(e.event_type)
+        : e.event_type === rawType)
       .sort((a, b) => new Date(b.server_timestamp) - new Date(a.server_timestamp))[0];
 
     if (lastMatching) {
@@ -404,6 +467,8 @@ export const mockTestService = {
           warning_count: attempt.warning_count || 0,
           security_warning_count: attempt.security_warning_count || 0,
           fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+          integrity_trust_index: attempt.integrity_trust_index ?? 100,
+          disqualified: Boolean(attempt.disqualified),
           auto_submitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
           status: attempt.status,
           submission_reason: attempt.submission_reason || null
@@ -412,15 +477,22 @@ export const mockTestService = {
     }
 
     // Persist event in proctoring events table
+    const severityPenalties = { info: 1, warning: 5, critical: 15 };
+    const requestedSeverity = String(eventData.severity || (rawType === 'FULLSCREEN_EXIT' ? 'critical' : 'warning')).toLowerCase();
+    const normalizedSeverity = severityPenalties[requestedSeverity] === undefined ? 'warning' : requestedSeverity;
     const recorded = await mockTestRepository.logProctoringEvent({
       attempt_id: attemptId,
       event_type: rawType,
-      severity: eventData.severity || (rawType === 'FULLSCREEN_EXIT' ? 'critical' : 'warning'),
+      severity: normalizedSeverity,
       client_timestamp: eventData.client_timestamp || eventData.timestamp || new Date().toISOString(),
       duration_seconds: eventData.duration_seconds || 0,
       confidence: eventData.confidence || 1.0,
       metadata: eventData.metadata || { reason: eventData.reason || null }
     });
+    const integrityTrustIndex = Math.max(
+      0,
+      (attempt.integrity_trust_index ?? 100) - severityPenalties[normalizedSeverity]
+    );
 
     // Update proctoring summary
     const summary = attempt.proctoring_summary || {
@@ -430,6 +502,7 @@ export const mockTestService = {
       fullscreen_exit_events: 0,
       camera_disconnect_events: 0,
       total_events: 0,
+      integrity_trust_index: 100,
       flagged: false
     };
 
@@ -440,24 +513,57 @@ export const mockTestService = {
     if (rawType === 'CAMERA_DISCONNECTED') summary.camera_disconnect_events = (summary.camera_disconnect_events || 0) + 1;
 
     summary.total_events = (summary.total_events || 0) + 1;
+    summary.integrity_trust_index = integrityTrustIndex;
 
     // Strict separate counters
-    const MAX_WARNINGS = 5;
+    const MAX_WARNINGS = 3;
     const MAX_FULLSCREEN_EXITS = 2;
 
+    const isSecurityWarning = normalizedSeverity !== 'info';
     let newSecurityWarningCount = attempt.security_warning_count || 0;
     let newFullscreenExitCount = attempt.fullscreen_exit_count || 0;
-    let newWarningCount = (attempt.warning_count || 0) + 1;
+    let newWarningCount = (attempt.warning_count || 0) + Number(isSecurityWarning);
 
     const isFullscreenExit = rawType === 'FULLSCREEN_EXIT';
     if (isFullscreenExit) {
       newFullscreenExitCount += 1;
-    } else {
+    } else if (isSecurityWarning) {
       newSecurityWarningCount += 1;
     }
 
-    if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS) {
+    const tabSwitchThresholdReached = summary.tab_switch_events >= 3;
+    if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS || tabSwitchThresholdReached) {
       summary.flagged = true;
+    }
+
+    if (tabSwitchThresholdReached) {
+      await mockTestRepository.updateAttempt(attemptId, {
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
+        proctoring_summary: summary
+      });
+      const submissionResult = await this.submitAttempt(attemptId, student, {
+        auto_submitted: true,
+        reason: 'MAX_TAB_SWITCHES',
+        status: 'AUTO_SUBMITTED'
+      });
+
+      return {
+        recorded: true,
+        event_id: recorded.id,
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
+        auto_submitted: true,
+        status: 'AUTO_SUBMITTED',
+        submission_reason: 'MAX_TAB_SWITCHES',
+        result: submissionResult
+      };
     }
 
     // Check Auto-Submission Limits:
@@ -467,6 +573,7 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
         proctoring_summary: summary
       });
 
@@ -500,6 +607,8 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'SECOND_FULLSCREEN_EXIT',
@@ -507,12 +616,13 @@ export const mockTestService = {
       };
     }
 
-    // Limit 2: Fifth security warning -> MAX_SECURITY_WARNINGS
+    // Limit 2: Third security warning -> MAX_SECURITY_WARNINGS
     if (newSecurityWarningCount >= MAX_WARNINGS) {
       await mockTestRepository.updateAttempt(attemptId, {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
         proctoring_summary: summary
       });
 
@@ -534,7 +644,7 @@ export const mockTestService = {
         severity: 'CRITICAL',
         userId: student.id,
         userEmail: student.email,
-        details: `Candidate reached maximum security warnings (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
+        details: `Candidate reached maximum security strikes (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
         metadata: { attemptId, testId: attempt.test_id, warning_count: newSecurityWarningCount }
       });
 
@@ -550,6 +660,8 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'MAX_SECURITY_WARNINGS',
@@ -562,6 +674,8 @@ export const mockTestService = {
       warning_count: newWarningCount,
       security_warning_count: newSecurityWarningCount,
       fullscreen_exit_count: newFullscreenExitCount,
+      integrity_trust_index: integrityTrustIndex,
+      disqualified: Boolean(attempt.disqualified),
       proctoring_summary: summary
     });
 
@@ -586,7 +700,7 @@ export const mockTestService = {
       userEmail: student.email,
       details: isFullscreenExit
         ? `Fullscreen exit 1/${MAX_FULLSCREEN_EXITS} recorded.`
-        : `Security warning ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
+        : `Security strike ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
       metadata: {
         attemptId,
         testId: attempt.test_id,
@@ -601,6 +715,8 @@ export const mockTestService = {
       warning_count: newWarningCount,
       security_warning_count: newSecurityWarningCount,
       fullscreen_exit_count: newFullscreenExitCount,
+      integrity_trust_index: integrityTrustIndex,
+      disqualified: Boolean(attempt.disqualified),
       auto_submitted: false,
       status: attempt.status,
       submission_reason: null,
@@ -632,6 +748,23 @@ export const mockTestService = {
     }
 
     const test = await mockTestRepository.getTestById(attempt.test_id);
+    if (!test) {
+      const err = new Error('Associated examination record not found.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+        err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
+        throw err;
+      }
+    }
+
     const questions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
 
     // Map existing saved candidate responses
@@ -657,13 +790,13 @@ export const mockTestService = {
     const finalStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : (evaluation.pending_review_count > 0 ? 'submitted' : 'evaluated');
     const submissionStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : 'SUBMITTED';
 
-    let resultStatus = 'READY';
+    let resultStatus = 'EVALUATED';
     let releasedAt = null;
     let releasedBy = null;
 
     if (evaluation.pending_review_count > 0) {
       resultStatus = 'PENDING_EVALUATION';
-    } else if (test.results_published || test.allow_instant_result) {
+    } else if (test.results_published || !test.batch_id) {
       resultStatus = 'RELEASED';
       releasedAt = new Date().toISOString();
       releasedBy = test.created_by || null;
@@ -736,10 +869,19 @@ export const mockTestService = {
       throw err;
     }
 
-    // Critical Security: Student can ONLY view their own attempt result
+    // Critical Security: Students can only view their own result.
     if (student.role === 'STUDENT' && attempt.student_id !== student.id) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
       const err = new Error('You are not authorized to view this result.');
       err.status = 403;
+      err.code = 'FORBIDDEN';
       throw err;
     }
 
@@ -750,12 +892,40 @@ export const mockTestService = {
       throw err;
     }
 
+    if (
+      student.role === 'TEACHER' &&
+      test.created_by !== student.id &&
+      !(await lmsRepository.isTeacherAssignedToStudent(student.id, attempt.student_id))
+    ) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
+      const err = new Error('You are not authorized to view this result.');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
+        err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
+        throw err;
+      }
+    }
+
     const questions = await mockTestRepository.getQuestionsByTestId(attempt.test_id);
     const responses = attempt.responses || [];
 
     const isTeacherOrAdmin = ['TEACHER', 'ADMIN'].includes(student.role);
-    const isPending = attempt.result_status === 'PENDING_EVALUATION';
-    const isReleased = attempt.result_status === 'RELEASED' || (!isPending && (test.results_published || test.allow_instant_result));
+    const isReleased = attempt.result_status === 'RELEASED';
     const resultsReleased = Boolean(isTeacherOrAdmin || isReleased);
 
     // Build question reviews with safe handling for every field
@@ -776,15 +946,14 @@ export const mockTestService = {
         time_limit: parseFloat(q.time_limit || 2.0),
         memory_limit: parseInt(q.memory_limit || 128, 10),
         test_cases: resultsReleased ? (Array.isArray(q.test_cases) ? q.test_cases : []) : [],
-        // Only disclose answers and explanations if results are published or teacher
-        answer_key: resultsReleased ? (q.answer_key || null) : null,
-        explanation: resultsReleased && test.show_explanations ? (q.explanation || null) : null,
+        answer_key: resultsReleased ? (q.answer_key || q.correct_answer || null) : null,
+        explanation: resultsReleased && (test.show_explanations !== false) ? (q.explanation || null) : null,
         candidate_response: r ? r.response_data : null,
         is_marked_for_review: r ? Boolean(r.is_marked_for_review) : false,
-        score_awarded: r ? parseFloat(r.score_awarded || 0) : 0,
-        is_correct: r ? r.is_correct : null,
+        score_awarded: resultsReleased ? (r ? parseFloat(r.score_awarded || 0) : 0) : null,
+        is_correct: resultsReleased ? (r ? r.is_correct : null) : null,
         is_pending_review: r ? Boolean(r.is_pending_review) : false,
-        execution_results: r ? (r.execution_results || (r.response_data && r.response_data.execution_results) || null) : null,
+        execution_results: resultsReleased ? (r ? (r.execution_results || (r.response_data && r.response_data.execution_results) || null) : null) : null,
         evaluation_comment: resultsReleased ? (r ? r.evaluation_comment : null) : null
       };
     });
@@ -806,6 +975,8 @@ export const mockTestService = {
         submission_reason: attempt.submission_reason || null,
         security_warning_count: attempt.security_warning_count || 0,
         fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+        integrity_trust_index: attempt.integrity_trust_index ?? 100,
+        disqualified: Boolean(attempt.disqualified),
         submitted_at: attempt.submitted_at,
         started_at: attempt.started_at
       },
@@ -821,17 +992,19 @@ export const mockTestService = {
       submission_reason: attempt.submission_reason || null,
       security_warning_count: attempt.security_warning_count || 0,
       fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+      integrity_trust_index: attempt.integrity_trust_index ?? 100,
+      disqualified: Boolean(attempt.disqualified),
       started_at: attempt.started_at,
       submitted_at: attempt.submitted_at,
       time_spent_seconds: attempt.time_spent_seconds || 0,
-      total_score: parseFloat(attempt.total_score || 0),
+      total_score: resultsReleased ? parseFloat(attempt.total_score || 0) : null,
       max_score: parseFloat(attempt.max_score || test.total_marks || 100),
-      percentage: parseFloat(attempt.percentage || 0),
-      passed: Boolean(attempt.passed),
+      percentage: resultsReleased ? parseFloat(attempt.percentage || 0) : null,
+      passed: resultsReleased ? Boolean(attempt.passed) : null,
       pass_percentage: parseFloat(test.pass_percentage || 40),
-      correct_count: attempt.correct_count || 0,
-      incorrect_count: attempt.incorrect_count || 0,
-      unanswered_count: attempt.unanswered_count || 0,
+      correct_count: resultsReleased ? (attempt.correct_count || 0) : null,
+      incorrect_count: resultsReleased ? (attempt.incorrect_count || 0) : null,
+      unanswered_count: resultsReleased ? (attempt.unanswered_count || 0) : null,
       warning_count: attempt.warning_count || 0,
       proctoring_summary: attempt.proctoring_summary || {},
       questions: questionReviews
@@ -858,6 +1031,16 @@ export const mockTestService = {
 
     if (teacher.role === 'TEACHER' && test.created_by && test.created_by !== teacher.id) {
       // Allow teacher if authorized
+    }
+
+    // Verify whether any question is still pending manual review (Requirement 25)
+    const responses = attempt.responses || [];
+    const hasPendingReview = responses.some(r => r.is_pending_review);
+    if (hasPendingReview) {
+      const err = new Error('Cannot release result: manual evaluation of all questions must be completed first.');
+      err.status = 400;
+      err.statusCode = 400;
+      throw err;
     }
 
     await mockTestRepository.releaseAttemptResult(attemptId, teacher.id);
@@ -948,29 +1131,26 @@ export const mockTestService = {
   async getMyResults(student) {
     const rawAttempts = await mockTestRepository.getAttemptsByStudent(student.id);
 
-    // Map attempts into consistent, safe scorecard cards
-    return rawAttempts.map(att => {
-      const isReleased = att.result_status === 'RELEASED' || att.results_published;
-      const statusLabel = att.result_status || (isReleased ? 'RELEASED' : 'PENDING_EVALUATION');
+    // Requirement 17: Student Dashboard: My Results: Display only released results
+    const releasedAttempts = rawAttempts.filter(att => att.result_status === 'RELEASED');
 
-      return {
-        id: att.id,
-        attempt_id: att.id,
-        test_id: att.test_id,
-        test_title: att.test_title || 'Mock Examination',
-        subject: att.subject || 'General',
-        total_score: parseFloat(att.total_score || 0),
-        max_score: parseFloat(att.max_score || 100),
-        percentage: parseFloat(att.percentage || 0),
-        passed: Boolean(att.passed),
-        status: att.status,
-        result_status: statusLabel,
-        is_released: Boolean(isReleased),
-        released_at: att.released_at,
-        submitted_at: att.submitted_at || att.created_at,
-        time_spent_seconds: att.time_spent_seconds || 0
-      };
-    });
+    return releasedAttempts.map(att => ({
+      id: att.id,
+      attempt_id: att.id,
+      test_id: att.test_id,
+      test_title: att.test_title || 'Mock Examination',
+      subject: att.subject || 'General',
+      total_score: parseFloat(att.total_score || 0),
+      max_score: parseFloat(att.max_score || 100),
+      percentage: parseFloat(att.percentage || 0),
+      passed: Boolean(att.passed),
+      status: att.status,
+      result_status: 'RELEASED',
+      is_released: true,
+      released_at: att.released_at,
+      submitted_at: att.submitted_at || att.created_at,
+      time_spent_seconds: att.time_spent_seconds || 0
+    }));
   },
 
   /**
@@ -984,11 +1164,15 @@ export const mockTestService = {
       throw err;
     }
 
-    const attempts = await mockTestRepository.getDetailedAttemptsForReport(testId, batchId);
+    const targetBatchId = batchId || test.batch_id || null;
+    const attempts = await mockTestRepository.getDetailedAttemptsForReport(testId, targetBatchId);
 
     let batch = null;
-    if (batchId) {
-      batch = { id: batchId, name: `Batch #${batchId}` };
+    if (targetBatchId) {
+      batch = await batchRepository.getBatchById(targetBatchId);
+      if (!batch) {
+        batch = { id: targetBatchId, name: `Batch #${targetBatchId}` };
+      }
     }
 
     return generateTestResultsPdf({
@@ -1062,7 +1246,11 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     try {
       if (status.is_cloud) {
         rawResponse = await aiService._chatWithCloud({
-          messages: [{ role: 'user', message: prompt }]
+          systemPrompt: 'You are LinkTest AI Examination Architect. Generate rigorous, valid academic assessment questions strictly in JSON format adhering to the schema requested. Return ONLY a valid JSON object with a "questions" array. No chat, no markdown fences.',
+          messages: [{ role: 'user', message: prompt }],
+          temperature: 0.3,
+          maxTokens: Math.min(8192, Math.max(1500, count * 600)),
+          responseFormat: { type: 'json_object' }
         });
       } else {
         const controller = new AbortController();
@@ -1100,89 +1288,11 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
         }
       }
 
-      // Resilient JSON cleanup: strip reasoning tags, code fences, and isolate outer brackets
-      let cleanJson = String(rawResponse || '')
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')
-        .replace(/```json/gi, '')
-        .replace(/```/gi, '')
-        .trim();
-
-      const firstBrace = cleanJson.indexOf('{');
-      const lastBrace = cleanJson.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleanJson = cleanJson.slice(firstBrace, lastBrace + 1);
-      }
-
-      const parsed = JSON.parse(cleanJson);
-      let rawQuestions = [];
-      if (Array.isArray(parsed.questions)) {
-        rawQuestions = parsed.questions;
-      } else if (Array.isArray(parsed)) {
-        rawQuestions = parsed;
-      } else if (typeof parsed === 'object' && parsed !== null) {
-        const values = Object.values(parsed);
-        if (values.length > 0 && typeof values[0] === 'object') {
-          rawQuestions = values;
-        }
-      }
-
-      if (rawQuestions.length === 0) {
-        throw new Error('AI returned an empty question list. Please try again with a more specific topic.');
-      }
-
-      // Robust server-side validation and normalization
-      const validated = rawQuestions.map((q, idx) => {
-        const qText = String(q.question_text || q.question || '').trim();
-        if (!qText) {
-          throw new Error(`Generated question #${idx + 1} is missing question text.`);
-        }
-
-        // Normalize options
-        let normalizedOptions = [];
-        if (Array.isArray(q.options)) {
-          normalizedOptions = q.options.map(opt =>
-            (typeof opt === 'object' && opt !== null ? (opt.text || opt.label || JSON.stringify(opt)) : String(opt)).trim()
-          );
-        } else if (q.options && typeof q.options === 'object') {
-          normalizedOptions = Object.values(q.options).map(o => String(o).trim());
-        }
-
-        // Normalize answer_key
-        let answerKey = typeof q.answer_key === 'object' && q.answer_key !== null ? { ...q.answer_key } : {};
-        if (answerKey.correct_index === undefined && q.correct_index !== undefined) {
-          answerKey.correct_index = parseInt(q.correct_index, 10);
-        }
-        if (answerKey.correct_index === undefined && (q.correct_answer !== undefined || answerKey.correct_answer !== undefined)) {
-          const ca = q.correct_answer !== undefined ? q.correct_answer : answerKey.correct_answer;
-          if (typeof ca === 'number') {
-            answerKey.correct_index = ca;
-          } else if (typeof ca === 'string') {
-            const letterMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
-            if (letterMap[ca.trim()] !== undefined) {
-              answerKey.correct_index = letterMap[ca.trim()];
-            } else {
-              const foundIdx = normalizedOptions.findIndex(o => o.toLowerCase() === ca.toLowerCase());
-              answerKey.correct_index = foundIdx >= 0 ? foundIdx : 0;
-            }
-          }
-        }
-        if ((q.question_type === 'mcq_single' || !q.question_type) && answerKey.correct_index === undefined && normalizedOptions.length > 0) {
-          answerKey.correct_index = 0;
-        }
-
-        return {
-          id: `ai-gen-${crypto.randomUUID().slice(0, 10)}`,
-          question_text: qText,
-          question_type: q.question_type || 'mcq_single',
-          options: normalizedOptions,
-          answer_key: answerKey,
-          marks: parseFloat(q.marks || 4.0),
-          negative_marks: parseFloat(q.negative_marks || 1.0),
-          explanation: String(q.explanation || 'Self-explanatory concept.').trim(),
-          topic: q.topic || topic,
-          difficulty: q.difficulty || difficulty,
-          order_index: idx + 1
-        };
+      // Robust parsing and normalization of generated questions
+      const validated = this.parseAndValidateGeneratedQuestions(rawResponse, {
+        topic,
+        difficulty,
+        count
       });
 
       return {
@@ -1195,9 +1305,216 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     } catch (err) {
       console.error('[MockTestService] AI Question Generation Error:', err.message);
       const customErr = new Error(`AI generation failed: ${err.message}. You can also create questions manually.`);
-      customErr.status = 500;
+      customErr.status = err.status || 502;
+      customErr.code = 'AI_SERVICE_ERROR';
+      customErr.isAiError = true;
       throw customErr;
     }
+  },
+
+  /**
+   * Resilient question parser supporting clean JSON, markdown-wrapped JSON,
+   * thinking tags, and schema normalization
+   */
+  parseAndValidateGeneratedQuestions(rawResponse, { topic = '', difficulty = 'medium', count = 5 } = {}) {
+    if (!rawResponse || typeof rawResponse !== 'string' || !rawResponse.trim()) {
+      throw new Error('AI provider returned an empty response.');
+    }
+
+    // 1. Resilient JSON cleanup: strip reasoning tags (even if unclosed), code fences, and isolate outer brackets
+    let cleanJson = String(rawResponse || '')
+      .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
+      .replace(/```json/gi, '')
+      .replace(/```/gi, '')
+      .trim();
+
+    const firstBrace = cleanJson.indexOf('{');
+    const lastBrace = cleanJson.lastIndexOf('}');
+    const firstBracket = cleanJson.indexOf('[');
+    const lastBracket = cleanJson.lastIndexOf(']');
+
+    if (firstBracket !== -1 && lastBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      cleanJson = cleanJson.slice(firstBracket, lastBracket + 1);
+    } else if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanJson = cleanJson.slice(firstBrace, lastBrace + 1);
+    }
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(cleanJson);
+    } catch (parseErr) {
+      // Attempt repair by removing trailing commas before closing braces/brackets
+      const repaired = cleanJson.replace(/,\s*([}\]])/g, '$1');
+      try {
+        parsed = JSON.parse(repaired);
+      } catch {
+        parsed = this._extractQuestionsRegexFallback(cleanJson);
+      }
+    }
+
+    if (!parsed) {
+      throw new Error('Could not parse valid JSON from AI response.');
+    }
+
+    let rawQuestions = [];
+    if (Array.isArray(parsed.questions)) {
+      rawQuestions = parsed.questions;
+    } else if (Array.isArray(parsed.data?.questions)) {
+      rawQuestions = parsed.data.questions;
+    } else if (Array.isArray(parsed.items)) {
+      rawQuestions = parsed.items;
+    } else if (Array.isArray(parsed.quiz)) {
+      rawQuestions = parsed.quiz;
+    } else if (Array.isArray(parsed)) {
+      rawQuestions = parsed;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      const values = Object.values(parsed);
+      if (values.length > 0 && typeof values[0] === 'object') {
+        rawQuestions = values.filter(v => typeof v === 'object' && v !== null);
+      }
+    }
+
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+      throw new Error('AI returned an empty question list. Please try again with a more specific topic.');
+    }
+
+    // 2. Normalize and validate each question
+    const validated = [];
+    for (let idx = 0; idx < rawQuestions.length; idx++) {
+      const q = rawQuestions[idx];
+      if (!q || typeof q !== 'object') continue;
+
+      const qText = String(q.question_text || q.question || q.prompt || q.text || q.title || '').trim();
+      if (!qText) continue;
+
+      // Normalize options
+      let normalizedOptions = [];
+      if (Array.isArray(q.options)) {
+        normalizedOptions = q.options.map(opt =>
+          (typeof opt === 'object' && opt !== null ? (opt.text || opt.label || opt.value || JSON.stringify(opt)) : String(opt)).trim()
+        ).filter(Boolean);
+      } else if (q.options && typeof q.options === 'object') {
+        normalizedOptions = Object.values(q.options).map(o => String(o).trim()).filter(Boolean);
+      }
+
+      const qType = q.question_type || q.type || 'mcq_single';
+
+      // For single-choice MCQs, ensure at least 2 options exist
+      if (qType === 'mcq_single' && normalizedOptions.length < 2) {
+        normalizedOptions = ['Option A', 'Option B', 'Option C', 'Option D'];
+      }
+
+      // Normalize answer_key
+      let correctIdx = 0;
+      if (q.answer_key?.correct_index !== undefined) {
+        correctIdx = parseInt(q.answer_key.correct_index, 10);
+      } else if (q.correct_index !== undefined) {
+        correctIdx = parseInt(q.correct_index, 10);
+      } else if (q.correct_option_index !== undefined) {
+        correctIdx = parseInt(q.correct_option_index, 10);
+      } else if (q.correct_answer !== undefined || q.answer !== undefined) {
+        const ca = q.correct_answer !== undefined ? q.correct_answer : q.answer;
+        if (typeof ca === 'number') {
+          correctIdx = ca;
+        } else if (typeof ca === 'string') {
+          const letterMap = { A: 0, B: 1, C: 2, D: 3, a: 0, b: 1, c: 2, d: 3 };
+          if (letterMap[ca.trim()] !== undefined) {
+            correctIdx = letterMap[ca.trim()];
+          } else {
+            const found = normalizedOptions.findIndex(o => o.toLowerCase() === ca.trim().toLowerCase());
+            correctIdx = found >= 0 ? found : 0;
+          }
+        }
+      }
+
+      // Bound check correct index
+      if (isNaN(correctIdx) || correctIdx < 0 || (normalizedOptions.length > 0 && correctIdx >= normalizedOptions.length)) {
+        correctIdx = 0;
+      }
+
+      validated.push({
+        id: `ai-gen-${crypto.randomUUID().slice(0, 10)}`,
+        question_text: qText,
+        question_type: qType,
+        options: normalizedOptions,
+        answer_key: { correct_index: correctIdx },
+        marks: parseFloat(q.marks || 4.0),
+        negative_marks: parseFloat(q.negative_marks || 1.0),
+        explanation: String(q.explanation || q.solution || 'Correct answer verified.').trim(),
+        topic: q.topic || topic,
+        difficulty: q.difficulty || difficulty,
+        order_index: validated.length + 1
+      });
+    }
+
+    if (validated.length === 0) {
+      throw new Error('AI question generation returned questions without valid text prompts. Please try again.');
+    }
+
+    return validated;
+  },
+
+  _extractQuestionsRegexFallback(text) {
+    const questions = [];
+    let startIndex = 0;
+    while ((startIndex = text.indexOf('{', startIndex)) !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let endIndex = -1;
+
+      for (let i = startIndex; i < text.length; i++) {
+        const char = text[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (char === '{') depth++;
+          else if (char === '}') {
+            depth--;
+            if (depth === 0) {
+              endIndex = i;
+              break;
+            }
+          }
+        }
+      }
+
+      if (endIndex !== -1) {
+        const chunk = text.slice(startIndex, endIndex + 1);
+        try {
+          const parsed = JSON.parse(chunk);
+          if (parsed && (parsed.question_text || parsed.question)) {
+            questions.push(parsed);
+          } else if (parsed && Array.isArray(parsed.questions)) {
+            questions.push(...parsed.questions);
+          }
+        } catch {
+          try {
+            const repaired = chunk.replace(/,\s*([}\]])/g, '$1');
+            const parsed = JSON.parse(repaired);
+            if (parsed && (parsed.question_text || parsed.question)) {
+              questions.push(parsed);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        startIndex = endIndex + 1;
+      } else {
+        break;
+      }
+    }
+    return questions.length > 0 ? { questions } : null;
   },
 
   /**
@@ -1241,7 +1558,66 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       else distribution[4].count++;
     });
 
-    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 5);
+    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 3);
+
+    const testBatch = test.batch_id ? await batchRepository.getBatchById(test.batch_id) : null;
+    const testBatchName = testBatch ? testBatch.name : 'All Batches';
+
+    const testQuestions = await mockTestRepository.getQuestionsByTestId(testId);
+    const objectiveTypes = ['mcq_single', 'mcq_multiple', 'true_false', 'fill_blank', 'numerical', 'matching'];
+    const manualTypes = ['long_answer', 'subjective', 'coding'];
+
+    const objectiveQIds = new Set(testQuestions.filter(q => objectiveTypes.includes(q.question_type)).map(q => q.id));
+    const manualQIds = new Set(testQuestions.filter(q => manualTypes.includes(q.question_type)).map(q => q.id));
+
+    const objMax = testQuestions.filter(q => objectiveQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
+    const manualMax = testQuestions.filter(q => manualQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
+
+    const candidates = await Promise.all(attempts.map(async a => {
+      const fullAttempt = await mockTestRepository.getAttemptById(a.id);
+      const responses = fullAttempt?.responses || [];
+
+      let objScore = 0;
+      let manScore = 0;
+      let pendingCount = 0;
+
+      responses.forEach(r => {
+        const score = parseFloat(r.score_awarded) || 0;
+        if (objectiveQIds.has(r.question_id)) {
+          objScore += score;
+        } else if (manualQIds.has(r.question_id)) {
+          manScore += score;
+          if (r.is_pending_review) pendingCount++;
+        }
+      });
+
+      let manualStatus = 'N/A';
+      if (manualQIds.size > 0) {
+        manualStatus = (pendingCount > 0 || a.result_status === 'PENDING_EVALUATION' || (a.status === 'submitted' && a.result_status !== 'EVALUATED' && a.result_status !== 'RELEASED')) ? 'Pending' : 'Evaluated';
+      }
+
+      return {
+        attempt_id: a.id,
+        student_id: a.student_id,
+        student_name: a.student_name,
+        student_email: a.student_email,
+        batch_name: testBatchName,
+        score: parseFloat(a.total_score || 0),
+        objective_score: objScore,
+        objective_max_score: objMax,
+        manual_score: manScore,
+        manual_max_score: manualMax,
+        manual_status: manualStatus,
+        percentage: parseFloat(a.percentage || 0),
+        passed: a.passed,
+        status: a.status,
+        result_status: a.result_status || (manualStatus === 'Pending' ? 'PENDING_EVALUATION' : 'EVALUATED'),
+        warning_count: a.warning_count,
+        flagged: Boolean(a.proctoring_summary?.flagged),
+        started_at: a.started_at,
+        submitted_at: a.submitted_at
+      };
+    }));
 
     return {
       test_id: test.id,
@@ -1258,20 +1634,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       pass_rate_percentage: passRate,
       flagged_proctoring_count: flaggedAttempts.length,
       score_distribution: distribution,
-      candidates: attempts.map(a => ({
-        attempt_id: a.id,
-        student_id: a.student_id,
-        student_name: a.student_name,
-        student_email: a.student_email,
-        score: a.total_score,
-        percentage: a.percentage,
-        passed: a.passed,
-        status: a.status,
-        warning_count: a.warning_count,
-        flagged: Boolean(a.proctoring_summary?.flagged),
-        started_at: a.started_at,
-        submitted_at: a.submitted_at
-      }))
+      candidates
     };
   }
 };

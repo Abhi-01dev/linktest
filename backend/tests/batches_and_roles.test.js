@@ -2,6 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
 import { initDb, query } from '../src/db/index.js';
+import { userRepository } from '../src/repositories/userRepository.js';
 
 let server;
 let baseUrl;
@@ -81,8 +82,8 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
     const body = await regRes.json();
     assert.strictEqual(body.success, true);
     // User record in database must be strictly STUDENT
-    const dbRes = await query('SELECT role FROM users WHERE email = $1', [randomEmail]);
-    assert.strictEqual(dbRes.rows[0].role, 'STUDENT');
+    const user = await userRepository.findByEmail(randomEmail);
+    assert.strictEqual(user.role, 'STUDENT');
   });
 
   test('2. Admin batch creation endpoint rejects unauthenticated or unauthorized users (401/403)', async () => {
@@ -264,6 +265,11 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
     const sList = (await student2Res.json()).data.students.filter((s) => s.id !== testStudentId);
 
     if (sList.length >= 2) {
+      const rosterBeforeRes = await fetch(`${baseUrl}/api/batches/${testBatchId}/students`, {
+        headers: { Authorization: `Bearer ${teacherToken}` }
+      });
+      const rosterBefore = (await rosterBeforeRes.json()).data.students.map(student => student.student_id).sort();
+
       // Try enrolling 2 more students (would make 3, exceeding capacity of 2)
       const overRes = await fetch(`${baseUrl}/api/batches/${testBatchId}/students`, {
         method: 'POST',
@@ -274,11 +280,14 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
         body: JSON.stringify({ student_ids: [sList[0].id, sList[1].id] })
       });
       const overBody = await overRes.json();
-      assert.ok(
-        overBody.data?.failed?.some(f => /capacity/i.test(f.reason)) ||
-        overRes.status === 400 ||
-        /capacity/i.test(overBody.message || overBody.error?.message)
-      );
+      assert.strictEqual(overRes.status, 400);
+      assert.match(overBody.error?.message || overBody.message || '', /capacity/i);
+
+      const rosterAfterRes = await fetch(`${baseUrl}/api/batches/${testBatchId}/students`, {
+        headers: { Authorization: `Bearer ${teacherToken}` }
+      });
+      const rosterAfter = (await rosterAfterRes.json()).data.students.map(student => student.student_id).sort();
+      assert.deepStrictEqual(rosterAfter, rosterBefore);
     }
   });
 

@@ -237,6 +237,9 @@ export function AdminAuditLogsPage() {
                 style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #E2E8F0', fontSize: '0.85rem', color: '#334155', background: '#FFFFFF', outline: 'none' }}
               >
                 <option value="ALL">All Actions</option>
+                <option value="AUTH_GOOGLE_LOGIN">AUTH_GOOGLE_LOGIN</option>
+                <option value="AUTH_GOOGLE_REGISTER">AUTH_GOOGLE_REGISTER</option>
+                <option value="AUTH_GOOGLE_LINKED">AUTH_GOOGLE_LINKED</option>
                 <option value="USER_ROLE_OR_STATUS_UPDATED">USER_ROLE_OR_STATUS_UPDATED</option>
                 <option value="USER_STATUS_CHANGED">USER_STATUS_CHANGED</option>
                 <option value="STUDENT_ENROLLED">STUDENT_ENROLLED</option>
@@ -384,10 +387,12 @@ export function AdminAuditLogsPage() {
                 <option value="ALL">All Event Types</option>
                 <option value="LOGIN_SUCCESS">LOGIN_SUCCESS</option>
                 <option value="LOGIN_FAILED">LOGIN_FAILED</option>
-                <option value="UNAUTHORIZED_ACCESS_ATTEMPT">UNAUTHORIZED_ACCESS_ATTEMPT</option>
-                <option value="RATE_LIMIT_EXCEEDED">RATE_LIMIT_EXCEEDED</option>
                 <option value="OAUTH_LOGIN_SUCCESS">OAUTH_LOGIN_SUCCESS</option>
                 <option value="OAUTH_LOGIN_FAILED">OAUTH_LOGIN_FAILED</option>
+                <option value="OAUTH_REGISTER_SUCCESS">OAUTH_REGISTER_SUCCESS</option>
+                <option value="OAUTH_LINK_SUCCESS">OAUTH_LINK_SUCCESS</option>
+                <option value="UNAUTHORIZED_ACCESS_ATTEMPT">UNAUTHORIZED_ACCESS_ATTEMPT</option>
+                <option value="RATE_LIMIT_EXCEEDED">RATE_LIMIT_EXCEEDED</option>
                 <option value="REGISTER_SUCCESS">REGISTER_SUCCESS</option>
                 <option value="PASSWORD_RESET_SUCCESS">PASSWORD_RESET_SUCCESS</option>
                 <option value="PASSWORD_CHANGED">PASSWORD_CHANGED</option>

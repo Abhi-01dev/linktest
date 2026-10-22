@@ -861,6 +861,34 @@ export function TeacherProctoringReviewPage() {
             <strong>Evaluation Policy:</strong> Webcam and focus events are technical indicators intended to assist faculty review. Dismiss technical false positives and record review notes.
           </div>
 
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap',
+            background: attempt.disqualified ? '#FEF2F2' : '#F8FAFC',
+            border: `1px solid ${attempt.disqualified ? '#FECACA' : '#E2E8F0'}`,
+            borderRadius: '8px',
+            padding: '1rem 1.25rem',
+            marginBottom: '1.5rem'
+          }}>
+            <div>
+              <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
+                Integrity Trust Index
+              </div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: attempt.disqualified ? '#B91C1C' : 'var(--color-navy)' }}>
+                {attempt.integrity_trust_index ?? 100}<span style={{ fontSize: '0.9rem', color: '#64748B' }}> / 100</span>
+              </div>
+            </div>
+            {attempt.disqualified && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#B91C1C', fontWeight: 800 }}>
+                <ShieldAlert size={18} />
+                Disqualified after repeated tab switches
+              </div>
+            )}
+          </div>
+
           {/* Events Log List */}
           <div style={{
             background: '#FFFFFF',

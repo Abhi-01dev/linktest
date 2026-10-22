@@ -741,6 +741,8 @@ CREATE TABLE mock_test_attempts (
     result_status VARCHAR(50) DEFAULT 'PENDING_EVALUATION',
     released_at TIMESTAMP WITH TIME ZONE NULL,
     released_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    integrity_trust_index INTEGER NOT NULL DEFAULT 100 CHECK (integrity_trust_index BETWEEN 0 AND 100),
+    disqualified BOOLEAN NOT NULL DEFAULT false,
     test_snapshot JSONB NOT NULL,
     proctoring_summary JSONB DEFAULT '{
         "face_absence_events": 0,
@@ -749,6 +751,7 @@ CREATE TABLE mock_test_attempts (
         "fullscreen_exit_events": 0,
         "camera_disconnect_events": 0,
         "total_events": 0,
+        "integrity_trust_index": 100,
         "flagged": false
     }'::jsonb,
     evaluator_remarks TEXT NULL,
@@ -836,4 +839,3 @@ CREATE TABLE mock_test_audit_logs (
 
 CREATE INDEX idx_mock_audit_test ON mock_test_audit_logs(test_id);
 CREATE INDEX idx_mock_audit_attempt ON mock_test_audit_logs(attempt_id);
-

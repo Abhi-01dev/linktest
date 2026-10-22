@@ -51,7 +51,12 @@ export function AuthProvider({ children }) {
   const loginWithGoogle = async (credential) => {
     const data = await api.loginWithGoogle(credential);
     setUser(data.user);
-    return data;
+    return {
+      ...data.user,
+      token: data.token,
+      is_new_user: data.is_new_user,
+      account_linked: data.account_linked
+    };
   };
 
   const unlinkGoogle = async (password = '') => {

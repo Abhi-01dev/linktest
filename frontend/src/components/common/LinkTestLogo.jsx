@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 
-export function LinkTestLogo({ size = 'md', link = true, light = false }) {
+export function LinkTestLogo({ size = 'md', link = true, to = '/', light = false }) {
   const iconSizes = {
     sm: 24,
     md: 32,
@@ -78,7 +78,7 @@ export function LinkTestLogo({ size = 'md', link = true, light = false }) {
 
   if (link) {
     return (
-      <Link to="/" style={{ display: 'inline-flex' }}>
+      <Link to={to} style={{ display: 'inline-flex' }}>
         {content}
       </Link>
     );

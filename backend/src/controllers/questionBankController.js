@@ -256,17 +256,7 @@ export const questionBankController = {
         });
       }
 
-      // Check teacher permission if applicable
-      if (req.user.role === 'TEACHER') {
-        const authorized = await questionBankRepository.getTeacherAuthorizedSubjects(req.user.id, req.user.role);
-        const subNorm = subject.toLowerCase().trim();
-        if (authorized && !authorized.some(a => a === subNorm || subNorm.includes(a) || a.includes(subNorm))) {
-          return res.status(403).json({
-            success: false,
-            error: { code: 'FORBIDDEN', message: `You are not authorized for subject "${subject}".` }
-          });
-        }
-      }
+      // Note: In accordance with Mock Exam System requirements, teachers are authorized to create questions for any subject.
 
       const created = await questionBankRepository.createQuestion({
         question_text,

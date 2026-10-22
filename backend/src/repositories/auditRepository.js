@@ -11,8 +11,14 @@ export async function logAudit(firstArg, ...rest) {
     actorEmail = firstArg.email;
     [action, resourceType, resourceId, summary, ipAddress] = rest;
   } else if (firstArg && typeof firstArg === 'object') {
-    // Called as ({ actorId, actorEmail, action, resourceType, resourceId, summary, ipAddress })
-    ({ actorId, actorEmail, action, resourceType, resourceId, summary, ipAddress } = firstArg);
+    // Called as object with potential camelCase or snake_case aliases
+    actorId = firstArg.actorId || firstArg.actor_id || firstArg.userId || firstArg.user_id || (firstArg.user && firstArg.user.id);
+    actorEmail = firstArg.actorEmail || firstArg.actor_email || firstArg.userEmail || firstArg.user_email || (firstArg.user && firstArg.user.email);
+    action = firstArg.action;
+    resourceType = firstArg.resourceType || firstArg.resource_type;
+    resourceId = firstArg.resourceId || firstArg.resource_id;
+    summary = firstArg.summary || (typeof firstArg.details === 'string' ? firstArg.details : (firstArg.details ? JSON.stringify(firstArg.details) : ''));
+    ipAddress = firstArg.ipAddress || firstArg.ip_address || firstArg.ip;
   }
 
   const id = crypto.randomUUID();

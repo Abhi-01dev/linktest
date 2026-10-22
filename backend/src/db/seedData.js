@@ -141,11 +141,11 @@ export const SEED_ACADEMIC_SESSIONS = [
 ];
 
 export const SEED_SUBJECTS = [
-  { id: 'sub-cs101', name: 'Computer Science Fundamentals', code: 'CS101', description: 'Basics of computing, algorithms and data structures', created_at: new Date().toISOString() },
-  { id: 'sub-ai201', name: 'Artificial Intelligence & ML', code: 'AI201', description: 'Machine learning, neural networks, and AI applications', created_at: new Date().toISOString() },
-  { id: 'sub-wd101', name: 'Web Development', code: 'WD101', description: 'Full-stack web development with React and Node.js', created_at: new Date().toISOString() },
-  { id: 'sub-ds101', name: 'Data Structures & Algorithms', code: 'DS101', description: 'Advanced data structures and algorithmic problem solving', created_at: new Date().toISOString() },
-  { id: 'sub-db101', name: 'Database Systems', code: 'DB101', description: 'SQL, NoSQL, and database design principles', created_at: new Date().toISOString() }
+  { id: 'sub-cs101', name: 'Computer Science Fundamentals', code: 'CS101', description: 'Basics of computing, algorithms and data structures', department: 'Computer Science', status: 'active', created_at: new Date().toISOString() },
+  { id: 'sub-ai201', name: 'Artificial Intelligence & ML', code: 'AI201', description: 'Machine learning, neural networks, and AI applications', department: 'AI & Data Science', status: 'active', created_at: new Date().toISOString() },
+  { id: 'sub-wd101', name: 'Web Development', code: 'WD101', description: 'Full-stack web development with React and Node.js', department: 'Computer Science', status: 'active', created_at: new Date().toISOString() },
+  { id: 'sub-ds101', name: 'Data Structures & Algorithms', code: 'DS101', description: 'Advanced data structures and algorithmic problem solving', department: 'Computer Science', status: 'active', created_at: new Date().toISOString() },
+  { id: 'sub-db101', name: 'Database Systems', code: 'DB101', description: 'SQL, NoSQL, and database design principles', department: 'Computer Science', status: 'active', created_at: new Date().toISOString() }
 ];
 
 export const SEED_CLASSES = [
