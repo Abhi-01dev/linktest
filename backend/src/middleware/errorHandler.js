@@ -43,8 +43,11 @@ export function errorHandler(err, req, res, next) {
   const statusCode = err.statusCode || err.status || 500;
   const errorCode = err.code || (statusCode >= 500 ? 'INTERNAL_SERVER_ERROR' : 'BAD_REQUEST');
 
-  // In production, mask internal server error details to prevent leaking system topology
-  const message = (config.nodeEnv === 'production' && statusCode >= 500)
+  // Operational errors (like AI service failures) provide safe, actionable error messages without leaking secrets
+  const isOperationalError = Boolean(err.isAiError || err.code === 'AI_SERVICE_ERROR' || err.isOperational);
+
+  // In production, mask unhandled internal crashes, but allow sanitized operational error messages
+  const message = (config.nodeEnv === 'production' && statusCode >= 500 && !isOperationalError)
     ? 'An internal server error occurred. Please try again later.'
     : (err.message || 'An unexpected error occurred.');
 

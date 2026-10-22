@@ -18,6 +18,7 @@ import {
   X,
   UserCheck
 } from 'lucide-react';
+import { GoogleIcon } from '../../components/auth/GoogleSignInButton';
 
 export function AdminUsersPage() {
   const { showToast } = useToast();
@@ -37,11 +38,20 @@ export function AdminUsersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [modalError, setModalError] = useState('');
 
-  const loadUsers = async () => {
+  const loadUsers = async (overrides = {}) => {
     try {
       setLoading(true);
-      const list = await api.getAdminUsers();
-      setUsers(Array.isArray(list) ? list : []);
+      const activeSearch = overrides.search !== undefined ? overrides.search : search;
+      const activeRole = overrides.roleFilter !== undefined ? overrides.roleFilter : roleFilter;
+      const activeStatus = overrides.statusFilter !== undefined ? overrides.statusFilter : statusFilter;
+
+      const list = await api.getAdminUsers({
+        search: activeSearch.trim() || undefined,
+        role: activeRole !== 'ALL' ? activeRole : undefined,
+        status: activeStatus !== 'ALL' ? activeStatus : undefined,
+        limit: 500
+      });
+      setUsers(Array.isArray(list) ? list : (list?.users || []));
     } catch (err) {
       showToast(err.message || 'Failed to load user roster', 'error');
     } finally {
@@ -51,7 +61,15 @@ export function AdminUsersPage() {
 
   useEffect(() => {
     loadUsers();
-  }, []);
+  }, [roleFilter, statusFilter]);
+
+  // Debounce search input to query server and update user list
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      loadUsers({ search });
+    }, 250);
+    return () => clearTimeout(handler);
+  }, [search]);
 
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
@@ -60,7 +78,8 @@ export function AdminUsersPage() {
         !q ||
         u.full_name?.toLowerCase().includes(q) ||
         u.email?.toLowerCase().includes(q) ||
-        u.id?.toLowerCase().includes(q);
+        u.id?.toLowerCase().includes(q) ||
+        (u.auth_provider || '').toLowerCase().includes(q);
 
       const matchRole = roleFilter === 'ALL' || u.role?.toUpperCase() === roleFilter.toUpperCase();
       const matchStatus = statusFilter === 'ALL' || (u.status || 'active').toLowerCase() === statusFilter.toLowerCase();
@@ -244,6 +263,7 @@ export function AdminUsersPage() {
                 <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontWeight: 600 }}>
                   <th style={{ padding: '0.9rem 1.25rem' }}>User Details</th>
                   <th style={{ padding: '0.9rem 1.25rem' }}>Role Authorization</th>
+                  <th style={{ padding: '0.9rem 1.25rem' }}>Auth Method</th>
                   <th style={{ padding: '0.9rem 1.25rem' }}>Account Status</th>
                   <th style={{ padding: '0.9rem 1.25rem' }}>Course Enrollments</th>
                   <th style={{ padding: '0.9rem 1.25rem' }}>Quiz Attempts</th>
@@ -310,6 +330,63 @@ export function AdminUsersPage() {
                         >
                           {u.role}
                         </span>
+                      </td>
+
+                      <td style={{ padding: '0.9rem 1.25rem' }}>
+                        {u.auth_provider === 'google' || (u.google_id && u.auth_provider !== 'google_linked') ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '999px',
+                              background: '#EFF6FF',
+                              color: '#1D4ED8',
+                              border: '1px solid #BFDBFE'
+                            }}
+                            title={`Google OAuth (ID: ${u.google_id || 'Active'})`}
+                          >
+                            <GoogleIcon size={12} /> Google
+                          </span>
+                        ) : u.auth_provider === 'google_linked' ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '999px',
+                              background: '#F0FDF4',
+                              color: '#15803D',
+                              border: '1px solid #BBF7D0'
+                            }}
+                            title="Local Password Account linked with Google"
+                          >
+                            <GoogleIcon size={12} /> Google Linked
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              fontSize: '0.74rem',
+                              fontWeight: 600,
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '999px',
+                              background: '#F8FAFC',
+                              color: '#64748B',
+                              border: '1px solid #E2E8F0'
+                            }}
+                          >
+                            <Mail size={12} /> Password
+                          </span>
+                        )}
                       </td>
 
                       <td style={{ padding: '0.9rem 1.25rem' }}>

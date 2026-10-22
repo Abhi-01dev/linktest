@@ -10,11 +10,21 @@ async function startServer() {
   // Initialize Database connection (PostgreSQL with fallback)
   await initDb();
 
+
   const server = app.listen(config.port, '0.0.0.0', () => {
     console.log(`[LinkTest Server] Ready and listening on port ${config.port} (0.0.0.0)`);
     console.log(`[LinkTest Server] Health Check: http://localhost:${config.port}/api/health`);
     console.log(`[LinkTest Server] AI Status:    http://localhost:${config.port}/api/ai/status`);
     console.log(`[LinkTest Server] Environment:  ${config.nodeEnv}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[LinkTest Server] Fatal: Port ${config.port} is already in use by another process.`);
+    } else {
+      console.error('[LinkTest Server] Fatal server error:', err.message);
+    }
+    process.exit(1);
   });
 
   const shutdown = async (signal) => {

@@ -172,11 +172,66 @@ To connect a local or cloud PostgreSQL instance (such as Neon):
    ```
 4. LinkTest will detect the active model automatically on `http://localhost:11434`.
 
-### D. Cloud AI Tutor (Groq / OpenAI Fallback)
-For cloud deployments where local Ollama is unavailable:
-1. In `backend/.env`, add:
+### D. Cloud AI Deployment (Groq / OpenAI / Gemini / OpenRouter)
+In production deployments (such as Render, Railway, AWS, DigitalOcean, or Fly.io), running local Ollama on the server requires expensive dedicated GPUs or high RAM. Instead, LinkTest has a built-in Cloud AI provider layer that connects to any OpenAI-compatible API.
+
+All 3 AI features in LinkTest automatically use the Cloud AI provider when configured:
+1. **AI Study Tutor (`/ai-tutor`)** — Student interactive tutoring with conversation history.
+2. **AI Quiz Generation (`/api/ai/generate-quiz`)** — Generates instant multiple choice quizzes on any topic.
+3. **Teacher AI Mock Test Generator (`/mock-tests/builder`)** — Generates exam questions from syllabus topics.
+
+#### 1. Recommended: Groq (Free & Blazing Fast)
+1. Sign up at [https://console.groq.com](https://console.groq.com) and generate a free API key.
+2. Add these environment variables in your deployed backend (e.g. Render/Railway Environment Settings):
    ```env
    CLOUD_AI_PROVIDER=groq
-   CLOUD_AI_API_KEY=gsk_your_groq_api_key
+   CLOUD_AI_API_KEY=gsk_your_groq_api_key_here
+   CLOUD_AI_BASE_URL=https://api.groq.com/openai/v1
    CLOUD_AI_MODEL=llama-3.1-8b-instant
    ```
+   *(Alternative fast model: `llama-3.3-70b-versatile`)*
+
+#### 2. Alternative: OpenAI
+```env
+CLOUD_AI_PROVIDER=openai
+CLOUD_AI_API_KEY=sk-proj-your_openai_api_key_here
+CLOUD_AI_BASE_URL=https://api.openai.com/v1
+CLOUD_AI_MODEL=gpt-4o-mini
+```
+
+#### 3. Alternative: Google Gemini (OpenAI Compatibility Mode)
+```env
+CLOUD_AI_PROVIDER=gemini
+CLOUD_AI_API_KEY=AIzaSy_your_gemini_api_key_here
+CLOUD_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+CLOUD_AI_MODEL=gemini-1.5-flash
+```
+
+#### 4. Alternative: Remote Self-Hosted Ollama
+If you host Ollama on an external GPU VPS or cloud VM:
+```env
+OLLAMA_BASE_URL=https://your-remote-ollama-host:11434
+OLLAMA_MODEL=qwen2.5:0.5b
+```
+
+#### 5. Verifying Deployment
+Once deployed, check your AI status endpoint:
+```bash
+curl https://your-backend-domain.com/api/ai/status
+```
+It should return:
+```json
+{
+  "success": true,
+  "data": {
+    "available": true,
+    "provider": "groq",
+    "model": "qwen/qwen3.8-27b",
+    "is_cloud": true,
+    "status_message": "Cloud AI provider (groq) is configured with model qwen/qwen3.8-27b."
+  }
+}
+```
+In the LinkTest web UI:
+- Navigate to `/ai-tutor`: the top-right badge will show **Cloud AI (groq) Active**.
+- Navigate to the Teacher Test Builder (`/mock-tests/builder`): the AI Question Generator banner will show **Cloud AI Active**.

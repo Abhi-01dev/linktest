@@ -101,10 +101,10 @@ async function runSeed() {
     console.log(`[Seed] Inserting subjects...`);
     for (const sub of SEED_SUBJECTS) {
       await client.query(
-        `INSERT INTO subjects (id, name, code, description, created_at)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO subjects (id, name, code, description, department, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, code = EXCLUDED.code`,
-        [sub.id, sub.name, sub.code, sub.description, sub.created_at]
+        [sub.id, sub.name, sub.code, sub.description, sub.department, sub.status, sub.created_at]
       );
     }
 

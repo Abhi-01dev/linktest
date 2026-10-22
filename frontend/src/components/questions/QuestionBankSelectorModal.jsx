@@ -42,12 +42,22 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
   };
 
   const loadFilters = async () => {
-    try {
-      const filters = await api.getQuestionBankFilters();
-      if (filters?.subjects) {
-        setAvailableSubjects(filters.subjects);
-      }
-    } catch (err) {}
+    const [filtersResult, catalogResult] = await Promise.allSettled([
+      api.getQuestionBankFilters(),
+      api.getAdminSubjects()
+    ]);
+    const subjectNames = new Set();
+    if (filtersResult.status === 'fulfilled' && Array.isArray(filtersResult.value?.subjects)) {
+      filtersResult.value.subjects.forEach(subject => subjectNames.add(subject));
+    } else if (filtersResult.status === 'rejected') {
+      console.error('Failed to load existing question bank subjects', filtersResult.reason);
+    }
+    if (catalogResult.status === 'fulfilled') {
+      catalogResult.value.forEach(subject => subjectNames.add(subject.name));
+    } else {
+      console.error('Failed to load the curriculum subject catalog', catalogResult.reason);
+    }
+    setAvailableSubjects([...subjectNames].filter(Boolean).sort((left, right) => left.localeCompare(right)));
   };
 
   useEffect(() => {
