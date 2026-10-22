@@ -93,7 +93,7 @@ test('admin scheduling APIs normalize optional foreign keys', async () => {
       subject_id: 'sub-ds101',
       teacher_id: 'user-teacher-001',
       academic_session_id: '',
-      day_of_week: 1,
+      day_of_week: 4,
       start_time: '09:00',
       end_time: '10:00'
     })

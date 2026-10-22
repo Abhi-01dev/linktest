@@ -66,6 +66,28 @@ const createClassSchema = z.object({
   )
 });
 
+const timetableQuerySchema = z.object({
+  class_id: z.string().optional(),
+  batch_id: z.string().optional(),
+  teacher_id: z.string().optional(),
+  day_of_week: z.coerce.number().int().min(1).max(7).optional()
+});
+
+const createTimetableEntrySchema = z.object({
+  class_id: z.string().trim().min(1),
+  batch_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  subject_id: z.string().trim().min(1),
+  teacher_id: z.string().trim().min(1),
+  day_of_week: z.coerce.number().int().min(1).max(7),
+  start_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'start_time must use HH:MM 24-hour format'),
+  end_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'end_time must use HH:MM 24-hour format'),
+  room: z.string().trim().max(50).nullable().optional(),
+  academic_session_id: z.string().optional().nullable().transform(sanitizeOptionalString)
+}).refine(entry => entry.start_time < entry.end_time, {
+  message: 'end_time must be later than start_time',
+  path: ['end_time']
+});
+
 export const adminController = {
   // ── Dashboard ──────────────────────────────────────────────
   async getDashboardStats(req, res, next) {
@@ -829,24 +851,16 @@ export const adminController = {
   // ── Timetable ──────────────────────────────────────────────
   async getTimetable(req, res, next) {
     try {
-      const { class_id, batch_id, teacher_id, day_of_week } = req.query;
-      const entries = await lmsRepository.getTimetable({ classId: class_id, batchId: batch_id, teacherId: teacher_id, dayOfWeek: day_of_week !== undefined ? parseInt(day_of_week) : undefined });
+      const { class_id: classId, batch_id: batchId, teacher_id: teacherId, day_of_week: dayOfWeek } = timetableQuerySchema.parse(req.query);
+      const entries = await lmsRepository.getTimetable({ classId, batchId, teacherId, dayOfWeek });
       return res.status(200).json({ success: true, data: { entries }, message: 'Timetable retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createTimetableEntry(req, res, next) {
     try {
-      const class_id = sanitizeOptionalString(req.body.class_id);
-      const batch_id = sanitizeOptionalString(req.body.batch_id);
-      const subject_id = sanitizeOptionalString(req.body.subject_id);
-      const teacher_id = sanitizeOptionalString(req.body.teacher_id);
-      const { day_of_week, start_time, end_time, room } = req.body;
-      const academic_session_id = sanitizeOptionalString(req.body.academic_session_id);
-      if (!class_id || !subject_id || !teacher_id || day_of_week === undefined || !start_time || !end_time) {
-        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'class_id, subject_id, teacher_id, day_of_week, start_time, end_time are required.' } });
-      }
-      const entry = await lmsRepository.createTimetableEntry({ classId: class_id, batchId: batch_id, subjectId: subject_id, teacherId: teacher_id, dayOfWeek: parseInt(day_of_week), startTime: start_time, endTime: end_time, room, academicSessionId: academic_session_id });
+      const { class_id: classId, batch_id: batchId, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room, academic_session_id: academicSessionId } = createTimetableEntrySchema.parse(req.body);
+      const entry = await lmsRepository.createTimetableEntry({ classId, batchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room, academicSessionId });
       return res.status(201).json({ success: true, data: { entry }, message: 'Timetable entry created.' });
     } catch (err) { next(err); }
   },

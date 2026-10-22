@@ -2,6 +2,34 @@ import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import crypto from 'crypto';
 import { sanitizeOptionalString } from '../utils/sanitize.js';
 
+function timetableConflictsWith(existingEntry, requestedEntry) {
+  const conflictTypes = [];
+  if (existingEntry.teacher_id === requestedEntry.teacherId) conflictTypes.push('teacher');
+  if (requestedEntry.room && existingEntry.room &&
+      existingEntry.room.trim().toLowerCase() === requestedEntry.room.trim().toLowerCase()) {
+    conflictTypes.push('room');
+  }
+  return conflictTypes.length > 0 ? {
+    entry_id: existingEntry.id,
+    teacher_id: existingEntry.teacher_id,
+    room: existingEntry.room,
+    day_of_week: existingEntry.day_of_week,
+    start_time: existingEntry.start_time,
+    end_time: existingEntry.end_time,
+    conflict_types: conflictTypes
+  } : null;
+}
+
+function createTimetableCollisionError(conflicts) {
+  const conflictTypes = [...new Set(conflicts.flatMap(conflict => conflict.conflict_types))];
+  const resources = conflictTypes.map(type => type === 'teacher' ? 'teacher' : 'room').join(' and ');
+  const error = new Error(`The requested timetable period conflicts with an existing ${resources} booking.`);
+  error.statusCode = 409;
+  error.code = 'TIMETABLE_COLLISION';
+  error.details = { conflicts };
+  return error;
+}
+
 export const lmsRepository = {
   // ============================================================
   // CLASSES
@@ -606,13 +634,51 @@ export const lmsRepository = {
     const normalizedBatchId = sanitizeOptionalString(batchId);
     const normalizedAcademicSessionId = sanitizeOptionalString(academicSessionId);
     if (isPostgresConnected && pool) {
-      const res = await pool.query(
-        `INSERT INTO timetable_entries (id, class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-        [id, classId, normalizedBatchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room || null, normalizedAcademicSessionId, created_at]
-      );
-      return res.rows[0];
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('LOCK TABLE timetable_entries IN SHARE ROW EXCLUSIVE MODE');
+        const collisionRes = await client.query(
+          `SELECT id, teacher_id, room, day_of_week, start_time, end_time
+           FROM timetable_entries
+           WHERE day_of_week = $1
+             AND start_time < $2
+             AND end_time > $3
+             AND (
+               teacher_id = $4
+               OR ($5::text IS NOT NULL AND room IS NOT NULL AND lower(btrim(room)) = lower(btrim($5)))
+             )`,
+          [dayOfWeek, endTime, startTime, teacherId, room || null]
+        );
+        const conflicts = collisionRes.rows
+          .map(entry => timetableConflictsWith(entry, { teacherId, room }))
+          .filter(Boolean);
+        if (conflicts.length > 0) throw createTimetableCollisionError(conflicts);
+
+        const res = await client.query(
+          `INSERT INTO timetable_entries (id, class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+          [id, classId, normalizedBatchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room || null, normalizedAcademicSessionId, created_at]
+        );
+        await client.query('COMMIT');
+        return res.rows[0];
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     }
+    const conflicts = memoryStore.timetable_entries
+      .filter(entry =>
+        entry.day_of_week === dayOfWeek &&
+        entry.start_time < endTime &&
+        entry.end_time > startTime
+      )
+      .map(entry => timetableConflictsWith(entry, { teacherId, room }))
+      .filter(Boolean);
+    if (conflicts.length > 0) throw createTimetableCollisionError(conflicts);
+
     const entry = { id, class_id: classId, batch_id: normalizedBatchId, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room: room || null, academic_session_id: normalizedAcademicSessionId, created_at };
     memoryStore.timetable_entries.push(entry);
     return entry;
