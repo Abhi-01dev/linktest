@@ -1438,7 +1438,22 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
         submitted_at: ma.submitted_at || ma.created_at || new Date().toISOString()
       };
     })
-  ].sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+  ].filter(attempt => {
+    if (course_id && course_id !== 'ALL' && attempt.course_id !== course_id) return false;
+
+    if (batch_id && batch_id !== 'ALL') {
+      const isEnrolled = [
+        ...(memoryStore.batch_enrollments || []),
+        ...(memoryStore.student_class_enrollments || [])
+      ].some(enrollment => enrollment.batch_id === batch_id && enrollment.student_id === attempt.student_id);
+      if (!isEnrolled) return false;
+    }
+
+    const submittedAt = new Date(attempt.submitted_at).getTime();
+    if (start_date && submittedAt < new Date(start_date).getTime()) return false;
+    if (end_date && submittedAt > new Date(end_date).getTime()) return false;
+    return true;
+  }).sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
 
   if (start_date) {
     const startObj = new Date(start_date);

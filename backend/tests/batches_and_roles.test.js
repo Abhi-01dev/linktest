@@ -1,8 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/app.js';
-import { initDb, query } from '../src/db/index.js';
-import { userRepository } from '../src/repositories/userRepository.js';
+import { initDb, isPostgresConnected, memoryStore, pool, query } from '../src/db/index.js';
 
 let server;
 let baseUrl;
@@ -50,7 +49,7 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const aBody = await adminRes.json();
     adminToken = aBody.data.token;
@@ -82,8 +81,10 @@ describe('LinkTest Batches, Teacher Allocation, Roles & Enrollment Suite', () =>
     const body = await regRes.json();
     assert.strictEqual(body.success, true);
     // User record in database must be strictly STUDENT
-    const user = await userRepository.findByEmail(randomEmail);
-    assert.strictEqual(user.role, 'STUDENT');
+    const role = isPostgresConnected && pool
+      ? (await query('SELECT role FROM users WHERE email = $1', [randomEmail])).rows[0]?.role
+      : memoryStore.users.find((user) => user.email === randomEmail)?.role;
+    assert.strictEqual(role, 'STUDENT');
   });
 
   test('2. Admin batch creation endpoint rejects unauthenticated or unauthorized users (401/403)', async () => {

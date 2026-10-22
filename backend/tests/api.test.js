@@ -619,7 +619,7 @@ describe('LinkTest API End-to-End Suite', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: process.env.ADMIN_EMAIL || 'admin@linktest.io',
-        password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!'
+        password: process.env.ADMIN_PASSWORD || 'Admin123!'
       })
     });
 
