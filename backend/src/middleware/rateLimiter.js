@@ -7,6 +7,7 @@ export const authLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === 'test' || process.env.MOCK_EMAIL === 'true',
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   handler: (req, res) => {
     const ip = req.ip || req.headers['x-forwarded-for'];
     securityLogRepository.logEvent({
@@ -33,6 +34,7 @@ export const aiLimiter = rateLimit({
   max: 30, // limit each IP to 30 requests per minute
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   handler: (req, res) => {
     const ip = req.ip || req.headers['x-forwarded-for'];
     securityLogRepository.logEvent({

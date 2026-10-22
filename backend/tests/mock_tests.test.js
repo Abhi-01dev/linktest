@@ -1,7 +1,11 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import app from '../src/app.js';
 import { initDb } from '../src/db/index.js';
+import { config } from '../src/config/env.js';
+import { userRepository } from '../src/repositories/userRepository.js';
+import { securityLogRepository } from '../src/repositories/securityLogRepository.js';
 
 let server;
 let baseUrl;
@@ -46,7 +50,7 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const aBody = await adminRes.json();
     adminToken = aBody.data.token;
@@ -265,8 +269,51 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     assert.ok(Array.isArray(questions) && questions.length === 5);
     for (const q of questions) {
       assert.strictEqual(q.correct_answer, undefined, `Question ${q.id} must NOT have correct_answer`);
+      assert.strictEqual(q.answer_key, undefined, `Question ${q.id} must NOT have answer_key`);
+      assert.strictEqual(q.correct_option_index, undefined, `Question ${q.id} must NOT have correct_option_index`);
       assert.strictEqual(q.explanation, undefined, `Question ${q.id} must NOT have explanation`);
     }
+  });
+
+  test('5a. Mock test details expose answer keys only to the creator and administrators', async () => {
+    const studentRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(studentRes.status, 200);
+    const studentQuestions = (await studentRes.json()).data.test.questions;
+    assert.ok(studentQuestions.every(q => q.answer_key === undefined && q.explanation === undefined));
+
+    const creatorRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(creatorRes.status, 200);
+    assert.ok((await creatorRes.json()).data.test.questions.every(q => q.answer_key !== undefined));
+
+    const adminRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
+    assert.ok((await adminRes.json()).data.test.questions.every(q => q.answer_key !== undefined));
+
+    const otherTeacher = await userRepository.create({
+      fullName: 'Unassigned Mock Test Teacher',
+      email: `mock.other.teacher.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      role: 'TEACHER',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherTeacherToken = jwt.sign(
+      { id: otherTeacher.id, email: otherTeacher.email, role: otherTeacher.role },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const otherTeacherRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${otherTeacherToken}` }
+    });
+    assert.strictEqual(otherTeacherRes.status, 200);
+    const otherTeacherQuestions = (await otherTeacherRes.json()).data.test.questions;
+    assert.ok(otherTeacherQuestions.every(q => q.answer_key === undefined && q.explanation === undefined));
   });
 
   test('6. Student saves answers incrementally (idempotent PUT)', async () => {
@@ -409,5 +456,182 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
       method: 'POST'
     });
     assert.strictEqual(res.status, 401);
+  });
+
+  test('12. Scorecard access is owner-only for students and audited', async () => {
+    const otherStudent = await userRepository.create({
+      fullName: 'Other Scorecard Candidate',
+      email: `scorecard.other.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherStudentToken = jwt.sign(
+      { id: otherStudent.id, email: otherStudent.email, role: 'STUDENT' },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const logCountBefore = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+
+    const forbiddenRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${otherStudentToken}` }
+    });
+    assert.strictEqual(forbiddenRes.status, 403);
+    const forbiddenBody = await forbiddenRes.json();
+    assert.strictEqual(forbiddenBody.error.code, 'FORBIDDEN');
+
+    const logCountAfter = (await securityLogRepository.getLogs({
+      eventType: 'UNAUTHORIZED_SCORECARD_ACCESS'
+    })).total;
+    assert.strictEqual(logCountAfter, logCountBefore + 1);
+
+    const teacherRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(teacherRes.status, 200);
+
+    const adminRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${createdAttemptId}/result`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
+  });
+
+  test('13. Proctoring integrity: aliases persist, score updates, and three tab switches disqualify', async () => {
+    const startRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}/attempts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(startRes.status, 200);
+    const startBody = await startRes.json();
+    const attemptId = startBody.data.attempt_id;
+
+    const postEvent = async (event_type, severity = 'warning') => {
+      const res = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`
+        },
+        body: JSON.stringify({ event_type, severity })
+      });
+      assert.strictEqual(res.status, 200);
+      return (await res.json()).data;
+    };
+
+    const faceEvent = await postEvent('NO_FACE', 'info');
+    assert.strictEqual(faceEvent.integrity_trust_index, 99);
+    assert.strictEqual(faceEvent.recorded, true);
+    assert.strictEqual(faceEvent.security_warning_count, 0);
+
+    await postEvent('TAB_SWITCH');
+    const duplicateFocusSignal = await postEvent('WINDOW_BLURRED');
+    assert.strictEqual(duplicateFocusSignal.debounced, true);
+    assert.strictEqual(duplicateFocusSignal.integrity_trust_index, 94);
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    await postEvent('WINDOW_BLURRED');
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    const thresholdEvent = await postEvent('TAB_HIDDEN');
+    assert.strictEqual(thresholdEvent.integrity_trust_index, 84);
+    assert.strictEqual(thresholdEvent.disqualified, true);
+    assert.strictEqual(thresholdEvent.auto_submitted, true);
+    assert.strictEqual(thresholdEvent.submission_reason, 'MAX_TAB_SWITCHES');
+
+    const studentAttemptRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    const studentAttempt = (await studentAttemptRes.json()).data;
+    assert.strictEqual(studentAttempt.integrity_trust_index, 84);
+    assert.strictEqual(studentAttempt.disqualified, true);
+    assert.strictEqual(studentAttempt.status, 'AUTO_SUBMITTED');
+
+    const timelineRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const timeline = (await timelineRes.json()).data;
+    assert.strictEqual(timeline.integrity_trust_index, 84);
+    assert.strictEqual(timeline.disqualified, true);
+    assert.deepStrictEqual(
+      timeline.events.map(event => event.event_type),
+      ['FACE_NOT_DETECTED', 'TAB_HIDDEN', 'WINDOW_BLURRED', 'TAB_HIDDEN']
+    );
+  });
+
+  test('14. Security: Third proctoring strike automatically submits and disqualifies the candidate', async () => {
+    const createRes = await fetch(`${baseUrl}/api/mock-tests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        title: `Three Strike Enforcement ${Date.now()}`,
+        subject: 'Computer Science',
+        difficulty: 'medium',
+        duration_minutes: 30,
+        total_marks: 1,
+        questions: [{
+          question_text: 'Which option is correct?',
+          question_type: 'MCQ_SINGLE',
+          marks: 1,
+          options: [
+            { id: 'option-a', text: 'Option A' },
+            { id: 'option-b', text: 'Option B' }
+          ],
+          correct_answer: { selected: 'option-a' }
+        }]
+      })
+    });
+    assert.strictEqual(createRes.status, 201);
+    const createBody = await createRes.json();
+    const testId = createBody.data.test.id;
+
+    const publishRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({ status: 'published' })
+    });
+    assert.strictEqual(publishRes.status, 200);
+
+    const joinRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/join-request`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(joinRes.status, 201);
+    const joinBody = await joinRes.json();
+
+    const approveRes = await fetch(`${baseUrl}/api/teacher/mock-tests/join-requests/${joinBody.data.id}/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(approveRes.status, 200);
+
+    const startRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/attempts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(startRes.status, 200);
+    const startBody = await startRes.json();
+    const thresholdAttemptId = startBody.data.attempt_id;
+
+    for (const [index, eventType] of ['SUSPICIOUS_KEY_COMBINATION', 'CAMERA_DISCONNECTED', 'MULTIPLE_FACES'].entries()) {
+      const eventRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${thresholdAttemptId}/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`
+        },
+        body: JSON.stringify({ event_type: eventType })
+      });
+      assert.strictEqual(eventRes.status, 200);
+      const eventBody = await eventRes.json();
+      assert.strictEqual(eventBody.success, true);
+      assert.strictEqual(eventBody.data.security_warning_count, index + 1);
+      assert.strictEqual(eventBody.data.auto_submitted, index === 2);
+    }
   });
 });

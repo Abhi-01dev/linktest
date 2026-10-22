@@ -103,6 +103,14 @@ export const mockTestRepository = {
     };
   },
 
+  async getQuestionById(questionId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query('SELECT * FROM mock_test_questions WHERE id = $1', [questionId]);
+      return res.rows[0] || null;
+    }
+    return (memoryStore.mock_test_questions || []).find(q => q.id === questionId) || null;
+  },
+
   async createTest(testData, questions = [], sections = []) {
     const testId = testData.id || `mock-${crypto.randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
@@ -607,6 +615,8 @@ export const mockTestRepository = {
       warning_count: 0,
       security_warning_count: 0,
       fullscreen_exit_count: 0,
+      integrity_trust_index: 100,
+      disqualified: false,
       submission_status: null,
       submission_reason: null,
       test_snapshot: attemptData.test_snapshot || {},
@@ -617,6 +627,7 @@ export const mockTestRepository = {
         fullscreen_exit_events: 0,
         camera_disconnect_events: 0,
         total_events: 0,
+        integrity_trust_index: 100,
         flagged: false
       },
       evaluator_remarks: null,
@@ -665,6 +676,7 @@ export const mockTestRepository = {
         'submitted_at', 'status', 'total_score', 'max_score', 'percentage', 'passed',
         'correct_count', 'incorrect_count', 'unanswered_count', 'time_spent_seconds',
         'warning_count', 'security_warning_count', 'fullscreen_exit_count',
+        'integrity_trust_index', 'disqualified',
         'submission_status', 'submission_reason',
         'result_status', 'released_at', 'released_by',
         'proctoring_summary', 'evaluator_remarks', 'evaluated_by', 'evaluated_at'
@@ -850,7 +862,7 @@ export const mockTestRepository = {
       const newStatus = totals.pending_count === 0 ? 'evaluated' : attempt.status;
       const newResultStatus = attempt.result_status === 'RELEASED'
         ? 'RELEASED'
-        : (totals.pending_count === 0 ? 'READY' : 'PENDING_EVALUATION');
+        : (totals.pending_count === 0 ? 'EVALUATED' : 'PENDING_EVALUATION');
 
       await pool.query(
         `UPDATE mock_test_attempts
@@ -911,7 +923,7 @@ export const mockTestRepository = {
       if (pendingCount === 0) {
         attempt.status = 'evaluated';
         if (attempt.result_status !== 'RELEASED') {
-          attempt.result_status = 'READY';
+          attempt.result_status = 'EVALUATED';
         }
       }
       attempt.evaluated_by = evaluatorId || null;
@@ -967,7 +979,7 @@ export const mockTestRepository = {
       `;
       const params = [now, teacherId, testId];
       if (batchId) {
-        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $4)`;
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_enrollments WHERE batch_id = $4 AND status = 'active')`;
         params.push(batchId);
       }
       await pool.query(q, params);
@@ -1003,7 +1015,7 @@ export const mockTestRepository = {
       const params = [testId];
       if (batchId) {
         params.push(batchId);
-        q += ` AND a.student_id IN (SELECT student_id FROM batch_students WHERE batch_id = $2)`;
+        q += ` AND a.student_id IN (SELECT student_id FROM batch_enrollments WHERE batch_id = $2 AND status = 'active')`;
       }
       q += ` ORDER BY a.total_score DESC, u.full_name ASC`;
       const res = await pool.query(q, params);

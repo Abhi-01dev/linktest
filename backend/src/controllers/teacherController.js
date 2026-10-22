@@ -120,8 +120,8 @@ export const teacherController = {
   // ── Assigned Classes & Students ──────────────────────────────────────
   async getClasses(req, res, next) {
     try {
-      const assignments = await lmsRepository.getTeacherAssignments(req.user.id);
-      res.status(200).json({ success: true, data: assignments });
+      const classes = await lmsRepository.getAssignedClassesWithStudents(req.user.id);
+      res.status(200).json({ success: true, data: classes });
     } catch (err) {
       next(err);
     }

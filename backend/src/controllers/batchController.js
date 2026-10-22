@@ -5,8 +5,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
-
-const sanitizeOptionalString = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const normalizeStatus = (val) => {
   if (!val) return 'Active';
@@ -81,8 +80,8 @@ export const batchController = {
     try {
       const { search, status, course_id, limit, offset, sort_by, sort_order } = req.query;
 
-      // If requester is a TEACHER, strictly return only assigned batches
-      if (req.user.role === 'TEACHER') {
+      // If requester is a TEACHER, return assigned batches by default unless all/scope=all is requested
+      if (req.user.role === 'TEACHER' && req.query.all !== 'true' && req.query.scope !== 'all') {
         const teacherBatches = await batchRepository.getBatchesForTeacher(req.user.id);
         return res.status(200).json({
           success: true,
@@ -115,7 +114,10 @@ export const batchController = {
   // ── Create Batch ─────────────────────────────────────────────────────────
   async createBatch(req, res, next) {
     try {
-      const validated = createBatchSchema.parse(req.body);
+      const validated = createBatchSchema.parse({
+        ...req.body,
+        ...(req.params.classId ? { class_id: req.params.classId } : {})
+      });
 
       // Validate referenced course exists
       if (validated.course_id) {
@@ -357,7 +359,13 @@ export const batchController = {
   async deleteBatch(req, res, next) {
     try {
       const { batchId } = req.params;
-      await batchRepository.deleteBatch(batchId);
+      const result = await batchRepository.deleteBatch(batchId);
+      if (!result.success) {
+        const err = new Error(result.message || 'Batch not found.');
+        err.statusCode = 404;
+        err.code = result.code || 'NOT_FOUND';
+        throw err;
+      }
 
       await logAudit({
         actorId: req.user.id,

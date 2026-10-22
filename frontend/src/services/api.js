@@ -252,9 +252,18 @@ class ApiClient {
     return res.data?.stats || res.data || {};
   }
 
-  async getAdminUsers() {
-    const res = await this.request('/admin/users');
-    return res.data.users;
+  async getAdminUsers(params = {}) {
+    const query = new URLSearchParams();
+    if (params.search) query.append('search', params.search);
+    if (params.role && params.role !== 'ALL') query.append('role', params.role);
+    if (params.status && params.status !== 'ALL') query.append('status', params.status);
+    if (params.limit) query.append('limit', params.limit);
+    if (params.offset !== undefined) query.append('offset', params.offset);
+    if (params.page !== undefined) query.append('page', params.page);
+
+    const qs = query.toString();
+    const res = await this.request(`/admin/users${qs ? `?${qs}` : ''}`);
+    return res.data?.users || res.data || [];
   }
 
   async createCourse(courseData) {
@@ -382,10 +391,10 @@ class ApiClient {
     return res.data?.teachers || (Array.isArray(res.data) ? res.data : []);
   }
 
-  async inviteTeacher(email, fullName) {
+  async inviteTeacher(email, fullName, department) {
     const res = await this.request('/admin/teachers/invite', {
       method: 'POST',
-      body: JSON.stringify({ email, full_name: fullName })
+      body: JSON.stringify({ email, full_name: fullName, department })
     });
     return res.data;
   }
@@ -409,6 +418,12 @@ class ApiClient {
     return res.data?.batches || (Array.isArray(res.data) ? res.data : []);
   }
 
+  async getBatches(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    const res = await this.request(`/batches${query ? `?${query}` : ''}`);
+    return res.data?.batches || (Array.isArray(res.data) ? res.data : []);
+  }
+
   async createAdminBatch(data) {
     const endpoint = data.class_id ? `/admin/classes/${data.class_id}/batches` : '/batches';
     const res = await this.request(endpoint, {
@@ -418,13 +433,14 @@ class ApiClient {
     return res.data?.batch || res.data;
   }
 
-  async getAdminSubjects() {
-    const res = await this.request('/subjects');
+  async getAdminSubjects(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    const res = await this.request(`/subjects${query ? `?${query}` : ''}`);
     return res.data?.subjects || (Array.isArray(res.data) ? res.data : []);
   }
 
   async createAdminSubject(data) {
-    const res = await this.request('/admin/subjects', {
+    const res = await this.request('/subjects', {
       method: 'POST',
       body: JSON.stringify(data)
     });
