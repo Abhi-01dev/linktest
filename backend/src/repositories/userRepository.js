@@ -4,10 +4,11 @@ import crypto from 'crypto';
 const SAFE_USER_FIELDS = 'id, full_name, email, role, status, phone, avatar_url, email_verified, email_verified_at, google_id, auth_provider, account_linked_at, last_login_at, created_at';
 
 export const userRepository = {
-  async findByEmail(email) {
+  async findByEmail(email, { client = null } = {}) {
     const normalizedEmail = email.trim().toLowerCase();
     if (isPostgresConnected && pool) {
-      const res = await pool.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+      const db = client || pool;
+      const res = await db.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
       return res.rows[0] || null;
     }
     return memoryStore.users.find(u => u.email.toLowerCase() === normalizedEmail) || null;
@@ -128,13 +129,14 @@ export const userRepository = {
     return safeUser;
   },
 
-  async create({ fullName, email, passwordHash, role = 'STUDENT', emailVerified = false, emailVerifiedAt = null, status = 'active' }) {
+  async create({ fullName, email, passwordHash, role = 'STUDENT', emailVerified = false, emailVerifiedAt = null, status = 'active' }, { client = null } = {}) {
     const id = crypto.randomUUID();
     const normalizedEmail = email.trim().toLowerCase();
     const createdAt = new Date().toISOString();
 
     if (isPostgresConnected && pool) {
-      const res = await pool.query(
+      const db = client || pool;
+      const res = await db.query(
         `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING ${SAFE_USER_FIELDS}`,

@@ -11,6 +11,7 @@ import { emailService } from './emailService.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
 import { lmsRepository } from '../repositories/lmsRepository.js';
+import { isPostgresConnected, memoryStore, pool } from '../db/index.js';
 
 let googleOAuthClient = new OAuth2Client(config.google?.clientId || '');
 
@@ -28,6 +29,13 @@ function generateSecureToken() {
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function invalidInvitationError() {
+  const err = new Error('This invitation is invalid, expired, or has already been accepted.');
+  err.statusCode = 400;
+  err.code = 'INVITATION_EXPIRED_OR_INVALID';
+  return err;
 }
 
 function issueJwt(user) {
@@ -417,8 +425,9 @@ export const authService = {
   // ============================================================
   // TEACHER INVITATION FLOW
   // ============================================================
-  async inviteTeacher({ email, fullName, invitedBy, inviterName }) {
+  async inviteTeacher({ email, fullName, department, invitedBy, inviterName }) {
     const normalizedEmail = email.trim().toLowerCase();
+    const normalizedInviterName = inviterName || 'LinkTest administrator';
     const existing = await userRepository.findByEmail(normalizedEmail);
 
     if (existing) {
@@ -431,11 +440,12 @@ export const authService = {
     // Generate secure invitation token
     const rawToken = generateSecureToken();
     const tokenHash = hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 
-    await invitationRepository.create({
+    const invitation = await invitationRepository.create({
       email: normalizedEmail,
       fullName,
+      department,
       invitedBy,
       tokenHash,
       expiresAt
@@ -443,23 +453,29 @@ export const authService = {
 
     const inviteUrl = `${config.frontendUrl}/accept-invite?token=${rawToken}`;
 
-    let emailSent = true;
     try {
-      await emailService.sendTeacherInvitation({
+      const delivery = await emailService.sendTeacherInvitation({
         email: normalizedEmail,
         fullName,
-        inviterName,
+        inviterName: normalizedInviterName,
         inviteUrl,
         expiresAt
       });
+      if (!delivery?.success) {
+        throw new Error('Email service did not confirm delivery.');
+      }
     } catch (err) {
-      console.error('[Invite] Email delivery error:', err.message);
-      emailSent = false;
+      await invitationRepository.deletePending(invitation.id);
+      const deliveryError = new Error('The teacher invitation email could not be delivered. Please try again.');
+      deliveryError.statusCode = 502;
+      deliveryError.code = 'INVITATION_DELIVERY_FAILED';
+      deliveryError.cause = err;
+      throw deliveryError;
     }
 
     await logAudit({
       actorId: invitedBy,
-      actorEmail: inviterName,
+      actorEmail: normalizedInviterName,
       action: 'TEACHER_INVITED',
       resourceType: 'invitation',
       resourceId: normalizedEmail,
@@ -469,7 +485,10 @@ export const authService = {
     return {
       email: normalizedEmail,
       full_name: fullName,
-      email_sent: emailSent,
+      department: department || null,
+      invitation_id: invitation.id,
+      expires_at: invitation.expires_at,
+      email_sent: true,
       // Only return the token in dev mode for testing; production should never expose it
       ...(config.nodeEnv === 'development' ? { dev_invite_url: inviteUrl } : {})
     };
@@ -477,50 +496,82 @@ export const authService = {
 
   async acceptTeacherInvite({ token, password }) {
     const tokenHash = hashToken(token);
-    const invitation = await invitationRepository.findByTokenHash(tokenHash);
+    let invitation;
+    let newUser;
 
-    if (!invitation) {
-      const err = new Error('Invalid or expired invitation link.');
-      err.statusCode = 400;
-      err.code = 'INVALID_INVITATION';
-      throw err;
+    if (isPostgresConnected && pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        invitation = await invitationRepository.findByTokenHash(tokenHash, { client, forUpdate: true });
+        if (!invitation || invitation.accepted_at || new Date(invitation.expires_at) <= new Date()) {
+          throw invalidInvitationError();
+        }
+
+        const existingUser = await userRepository.findByEmail(invitation.email, { client });
+        if (existingUser) {
+          const err = new Error('An account with this email already exists.');
+          err.statusCode = 409;
+          err.code = 'CONFLICT';
+          throw err;
+        }
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const accepted = await invitationRepository.markAccepted(invitation.id, { client });
+        if (!accepted) throw invalidInvitationError();
+        newUser = await userRepository.create({
+          fullName: invitation.full_name,
+          email: invitation.email,
+          passwordHash,
+          role: 'TEACHER',
+          emailVerified: true,
+          emailVerifiedAt: new Date().toISOString(),
+          status: 'active'
+        }, { client });
+        await lmsRepository.upsertTeacherProfile(newUser.id, { department: invitation.department }, client);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } else {
+      invitation = await invitationRepository.findByTokenHash(tokenHash);
+      if (!invitation || invitation.accepted_at || new Date(invitation.expires_at) <= new Date()) {
+        throw invalidInvitationError();
+      }
+
+      const existingUser = memoryStore.users.find(user => user.email.toLowerCase() === invitation.email);
+      if (existingUser) {
+        const err = new Error('An account with this email already exists.');
+        err.statusCode = 409;
+        err.code = 'CONFLICT';
+        throw err;
+      }
+
+      invitation.accepted_at = new Date().toISOString();
+      try {
+        const passwordHash = await bcrypt.hash(password, 10);
+        newUser = await userRepository.create({
+          fullName: invitation.full_name,
+          email: invitation.email,
+          passwordHash,
+          role: 'TEACHER',
+          emailVerified: true,
+          emailVerifiedAt: new Date().toISOString(),
+          status: 'active'
+        });
+        await lmsRepository.upsertTeacherProfile(newUser.id, { department: invitation.department });
+      } catch (err) {
+        invitation.accepted_at = null;
+        if (newUser) {
+          memoryStore.users = memoryStore.users.filter(user => user.id !== newUser.id);
+          memoryStore.teacher_profiles = memoryStore.teacher_profiles.filter(profile => profile.user_id !== newUser.id);
+        }
+        throw err;
+      }
     }
-
-    if (invitation.accepted_at) {
-      const err = new Error('This invitation has already been accepted.');
-      err.statusCode = 400;
-      err.code = 'INVITATION_USED';
-      throw err;
-    }
-
-    if (new Date() > new Date(invitation.expires_at)) {
-      const err = new Error('This invitation link has expired. Please contact your administrator for a new invitation.');
-      err.statusCode = 400;
-      err.code = 'INVITATION_EXPIRED';
-      throw err;
-    }
-
-    // Check if user was already created (e.g., invitation re-sent)
-    const existingUser = await userRepository.findByEmail(invitation.email);
-    if (existingUser) {
-      const err = new Error('An account with this email already exists.');
-      err.statusCode = 409;
-      err.code = 'CONFLICT';
-      throw err;
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const newUser = await userRepository.create({
-      fullName: invitation.full_name,
-      email: invitation.email,
-      passwordHash,
-      role: 'TEACHER',
-      emailVerified: true, // Invitation link validates email
-      emailVerifiedAt: new Date().toISOString(),
-      status: 'active'
-    });
-
-    await invitationRepository.markAccepted(invitation.id);
 
     await logAudit({
       actorId: newUser.id,

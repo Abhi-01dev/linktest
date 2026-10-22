@@ -126,7 +126,11 @@ CREATE TABLE subjects (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS department VARCHAR(150);
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+
 CREATE INDEX idx_subjects_code ON subjects(code);
+CREATE INDEX IF NOT EXISTS idx_subjects_department_status ON subjects(department, status);
 
 -- 6. CLASSES
 CREATE TABLE classes (
@@ -465,12 +469,15 @@ CREATE TABLE teacher_invitations (
     id VARCHAR(64) PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(150) NOT NULL,
+    department VARCHAR(150),
     invited_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     accepted_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE teacher_invitations ADD COLUMN IF NOT EXISTS department VARCHAR(150);
 
 CREATE INDEX idx_teacher_invitations_token ON teacher_invitations(token_hash);
 CREATE INDEX idx_teacher_invitations_email ON teacher_invitations(email);

@@ -73,7 +73,9 @@ export function MockTestRunnerPage() {
   const lastSyncTimeRef = useRef(Date.now());
   const pendingSyncRef = useRef({});
   const lastFullscreenExitRef = useRef(0);
+  const lastFocusLossEventRef = useRef(0);
   const responsesRef = useRef({});
+  const preventClipboardAction = (event) => event.preventDefault();
 
   // Sync ref with state
   useEffect(() => {
@@ -149,7 +151,7 @@ export function MockTestRunnerPage() {
           }
 
           setActiveWarningModal({
-            title: `Security Warning ${currentCount}/5`,
+            title: `Security Strike ${currentCount}/3`,
             message: warningMsg,
             count: currentCount,
             type: 'warning'
@@ -301,6 +303,9 @@ export function MockTestRunnerPage() {
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
+        const now = Date.now();
+        if (now - lastFocusLossEventRef.current < 1000) return;
+        lastFocusLossEventRef.current = now;
         handleProctorEvent({
           event_type: 'TAB_HIDDEN',
           severity: 'warning',
@@ -310,6 +315,9 @@ export function MockTestRunnerPage() {
     };
 
     const handleWindowBlur = () => {
+      const now = Date.now();
+      if (now - lastFocusLossEventRef.current < 1000) return;
+      lastFocusLossEventRef.current = now;
       handleProctorEvent({
         event_type: 'WINDOW_BLURRED',
         severity: 'warning',
@@ -647,8 +655,8 @@ export function MockTestRunnerPage() {
       autoSubmitReasonTitle = 'Test Automatically Submitted';
       autoSubmitReasonDesc = 'Your test has been automatically submitted because you exited full-screen mode twice.';
     } else if (isMaxWarningsAuto) {
-      autoSubmitReasonTitle = 'Test Automatically Submitted';
-      autoSubmitReasonDesc = 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+      autoSubmitReasonTitle = 'Examination Disqualified';
+      autoSubmitReasonDesc = 'Your examination was automatically submitted after you reached three security strikes.';
     }
 
     return (
@@ -711,7 +719,7 @@ export function MockTestRunnerPage() {
                 Reason: <strong>{subReason || 'SECURITY_POLICY_VIOLATION'}</strong>
               </div>
               <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.25rem' }}>
-                Security Warnings: {securityWarningCount}/5 • Fullscreen Exits: {fullscreenExitCount}/2
+                Security Strikes: {securityWarningCount}/3 • Fullscreen Exits: {fullscreenExitCount}/2
               </div>
             </div>
           )}
@@ -930,7 +938,7 @@ export function MockTestRunnerPage() {
               }}
             >
               <ShieldAlert size={14} />
-              <span>Security Warnings: {securityWarningCount} / 5</span>
+              <span>Security Strikes: {securityWarningCount} / 3</span>
             </div>
 
             {/* Fullscreen Exits */}
@@ -1077,8 +1085,14 @@ export function MockTestRunnerPage() {
                   lineHeight: 1.6,
                   color: 'var(--color-text-primary)',
                   marginBottom: '1.5rem',
-                  borderLeft: '4px solid var(--color-orange)'
-                }}>
+                  borderLeft: '4px solid var(--color-orange)',
+                  userSelect: 'none'
+                }}
+                  onContextMenu={preventClipboardAction}
+                  onCopy={preventClipboardAction}
+                  onCut={preventClipboardAction}
+                  onPaste={preventClipboardAction}
+                >
                   <div style={{ fontWeight: 800, fontSize: '0.8rem', color: 'var(--color-orange-dark)', marginBottom: '0.4rem', textTransform: 'uppercase' }}>
                     Reference Context / Passage:
                   </div>
@@ -1092,8 +1106,14 @@ export function MockTestRunnerPage() {
                 fontWeight: 600,
                 color: 'var(--color-navy)',
                 lineHeight: 1.6,
-                marginBottom: '1.75rem'
-              }}>
+                marginBottom: '1.75rem',
+                userSelect: 'none'
+              }}
+                onContextMenu={preventClipboardAction}
+                onCopy={preventClipboardAction}
+                onCut={preventClipboardAction}
+                onPaste={preventClipboardAction}
+              >
                 {activeQuestion.question_text}
               </div>
 

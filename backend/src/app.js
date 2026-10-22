@@ -109,6 +109,7 @@ app.get('/api/health', (req, res) => {
         live_classes: livekitStatus.configured ? 'operational' : 'not_configured'
       },
       database: {
+        isPostgres: dbStatus.isPostgres,
         connected: dbStatus.connected,
         type: dbStatus.type
       },
