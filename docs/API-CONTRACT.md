@@ -316,6 +316,8 @@ All endpoints in this section require an authenticated administrator.
 | `PUT` | `/api/admin/leave-requests/:id` | Admin | Approve or reject teacher leave |
 | `GET` | `/api/admin/audit-logs` | Admin | View tamper-evident audit logs |
 
+`GET /api/admin/dashboard` returns KPI counts under `data.stats`, including `totalStudents`, `totalTeachers`, `activeBatches`, `totalCourses`, `totalExams`, and `systemUptime` (application uptime in seconds). `totalExams` is the configured mock-test count; `conductedExams` counts submitted or evaluated mock-test attempts. Legacy snake_case dashboard fields remain available.
+
 Optional foreign-key fields in admin timetable and live-class payloads normalize empty or whitespace-only strings to `null`.
 
 ---
