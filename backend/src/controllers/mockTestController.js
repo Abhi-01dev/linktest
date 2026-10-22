@@ -512,8 +512,17 @@ export const mockTestController = {
     try {
       const { attemptId } = req.params;
       const events = await mockTestRepository.getProctoringEvents(attemptId);
+      const attempt = await mockTestRepository.getAttemptById(attemptId);
 
-      return res.status(200).json({ success: true, data: { events } });
+      return res.status(200).json({
+        success: true,
+        data: {
+          events,
+          integrity_trust_index: attempt?.integrity_trust_index ?? 100,
+          disqualified: Boolean(attempt?.disqualified),
+          proctoring_summary: attempt?.proctoring_summary || {}
+        }
+      });
     } catch (err) {
       next(err);
     }

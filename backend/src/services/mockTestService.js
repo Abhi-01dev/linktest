@@ -277,7 +277,9 @@ export const mockTestService = {
         started_at: attempt.started_at,
         warning_count: attempt.warning_count || 0,
         security_warning_count: attempt.security_warning_count || 0,
-        fullscreen_exit_count: attempt.fullscreen_exit_count || 0
+        fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+        integrity_trust_index: attempt.integrity_trust_index ?? 100,
+        disqualified: Boolean(attempt.disqualified)
       },
       test_id: test.id,
       test_title: test.title,
@@ -293,6 +295,8 @@ export const mockTestService = {
       warning_count: attempt.warning_count || 0,
       security_warning_count: attempt.security_warning_count || 0,
       fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+      integrity_trust_index: attempt.integrity_trust_index ?? 100,
+      disqualified: Boolean(attempt.disqualified),
       questions: sanitizedQuestions,
       responses: responsesMap
     };
@@ -398,7 +402,12 @@ export const mockTestService = {
     }
 
     // Support both event_type and eventType
-    const rawType = (eventData.event_type || eventData.eventType || '').trim().toUpperCase();
+    const submittedType = (eventData.event_type || eventData.eventType || '').trim().toUpperCase();
+    const eventTypeAliases = {
+      TAB_SWITCH: 'TAB_HIDDEN',
+      NO_FACE: 'FACE_NOT_DETECTED'
+    };
+    const rawType = eventTypeAliases[submittedType] || submittedType;
 
     const validEventTypes = [
       'FACE_NOT_DETECTED',
@@ -441,8 +450,11 @@ export const mockTestService = {
 
     // Check for duplicate debouncing: ignore identical event if received within 3.5 seconds
     const existingEvents = await mockTestRepository.getProctoringEvents(attemptId);
+    const isTabSwitchSignal = ['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(rawType);
     const lastMatching = existingEvents
-      .filter(e => e.event_type === rawType)
+      .filter(e => isTabSwitchSignal
+        ? ['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(e.event_type)
+        : e.event_type === rawType)
       .sort((a, b) => new Date(b.server_timestamp) - new Date(a.server_timestamp))[0];
 
     if (lastMatching) {
@@ -454,6 +466,8 @@ export const mockTestService = {
           warning_count: attempt.warning_count || 0,
           security_warning_count: attempt.security_warning_count || 0,
           fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+          integrity_trust_index: attempt.integrity_trust_index ?? 100,
+          disqualified: Boolean(attempt.disqualified),
           auto_submitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
           status: attempt.status,
           submission_reason: attempt.submission_reason || null
@@ -462,15 +476,22 @@ export const mockTestService = {
     }
 
     // Persist event in proctoring events table
+    const severityPenalties = { info: 1, warning: 5, critical: 15 };
+    const requestedSeverity = String(eventData.severity || (rawType === 'FULLSCREEN_EXIT' ? 'critical' : 'warning')).toLowerCase();
+    const normalizedSeverity = severityPenalties[requestedSeverity] === undefined ? 'warning' : requestedSeverity;
     const recorded = await mockTestRepository.logProctoringEvent({
       attempt_id: attemptId,
       event_type: rawType,
-      severity: eventData.severity || (rawType === 'FULLSCREEN_EXIT' ? 'critical' : 'warning'),
+      severity: normalizedSeverity,
       client_timestamp: eventData.client_timestamp || eventData.timestamp || new Date().toISOString(),
       duration_seconds: eventData.duration_seconds || 0,
       confidence: eventData.confidence || 1.0,
       metadata: eventData.metadata || { reason: eventData.reason || null }
     });
+    const integrityTrustIndex = Math.max(
+      0,
+      (attempt.integrity_trust_index ?? 100) - severityPenalties[normalizedSeverity]
+    );
 
     // Update proctoring summary
     const summary = attempt.proctoring_summary || {
@@ -480,6 +501,7 @@ export const mockTestService = {
       fullscreen_exit_events: 0,
       camera_disconnect_events: 0,
       total_events: 0,
+      integrity_trust_index: 100,
       flagged: false
     };
 
@@ -490,24 +512,57 @@ export const mockTestService = {
     if (rawType === 'CAMERA_DISCONNECTED') summary.camera_disconnect_events = (summary.camera_disconnect_events || 0) + 1;
 
     summary.total_events = (summary.total_events || 0) + 1;
+    summary.integrity_trust_index = integrityTrustIndex;
 
     // Strict separate counters
     const MAX_WARNINGS = 3;
     const MAX_FULLSCREEN_EXITS = 2;
 
+    const isSecurityWarning = normalizedSeverity !== 'info';
     let newSecurityWarningCount = attempt.security_warning_count || 0;
     let newFullscreenExitCount = attempt.fullscreen_exit_count || 0;
-    let newWarningCount = (attempt.warning_count || 0) + 1;
+    let newWarningCount = (attempt.warning_count || 0) + Number(isSecurityWarning);
 
     const isFullscreenExit = rawType === 'FULLSCREEN_EXIT';
     if (isFullscreenExit) {
       newFullscreenExitCount += 1;
-    } else {
+    } else if (isSecurityWarning) {
       newSecurityWarningCount += 1;
     }
 
-    if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS) {
+    const tabSwitchThresholdReached = summary.tab_switch_events >= 3;
+    if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS || tabSwitchThresholdReached) {
       summary.flagged = true;
+    }
+
+    if (tabSwitchThresholdReached) {
+      await mockTestRepository.updateAttempt(attemptId, {
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
+        proctoring_summary: summary
+      });
+      const submissionResult = await this.submitAttempt(attemptId, student, {
+        auto_submitted: true,
+        reason: 'MAX_TAB_SWITCHES',
+        status: 'AUTO_SUBMITTED'
+      });
+
+      return {
+        recorded: true,
+        event_id: recorded.id,
+        warning_count: newWarningCount,
+        security_warning_count: newSecurityWarningCount,
+        fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
+        auto_submitted: true,
+        status: 'AUTO_SUBMITTED',
+        submission_reason: 'MAX_TAB_SWITCHES',
+        result: submissionResult
+      };
     }
 
     // Check Auto-Submission Limits:
@@ -517,6 +572,7 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
         proctoring_summary: summary
       });
 
@@ -550,6 +606,8 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'SECOND_FULLSCREEN_EXIT',
@@ -563,6 +621,7 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
         proctoring_summary: summary
       });
 
@@ -600,6 +659,8 @@ export const mockTestService = {
         warning_count: newWarningCount,
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        integrity_trust_index: integrityTrustIndex,
+        disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'MAX_SECURITY_WARNINGS',
@@ -612,6 +673,8 @@ export const mockTestService = {
       warning_count: newWarningCount,
       security_warning_count: newSecurityWarningCount,
       fullscreen_exit_count: newFullscreenExitCount,
+      integrity_trust_index: integrityTrustIndex,
+      disqualified: Boolean(attempt.disqualified),
       proctoring_summary: summary
     });
 
@@ -651,6 +714,8 @@ export const mockTestService = {
       warning_count: newWarningCount,
       security_warning_count: newSecurityWarningCount,
       fullscreen_exit_count: newFullscreenExitCount,
+      integrity_trust_index: integrityTrustIndex,
+      disqualified: Boolean(attempt.disqualified),
       auto_submitted: false,
       status: attempt.status,
       submission_reason: null,
@@ -883,6 +948,8 @@ export const mockTestService = {
         submission_reason: attempt.submission_reason || null,
         security_warning_count: attempt.security_warning_count || 0,
         fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+        integrity_trust_index: attempt.integrity_trust_index ?? 100,
+        disqualified: Boolean(attempt.disqualified),
         submitted_at: attempt.submitted_at,
         started_at: attempt.started_at
       },
@@ -898,6 +965,8 @@ export const mockTestService = {
       submission_reason: attempt.submission_reason || null,
       security_warning_count: attempt.security_warning_count || 0,
       fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+      integrity_trust_index: attempt.integrity_trust_index ?? 100,
+      disqualified: Boolean(attempt.disqualified),
       started_at: attempt.started_at,
       submitted_at: attempt.submitted_at,
       time_spent_seconds: attempt.time_spent_seconds || 0,

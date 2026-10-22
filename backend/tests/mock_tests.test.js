@@ -411,7 +411,67 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     assert.strictEqual(res.status, 401);
   });
 
-  test('12. Security: Third proctoring strike automatically submits and disqualifies the candidate', async () => {
+  test('12. Proctoring integrity: aliases persist, score updates, and three tab switches disqualify', async () => {
+    const startRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}/attempts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(startRes.status, 200);
+    const startBody = await startRes.json();
+    const attemptId = startBody.data.attempt_id;
+
+    const postEvent = async (event_type, severity = 'warning') => {
+      const res = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`
+        },
+        body: JSON.stringify({ event_type, severity })
+      });
+      assert.strictEqual(res.status, 200);
+      return (await res.json()).data;
+    };
+
+    const faceEvent = await postEvent('NO_FACE', 'info');
+    assert.strictEqual(faceEvent.integrity_trust_index, 99);
+    assert.strictEqual(faceEvent.recorded, true);
+    assert.strictEqual(faceEvent.security_warning_count, 0);
+
+    await postEvent('TAB_SWITCH');
+    const duplicateFocusSignal = await postEvent('WINDOW_BLURRED');
+    assert.strictEqual(duplicateFocusSignal.debounced, true);
+    assert.strictEqual(duplicateFocusSignal.integrity_trust_index, 94);
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    await postEvent('WINDOW_BLURRED');
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    const thresholdEvent = await postEvent('TAB_HIDDEN');
+    assert.strictEqual(thresholdEvent.integrity_trust_index, 84);
+    assert.strictEqual(thresholdEvent.disqualified, true);
+    assert.strictEqual(thresholdEvent.auto_submitted, true);
+    assert.strictEqual(thresholdEvent.submission_reason, 'MAX_TAB_SWITCHES');
+
+    const studentAttemptRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    const studentAttempt = (await studentAttemptRes.json()).data;
+    assert.strictEqual(studentAttempt.integrity_trust_index, 84);
+    assert.strictEqual(studentAttempt.disqualified, true);
+    assert.strictEqual(studentAttempt.status, 'AUTO_SUBMITTED');
+
+    const timelineRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const timeline = (await timelineRes.json()).data;
+    assert.strictEqual(timeline.integrity_trust_index, 84);
+    assert.strictEqual(timeline.disqualified, true);
+    assert.deepStrictEqual(
+      timeline.events.map(event => event.event_type),
+      ['FACE_NOT_DETECTED', 'TAB_HIDDEN', 'WINDOW_BLURRED', 'TAB_HIDDEN']
+    );
+  });
+
+  test('13. Security: Third proctoring strike automatically submits and disqualifies the candidate', async () => {
     const createRes = await fetch(`${baseUrl}/api/mock-tests`, {
       method: 'POST',
       headers: {
@@ -471,7 +531,7 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     const startBody = await startRes.json();
     const thresholdAttemptId = startBody.data.attempt_id;
 
-    for (const [index, eventType] of ['TAB_HIDDEN', 'WINDOW_BLURRED', 'SUSPICIOUS_KEY_COMBINATION'].entries()) {
+    for (const [index, eventType] of ['SUSPICIOUS_KEY_COMBINATION', 'CAMERA_DISCONNECTED', 'MULTIPLE_FACES'].entries()) {
       const eventRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${thresholdAttemptId}/events`, {
         method: 'POST',
         headers: {
