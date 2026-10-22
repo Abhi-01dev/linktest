@@ -269,8 +269,51 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     assert.ok(Array.isArray(questions) && questions.length === 5);
     for (const q of questions) {
       assert.strictEqual(q.correct_answer, undefined, `Question ${q.id} must NOT have correct_answer`);
+      assert.strictEqual(q.answer_key, undefined, `Question ${q.id} must NOT have answer_key`);
+      assert.strictEqual(q.correct_option_index, undefined, `Question ${q.id} must NOT have correct_option_index`);
       assert.strictEqual(q.explanation, undefined, `Question ${q.id} must NOT have explanation`);
     }
+  });
+
+  test('5a. Mock test details expose answer keys only to the creator and administrators', async () => {
+    const studentRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(studentRes.status, 200);
+    const studentQuestions = (await studentRes.json()).data.test.questions;
+    assert.ok(studentQuestions.every(q => q.answer_key === undefined && q.explanation === undefined));
+
+    const creatorRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(creatorRes.status, 200);
+    assert.ok((await creatorRes.json()).data.test.questions.every(q => q.answer_key !== undefined));
+
+    const adminRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${adminToken}` }
+    });
+    assert.strictEqual(adminRes.status, 200);
+    assert.ok((await adminRes.json()).data.test.questions.every(q => q.answer_key !== undefined));
+
+    const otherTeacher = await userRepository.create({
+      fullName: 'Unassigned Mock Test Teacher',
+      email: `mock.other.teacher.${Date.now()}@linktest.io`,
+      passwordHash: 'test-only',
+      role: 'TEACHER',
+      emailVerified: true,
+      emailVerifiedAt: new Date().toISOString()
+    });
+    const otherTeacherToken = jwt.sign(
+      { id: otherTeacher.id, email: otherTeacher.email, role: otherTeacher.role },
+      config.jwtSecret,
+      { expiresIn: '1h' }
+    );
+    const otherTeacherRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}`, {
+      headers: { Authorization: `Bearer ${otherTeacherToken}` }
+    });
+    assert.strictEqual(otherTeacherRes.status, 200);
+    const otherTeacherQuestions = (await otherTeacherRes.json()).data.test.questions;
+    assert.ok(otherTeacherQuestions.every(q => q.answer_key === undefined && q.explanation === undefined));
   });
 
   test('6. Student saves answers incrementally (idempotent PUT)', async () => {

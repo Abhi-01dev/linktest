@@ -77,10 +77,12 @@ export const mockTestController = {
         }
       }
 
-      const isTeacherOrAdmin = req.user && ['TEACHER', 'ADMIN'].includes(req.user.role);
+      const canViewAnswerKeys = req.user && (
+        req.user.role === 'ADMIN' ||
+        (req.user.role === 'TEACHER' && test.created_by === req.user.id)
+      );
 
-      // If requested by student or public, sanitize questions
-      if (!isTeacherOrAdmin) {
+      if (!canViewAnswerKeys) {
         test.questions = await mockTestRepository.getQuestionsByTestId(id, { sanitize: true });
       }
 

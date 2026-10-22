@@ -3,23 +3,27 @@ import crypto from 'crypto';
 
 export const quizRepository = {
   // Public/Student method - SANITIZED: Strips correct_option_index, expected_answer, and hidden test inputs!
-  async getQuizForTaker(quizId) {
+  async getQuizForTaker(quizId, { includeAnswerKey = false } = {}) {
     if (isPostgresConnected && pool) {
       const quizRes = await pool.query('SELECT * FROM quizzes WHERE id = $1', [quizId]);
       if (quizRes.rows.length === 0) return null;
 
       const qRes = await pool.query(
-        `SELECT id, quiz_id, question_text, options, position,
-                COALESCE(question_type, 'mcq_single') as question_type,
-                COALESCE(marks, 1.00) as marks,
-                starter_code, programming_language, time_limit, memory_limit, test_cases
-         FROM questions
-         WHERE quiz_id = $1
-         ORDER BY position ASC`,
+        includeAnswerKey
+          ? 'SELECT * FROM questions WHERE quiz_id = $1 ORDER BY position ASC'
+          : `SELECT id, quiz_id, question_text, options, position,
+                    COALESCE(question_type, 'mcq_single') as question_type,
+                    COALESCE(marks, 1.00) as marks,
+                    starter_code, programming_language, time_limit, memory_limit, test_cases
+             FROM questions
+             WHERE quiz_id = $1
+             ORDER BY position ASC`,
         [quizId]
       );
 
-      const sanitizedQuestions = qRes.rows.map(q => {
+      const questions = qRes.rows.map(q => {
+        if (includeAnswerKey) return q;
+
         let rawCases = [];
         try {
           rawCases = typeof q.test_cases === 'string' ? JSON.parse(q.test_cases) : (q.test_cases || []);
@@ -50,7 +54,7 @@ export const quizRepository = {
 
       return {
         ...quizRes.rows[0],
-        questions: sanitizedQuestions
+        questions
       };
     }
 
@@ -61,6 +65,8 @@ export const quizRepository = {
       .filter(q => q.quiz_id === quizId)
       .sort((a, b) => a.position - b.position)
       .map(q => {
+        if (includeAnswerKey) return q;
+
         const rawCases = Array.isArray(q.test_cases) ? q.test_cases : [];
         const safeCases = rawCases.map(tc => {
           if (tc.is_hidden) {
@@ -388,7 +394,7 @@ export const quizRepository = {
     return this.getAttemptDetails(attemptId);
   },
 
-  async createQuiz({ courseId, title, description, questions = [] }) {
+  async createQuiz({ courseId, title, description, questions = [], teacherId }) {
     const quizId = crypto.randomUUID();
     const now = new Date().toISOString();
 
@@ -397,9 +403,9 @@ export const quizRepository = {
       try {
         await client.query('BEGIN');
         await client.query(
-          `INSERT INTO quizzes (id, course_id, title, description, created_at)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [quizId, courseId, title, description, now]
+          `INSERT INTO quizzes (id, course_id, title, description, teacher_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [quizId, courseId, title, description, teacherId || null, now]
         );
 
         for (let i = 0; i < questions.length; i++) {
@@ -442,7 +448,7 @@ export const quizRepository = {
         }
 
         await client.query('COMMIT');
-        return { id: quizId, course_id: courseId, title, description };
+        return { id: quizId, course_id: courseId, title, description, teacher_id: teacherId || null };
       } catch (err) {
         await client.query('ROLLBACK');
         throw err;
@@ -451,7 +457,7 @@ export const quizRepository = {
       }
     }
 
-    const newQuiz = { id: quizId, course_id: courseId, title, description, created_at: now };
+    const newQuiz = { id: quizId, course_id: courseId, title, description, teacher_id: teacherId || null, created_at: now };
     memoryStore.quizzes.push(newQuiz);
 
     questions.forEach((q, idx) => {
