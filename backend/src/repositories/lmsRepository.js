@@ -110,25 +110,76 @@ export const lmsRepository = {
   // ============================================================
   // SUBJECTS
   // ============================================================
-  async getSubjects() {
+  async getSubjects({ status, department } = {}) {
     if (isPostgresConnected && pool) {
-      const res = await pool.query('SELECT * FROM subjects ORDER BY name');
+      const filters = [];
+      const params = [];
+      if (status) {
+        params.push(status);
+        filters.push(`status = $${params.length}`);
+      }
+      if (department) {
+        params.push(department.trim());
+        filters.push(`LOWER(department) = LOWER($${params.length})`);
+      }
+      const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+      const res = await pool.query(`SELECT * FROM subjects ${where} ORDER BY name`, params);
       return res.rows;
     }
-    return [...memoryStore.subjects].sort((a, b) => a.name.localeCompare(b.name));
+    return [...memoryStore.subjects]
+      .filter(subject => !status || (subject.status || 'active') === status)
+      .filter(subject => !department || subject.department?.trim().toLowerCase() === department.trim().toLowerCase())
+      .sort((a, b) => a.name.localeCompare(b.name));
   },
 
-  async createSubject({ name, code, description }) {
+  async createSubject({ name, code, description, department, status = 'active' }) {
     const id = crypto.randomUUID();
     const created_at = new Date().toISOString();
+    const normalizedCode = code.trim().toUpperCase();
+    const normalizedDepartment = department?.trim() || null;
     if (isPostgresConnected && pool) {
-      const res = await pool.query(
-        `INSERT INTO subjects (id, name, code, description, created_at) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-        [id, name, code || null, description || null, created_at]
-      );
-      return res.rows[0];
+      try {
+        const duplicate = await pool.query(
+          'SELECT id FROM subjects WHERE UPPER(code) = $1 LIMIT 1',
+          [normalizedCode]
+        );
+        if (duplicate.rows.length > 0) {
+          const error = new Error(`Subject code ${normalizedCode} is already in use.`);
+          error.statusCode = 409;
+          error.code = 'SUBJECT_CODE_CONFLICT';
+          throw error;
+        }
+        const res = await pool.query(
+          `INSERT INTO subjects (id, name, code, description, department, status, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+          [id, name, normalizedCode, description || null, normalizedDepartment, status, created_at]
+        );
+        return res.rows[0];
+      } catch (err) {
+        if (err.code === '23505') {
+          const conflict = new Error(`Subject code ${normalizedCode} is already in use.`);
+          conflict.statusCode = 409;
+          conflict.code = 'SUBJECT_CODE_CONFLICT';
+          throw conflict;
+        }
+        throw err;
+      }
     }
-    const subject = { id, name, code: code || null, description: description || null, created_at };
+    if (memoryStore.subjects.some(subject => subject.code?.toUpperCase() === normalizedCode)) {
+      const error = new Error(`Subject code ${normalizedCode} is already in use.`);
+      error.statusCode = 409;
+      error.code = 'SUBJECT_CODE_CONFLICT';
+      throw error;
+    }
+    const subject = {
+      id,
+      name,
+      code: normalizedCode,
+      description: description || null,
+      department: normalizedDepartment,
+      status,
+      created_at
+    };
     memoryStore.subjects.push(subject);
     return subject;
   },

@@ -124,7 +124,11 @@ CREATE TABLE subjects (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS department VARCHAR(150);
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+
 CREATE INDEX idx_subjects_code ON subjects(code);
+CREATE INDEX IF NOT EXISTS idx_subjects_department_status ON subjects(department, status);
 
 -- 6. CLASSES
 CREATE TABLE classes (
@@ -831,4 +835,3 @@ CREATE TABLE mock_test_audit_logs (
 
 CREATE INDEX idx_mock_audit_test ON mock_test_audit_logs(test_id);
 CREATE INDEX idx_mock_audit_attempt ON mock_test_audit_logs(attempt_id);
-
