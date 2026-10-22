@@ -86,7 +86,7 @@ export function Navbar() {
             style={{ textDecoration: 'none', display: 'flex', alignItems: 'center' }}
             title="LinkTest Platform"
           >
-            <LinkTestLogo size="md" />
+            <LinkTestLogo size="md" link={false} />
           </Link>
 
           {/* Subtle Role Indicator (Desktop) */}

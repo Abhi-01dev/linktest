@@ -2,25 +2,29 @@ import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import crypto from 'crypto';
 
 export const invitationRepository = {
-  async create({ email, fullName, invitedBy, tokenHash, expiresAt }) {
+  async create({ email, fullName, department = null, invitedBy, tokenHash, expiresAt }) {
     const id = crypto.randomUUID();
     const created_at = new Date().toISOString();
     if (isPostgresConnected && pool) {
       const res = await pool.query(
-        `INSERT INTO teacher_invitations (id, email, full_name, invited_by, token_hash, expires_at, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [id, email.toLowerCase().trim(), fullName, invitedBy, tokenHash, expiresAt, created_at]
+        `INSERT INTO teacher_invitations (id, email, full_name, department, invited_by, token_hash, expires_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [id, email.toLowerCase().trim(), fullName, department, invitedBy, tokenHash, expiresAt, created_at]
       );
       return res.rows[0];
     }
-    const inv = { id, email: email.toLowerCase().trim(), full_name: fullName, invited_by: invitedBy, token_hash: tokenHash, expires_at: expiresAt, accepted_at: null, created_at };
+    const inv = { id, email: email.toLowerCase().trim(), full_name: fullName, department, invited_by: invitedBy, token_hash: tokenHash, expires_at: expiresAt, accepted_at: null, created_at };
     memoryStore.teacher_invitations.push(inv);
     return inv;
   },
 
-  async findByTokenHash(tokenHash) {
+  async findByTokenHash(tokenHash, { client = null, forUpdate = false } = {}) {
     if (isPostgresConnected && pool) {
-      const res = await pool.query('SELECT * FROM teacher_invitations WHERE token_hash = $1', [tokenHash]);
+      const db = client || pool;
+      const res = await db.query(
+        `SELECT * FROM teacher_invitations WHERE token_hash = $1${forUpdate ? ' FOR UPDATE' : ''}`,
+        [tokenHash]
+      );
       return res.rows[0] || null;
     }
     return memoryStore.teacher_invitations.find(i => i.token_hash === tokenHash) || null;
@@ -37,11 +41,15 @@ export const invitationRepository = {
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0] || null;
   },
 
-  async markAccepted(id) {
+  async markAccepted(id, { client = null } = {}) {
     const acceptedAt = new Date().toISOString();
     if (isPostgresConnected && pool) {
-      const res = await pool.query(
-        'UPDATE teacher_invitations SET accepted_at = $1 WHERE id = $2 RETURNING *',
+      const db = client || pool;
+      const res = await db.query(
+        `UPDATE teacher_invitations
+         SET accepted_at = $1
+         WHERE id = $2 AND accepted_at IS NULL AND expires_at > NOW()
+         RETURNING *`,
         [acceptedAt, id]
       );
       return res.rows[0] || null;
@@ -50,6 +58,22 @@ export const invitationRepository = {
     if (!inv) return null;
     inv.accepted_at = acceptedAt;
     return inv;
+  },
+
+  async deletePending(id) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        'DELETE FROM teacher_invitations WHERE id = $1 AND accepted_at IS NULL RETURNING id',
+        [id]
+      );
+      return res.rowCount > 0;
+    }
+    const idx = memoryStore.teacher_invitations.findIndex(invitation =>
+      invitation.id === id && !invitation.accepted_at
+    );
+    if (idx === -1) return false;
+    memoryStore.teacher_invitations.splice(idx, 1);
+    return true;
   },
 
   async getAll() {

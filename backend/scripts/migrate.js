@@ -4,39 +4,110 @@ import { fileURLToPath } from 'url';
 import pg from 'pg';
 import dotenv from 'dotenv';
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config();
+
 const { Pool } = pg;
 
-async function runMigration() {
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    console.error('[Migration] Error: DATABASE_URL is not defined in environment.');
-    process.exit(1);
+/**
+ * Sanitizes raw SQL to ensure safe execution on existing databases:
+ * - Strips destructive DROP TABLE / DROP DATABASE / TRUNCATE statements
+ * - Converts CREATE TABLE to CREATE TABLE IF NOT EXISTS
+ * - Converts CREATE INDEX to CREATE INDEX IF NOT EXISTS
+ * - Converts CREATE UNIQUE INDEX to CREATE UNIQUE INDEX IF NOT EXISTS
+ */
+export function sanitizeMigrationSql(rawSql) {
+  // Strip DROP TABLE ... CASCADE / DROP TABLE ... statements
+  let safeSql = rawSql.replace(/DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+[^;]+;/gi, '-- [MIGRATION SAFETY] Stripped destructive statement');
+
+  // Strip DROP DATABASE / TRUNCATE
+  safeSql = safeSql.replace(/DROP\s+DATABASE(?:\s+IF\s+EXISTS)?\s+[^;]+;/gi, '-- [MIGRATION SAFETY] Stripped destructive statement');
+  safeSql = safeSql.replace(/TRUNCATE(?:\s+TABLE)?\s+[^;]+;/gi, '-- [MIGRATION SAFETY] Stripped destructive statement');
+
+  // Convert CREATE TABLE to CREATE TABLE IF NOT EXISTS
+  safeSql = safeSql.replace(/CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS\s+)([a-zA-Z0-9_"]+)/gi, 'CREATE TABLE IF NOT EXISTS $1');
+
+  // Convert CREATE INDEX to CREATE INDEX IF NOT EXISTS
+  safeSql = safeSql.replace(/CREATE\s+(UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS\s+)([a-zA-Z0-9_"]+)/gi, 'CREATE $1INDEX IF NOT EXISTS $2');
+
+  return safeSql;
+}
+
+/**
+ * Executes database migration safely:
+ * - Requires DATABASE_URL
+ * - Never executes destructive resets, test data cleanup, or development seeds
+ * - Runs inside a database transaction (BEGIN / COMMIT / ROLLBACK)
+ * - Only confirms success after database commit
+ */
+export async function runMigration({ dbUrl = null, dbPool = null, customSchemaPath = null } = {}) {
+  const connectionUrl = (dbUrl !== null && dbUrl !== undefined ? dbUrl : (process.env.DATABASE_URL || '')).trim();
+  if (!dbPool && !connectionUrl) {
+    console.error('[Migration Error] DATABASE_URL is not defined or is empty in environment.');
+    throw new Error('[Migration Error] DATABASE_URL is not defined or is empty in environment.');
   }
 
-  const isNeonOrCloud = dbUrl.includes('neon.tech') || dbUrl.includes('render.com') || dbUrl.includes('sslmode=require');
-  const pool = new Pool({
-    connectionString: dbUrl,
-    ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false
-  });
+  const schemaPath = customSchemaPath || path.join(__dirname, '../sql/schema.sql');
+  if (!fs.existsSync(schemaPath)) {
+    console.error(`[Migration Error] Schema file not found at: ${schemaPath}`);
+    throw new Error(`[Migration Error] Schema file not found at: ${schemaPath}`);
+  }
 
+  const rawSql = fs.readFileSync(schemaPath, 'utf8');
+  const safeSql = sanitizeMigrationSql(rawSql);
+
+  let pool = dbPool;
+  let shouldClosePool = false;
+
+  if (!pool) {
+    const isNeonOrCloud = connectionUrl.includes('neon.tech') ||
+                          connectionUrl.includes('render.com') ||
+                          connectionUrl.includes('sslmode=require');
+    pool = new Pool({
+      connectionString: connectionUrl,
+      ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false
+    });
+    shouldClosePool = true;
+  }
+
+  const client = await pool.connect();
   try {
-    console.log('[Migration] Connecting to database...');
-    const schemaSqlPath = path.join(__dirname, '../sql/schema.sql');
-    const sql = fs.readFileSync(schemaSqlPath, 'utf8');
-
-    console.log('[Migration] Applying schema.sql...');
-    await pool.query(sql);
-    console.log('[Migration] Schema successfully applied to PostgreSQL database.');
+    console.log('[Migration] Beginning safe database migration transaction...');
+    await client.query('BEGIN');
+    await client.query(safeSql);
+    await client.query('COMMIT');
+    console.log('[Migration] Schema successfully applied and confirmed by PostgreSQL database.');
+    return true;
   } catch (err) {
-    console.error('[Migration] Migration failed:', err.message);
-    process.exit(1);
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('[Migration Error] Rollback error:', rollbackErr.message);
+    }
+    console.error('[Migration Error] Migration failed. Transaction rolled back:', err.message);
+    throw err;
   } finally {
-    await pool.end();
+    client.release();
+    if (shouldClosePool && pool) {
+      await pool.end();
+    }
   }
 }
 
-runMigration();
+async function runCli() {
+  try {
+    await runMigration();
+  } catch (err) {
+    process.exit(1);
+  }
+}
+
+// Execute when invoked directly from command line
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+  runCli();
+}
+

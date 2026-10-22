@@ -4,10 +4,11 @@ import crypto from 'crypto';
 const SAFE_USER_FIELDS = 'id, full_name, email, role, status, phone, avatar_url, email_verified, email_verified_at, google_id, auth_provider, account_linked_at, last_login_at, created_at';
 
 export const userRepository = {
-  async findByEmail(email) {
+  async findByEmail(email, { client = null } = {}) {
     const normalizedEmail = email.trim().toLowerCase();
     if (isPostgresConnected && pool) {
-      const res = await pool.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+      const db = client || pool;
+      const res = await db.query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
       return res.rows[0] || null;
     }
     return memoryStore.users.find(u => u.email.toLowerCase() === normalizedEmail) || null;
@@ -36,17 +37,19 @@ export const userRepository = {
     return memoryStore.users.find(u => u.google_id === googleId) || null;
   },
 
-  async createGoogleUser({ fullName, email, googleId, avatarUrl = null }) {
+  async createGoogleUser({ fullName, email, googleId, avatarUrl = null, role = 'STUDENT' }) {
     const id = crypto.randomUUID();
     const normalizedEmail = email.trim().toLowerCase();
     const now = new Date().toISOString();
+    // Safety check: Public OAuth never creates ADMIN accounts
+    const safeRole = role === 'TEACHER' ? 'TEACHER' : 'STUDENT';
 
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, avatar_url, google_id, auth_provider, account_linked_at, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING ${SAFE_USER_FIELDS}`,
-        [id, fullName.trim(), normalizedEmail, null, 'STUDENT', 'active', true, now, avatarUrl, googleId, 'google', now, now]
+        [id, fullName.trim(), normalizedEmail, null, safeRole, 'active', true, now, avatarUrl, googleId, 'google', now, now]
       );
       return res.rows[0];
     }
@@ -56,7 +59,7 @@ export const userRepository = {
       full_name: fullName.trim(),
       email: normalizedEmail,
       password_hash: null,
-      role: 'STUDENT',
+      role: safeRole,
       status: 'active',
       email_verified: true,
       email_verified_at: now,
@@ -126,13 +129,14 @@ export const userRepository = {
     return safeUser;
   },
 
-  async create({ fullName, email, passwordHash, role = 'STUDENT', emailVerified = false, emailVerifiedAt = null, status = 'active' }) {
+  async create({ fullName, email, passwordHash, role = 'STUDENT', emailVerified = false, emailVerifiedAt = null, status = 'active' }, { client = null } = {}) {
     const id = crypto.randomUUID();
     const normalizedEmail = email.trim().toLowerCase();
     const createdAt = new Date().toISOString();
 
     if (isPostgresConnected && pool) {
-      const res = await pool.query(
+      const db = client || pool;
+      const res = await db.query(
         `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING ${SAFE_USER_FIELDS}`,
@@ -260,22 +264,30 @@ export const userRepository = {
   },
 
   async getAllUsers(filters = {}) {
-    const { role, status, search, limit = 100, offset = 0 } = filters;
+    const { role, status, search, limit = 500, offset = 0 } = filters;
 
     if (isPostgresConnected && pool) {
       let where = 'WHERE 1=1';
       const params = [];
-      if (role) { params.push(role); where += ` AND u.role = $${params.length}`; }
-      if (status) { params.push(status); where += ` AND u.status = $${params.length}`; }
-      if (search) {
-        params.push(`%${search}%`);
-        where += ` AND (u.full_name ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
+      if (role && role !== 'ALL') {
+        params.push(role);
+        where += ` AND u.role = $${params.length}`;
+      }
+      if (status && status !== 'ALL') {
+        params.push(status);
+        where += ` AND u.status = $${params.length}`;
+      }
+      if (search && search.trim()) {
+        params.push(`%${search.trim()}%`);
+        where += ` AND (u.full_name ILIKE $${params.length} OR u.email ILIKE $${params.length} OR u.id::text ILIKE $${params.length} OR COALESCE(u.auth_provider, '') ILIKE $${params.length})`;
       }
       params.push(limit, offset);
       const res = await pool.query(
-        `SELECT u.id, u.full_name, u.email, u.role, u.status, u.email_verified, u.email_verified_at, u.last_login_at, u.created_at,
-                COUNT(DISTINCT e.course_id) as enrolled_courses_count,
-                COUNT(DISTINCT qa.id) as quiz_attempts_count
+        `SELECT u.id, u.full_name, u.email, u.role, u.status, u.phone, u.avatar_url,
+                u.email_verified, u.email_verified_at, u.google_id, u.auth_provider,
+                u.account_linked_at, u.last_login_at, u.created_at,
+                COUNT(DISTINCT e.course_id)::int as enrolled_courses_count,
+                COUNT(DISTINCT qa.id)::int as quiz_attempts_count
          FROM users u
          LEFT JOIN enrollments e ON u.id = e.user_id
          LEFT JOIN quiz_attempts qa ON u.id = qa.user_id
@@ -288,11 +300,16 @@ export const userRepository = {
     }
 
     let users = memoryStore.users;
-    if (role) users = users.filter(u => u.role === role);
-    if (status) users = users.filter(u => u.status === status);
-    if (search) {
-      const q = search.toLowerCase();
-      users = users.filter(u => u.full_name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
+    if (role && role !== 'ALL') users = users.filter(u => u.role === role);
+    if (status && status !== 'ALL') users = users.filter(u => u.status === status);
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      users = users.filter(u =>
+        u.full_name?.toLowerCase().includes(q) ||
+        u.email?.toLowerCase().includes(q) ||
+        u.id?.toLowerCase().includes(q) ||
+        (u.auth_provider || '').toLowerCase().includes(q)
+      );
     }
 
     return users.slice(offset, offset + limit).map(u => {

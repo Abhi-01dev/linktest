@@ -92,7 +92,9 @@ export const mockTestScoringService = {
       case 'case_study': {
         const selected = responseData.selected_index !== undefined
           ? responseData.selected_index
-          : (responseData.selected !== undefined ? responseData.selected : responseData.option_id);
+          : (responseData.selected !== undefined
+              ? responseData.selected
+              : (responseData.selected_option_index !== undefined ? responseData.selected_option_index : responseData.option_id));
         if (selected === undefined || selected === null) {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
@@ -257,7 +259,7 @@ export const mockTestScoringService = {
 
       case 'long_answer':
       case 'subjective': {
-        const text = (responseData.text || responseData.response_text || '').trim();
+        const text = (responseData.text || responseData.response_text || responseData.text_response || '').trim();
         if (!text) {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
@@ -275,24 +277,21 @@ export const mockTestScoringService = {
           return { score_awarded: 0, is_correct: null, is_unanswered: true, evaluation_comment: 'Unanswered' };
         }
 
-        // If execution results are already present in responseData (e.g. candidate ran/submitted code)
+        // If execution results are present, preserve for teacher review while requiring manual grading
         if (responseData.test_cases_passed !== undefined && responseData.total_test_cases) {
-          const ratio = responseData.total_test_cases > 0 ? (responseData.test_cases_passed / responseData.total_test_cases) : 0;
-          const score = parseFloat((ratio * marks).toFixed(2));
-          const isPassed = responseData.test_cases_passed === responseData.total_test_cases;
           return {
-            score_awarded: score,
-            is_correct: isPassed,
-            is_pending_review: false,
-            evaluation_comment: `${responseData.test_cases_passed}/${responseData.total_test_cases} test cases passed.`
+            score_awarded: 0,
+            is_correct: null,
+            is_pending_review: true,
+            evaluation_comment: `${responseData.test_cases_passed}/${responseData.total_test_cases} test cases passed. Pending teacher evaluation.`
           };
         }
 
         return {
           score_awarded: 0,
           is_correct: null,
-          is_pending_review: false,
-          evaluation_comment: 'Code submitted.'
+          is_pending_review: true,
+          evaluation_comment: 'Code submitted. Pending teacher evaluation.'
         };
       }
 

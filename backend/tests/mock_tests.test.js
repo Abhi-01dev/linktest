@@ -50,7 +50,7 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const aBody = await adminRes.json();
     adminToken = aBody.data.token;
@@ -453,5 +453,142 @@ describe('LinkTest Mock Test & AI Examination System Test Suite', () => {
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     assert.strictEqual(adminRes.status, 200);
+  });
+
+  test('13. Proctoring integrity: aliases persist, score updates, and three tab switches disqualify', async () => {
+    const startRes = await fetch(`${baseUrl}/api/mock-tests/${createdTestId}/attempts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(startRes.status, 200);
+    const startBody = await startRes.json();
+    const attemptId = startBody.data.attempt_id;
+
+    const postEvent = async (event_type, severity = 'warning') => {
+      const res = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`
+        },
+        body: JSON.stringify({ event_type, severity })
+      });
+      assert.strictEqual(res.status, 200);
+      return (await res.json()).data;
+    };
+
+    const faceEvent = await postEvent('NO_FACE', 'info');
+    assert.strictEqual(faceEvent.integrity_trust_index, 99);
+    assert.strictEqual(faceEvent.recorded, true);
+    assert.strictEqual(faceEvent.security_warning_count, 0);
+
+    await postEvent('TAB_SWITCH');
+    const duplicateFocusSignal = await postEvent('WINDOW_BLURRED');
+    assert.strictEqual(duplicateFocusSignal.debounced, true);
+    assert.strictEqual(duplicateFocusSignal.integrity_trust_index, 94);
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    await postEvent('WINDOW_BLURRED');
+    await new Promise(resolve => setTimeout(resolve, 3600));
+    const thresholdEvent = await postEvent('TAB_HIDDEN');
+    assert.strictEqual(thresholdEvent.integrity_trust_index, 84);
+    assert.strictEqual(thresholdEvent.disqualified, true);
+    assert.strictEqual(thresholdEvent.auto_submitted, true);
+    assert.strictEqual(thresholdEvent.submission_reason, 'MAX_TAB_SWITCHES');
+
+    const studentAttemptRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}`, {
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    const studentAttempt = (await studentAttemptRes.json()).data;
+    assert.strictEqual(studentAttempt.integrity_trust_index, 84);
+    assert.strictEqual(studentAttempt.disqualified, true);
+    assert.strictEqual(studentAttempt.status, 'AUTO_SUBMITTED');
+
+    const timelineRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${attemptId}/proctoring-events`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const timeline = (await timelineRes.json()).data;
+    assert.strictEqual(timeline.integrity_trust_index, 84);
+    assert.strictEqual(timeline.disqualified, true);
+    assert.deepStrictEqual(
+      timeline.events.map(event => event.event_type),
+      ['FACE_NOT_DETECTED', 'TAB_HIDDEN', 'WINDOW_BLURRED', 'TAB_HIDDEN']
+    );
+  });
+
+  test('14. Security: Third proctoring strike automatically submits and disqualifies the candidate', async () => {
+    const createRes = await fetch(`${baseUrl}/api/mock-tests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        title: `Three Strike Enforcement ${Date.now()}`,
+        subject: 'Computer Science',
+        difficulty: 'medium',
+        duration_minutes: 30,
+        total_marks: 1,
+        questions: [{
+          question_text: 'Which option is correct?',
+          question_type: 'MCQ_SINGLE',
+          marks: 1,
+          options: [
+            { id: 'option-a', text: 'Option A' },
+            { id: 'option-b', text: 'Option B' }
+          ],
+          correct_answer: { selected: 'option-a' }
+        }]
+      })
+    });
+    assert.strictEqual(createRes.status, 201);
+    const createBody = await createRes.json();
+    const testId = createBody.data.test.id;
+
+    const publishRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({ status: 'published' })
+    });
+    assert.strictEqual(publishRes.status, 200);
+
+    const joinRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/join-request`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(joinRes.status, 201);
+    const joinBody = await joinRes.json();
+
+    const approveRes = await fetch(`${baseUrl}/api/teacher/mock-tests/join-requests/${joinBody.data.id}/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    assert.strictEqual(approveRes.status, 200);
+
+    const startRes = await fetch(`${baseUrl}/api/mock-tests/${testId}/attempts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${studentToken}` }
+    });
+    assert.strictEqual(startRes.status, 200);
+    const startBody = await startRes.json();
+    const thresholdAttemptId = startBody.data.attempt_id;
+
+    for (const [index, eventType] of ['SUSPICIOUS_KEY_COMBINATION', 'CAMERA_DISCONNECTED', 'MULTIPLE_FACES'].entries()) {
+      const eventRes = await fetch(`${baseUrl}/api/mock-tests/attempts/${thresholdAttemptId}/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`
+        },
+        body: JSON.stringify({ event_type: eventType })
+      });
+      assert.strictEqual(eventRes.status, 200);
+      const eventBody = await eventRes.json();
+      assert.strictEqual(eventBody.success, true);
+      assert.strictEqual(eventBody.data.security_warning_count, index + 1);
+      assert.strictEqual(eventBody.data.auto_submitted, index === 2);
+    }
   });
 });

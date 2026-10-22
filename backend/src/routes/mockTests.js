@@ -20,10 +20,12 @@ router.post('/:id/attempts', authenticateToken, requireRole('STUDENT'), mockTest
 router.get('/attempts/:attemptId', authenticateToken, mockTestController.getAttempt);
 router.put('/attempts/:attemptId/answers', authenticateToken, mockTestController.saveAnswer);
 router.post('/attempts/:attemptId/events', authenticateToken, mockTestController.logProctoringEvent);
+router.post('/attempts/:attemptId/proctoring-events', authenticateToken, mockTestController.logProctoringEvent);
 router.post('/attempts/:attemptId/security-event', authenticateToken, mockTestController.logProctoringEvent);
 router.post('/attempts/:attemptId/submit', authenticateToken, mockTestController.submitAttempt);
 router.get('/attempts/:attemptId/result', authenticateToken, mockTestController.getAttemptResult);
 router.post('/attempts/:attemptId/responses/:questionId/evaluate', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.evaluateResponse);
+router.post('/attempts/:attemptId/questions/:questionId/evaluate', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.evaluateResponse);
 router.post('/attempts/:attemptId/release', authenticateToken, requireAnyRole('TEACHER', 'ADMIN'), mockTestController.releaseAttemptResult);
 
 // --- Teacher & Admin Proctoring Event Oversight ---

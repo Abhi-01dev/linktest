@@ -247,9 +247,11 @@ export const authController = {
         userEmail: result.user?.email,
         ipAddress,
         userAgent,
-        details: `Google authentication successful for ${result.user?.email}`,
+        details: `Google authentication successful for ${result.user?.email} (${result.user?.role})`,
         metadata: {
           authMethod: 'GOOGLE',
+          role: result.user?.role,
+          userId: result.user?.id,
           action: result.is_new_user ? 'GOOGLE_REGISTER' : (result.account_linked ? 'GOOGLE_ACCOUNT_LINKED' : 'GOOGLE_SIGN_IN'),
           isNewUser: Boolean(result.is_new_user),
           accountLinked: Boolean(result.account_linked)

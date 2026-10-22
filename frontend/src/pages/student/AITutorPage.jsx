@@ -25,7 +25,7 @@ export function AITutorPage() {
     {
       id: 'welcome-1',
       role: 'assistant',
-      content: `Hello ${user?.full_name?.split(' ')[0] || 'there'}! I am **LinkTest AI Tutor**, powered locally by Ollama (${import.meta.env.VITE_OLLAMA_MODEL || 'qwen3:8b'}). 
+      content: `Hello ${user?.full_name?.split(' ')[0] || 'there'}! I am **LinkTest AI Tutor**, ready to mentor and guide your studies.
 
 I can help you:
 • Break down complicated computer science & programming concepts with intuitive analogies.
@@ -121,7 +121,7 @@ What concept would you like to explore today?`,
       const errorMsg = {
         id: 'err-' + Date.now(),
         role: 'assistant',
-        content: `⚠️ AI Service Note: ${err.message || 'Unable to connect to Ollama'}.\n\nEnsure local Ollama is running ('ollama serve') and model 'qwen3:8b' is pulled.`,
+        content: `⚠️ AI Service Note: ${err.message || 'Unable to connect to AI tutor'}.\n\nIf you are running locally, ensure Ollama is running ('ollama serve'). If deployed in production, ensure CLOUD_AI_API_KEY is configured in backend environment variables.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, errorMsg]);
@@ -218,7 +218,9 @@ What concept would you like to explore today?`,
                 }}
               />
               <span>
-                {aiStatus?.available ? `Ollama (${aiStatus.model}) Active` : 'Local AI Offline'}
+                {aiStatus?.available
+                  ? (aiStatus.is_cloud ? `Cloud AI (${aiStatus.provider || 'Groq'}) Active` : `Ollama (${aiStatus.model}) Active`)
+                  : (aiStatus?.is_cloud ? 'Cloud AI Offline' : 'AI Offline')}
               </span>
             </div>
 
@@ -242,7 +244,7 @@ What concept would you like to explore today?`,
           </div>
         </div>
 
-        {/* Offline Diagnostic Alert (if Ollama is not running) */}
+        {/* Offline Diagnostic Alert (if Ollama or Cloud AI is not running) */}
         {aiStatus && !aiStatus.available && (
           <div
             style={{
@@ -261,32 +263,40 @@ What concept would you like to explore today?`,
             <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
             <div>
               <strong style={{ display: 'block', marginBottom: '0.25rem' }}>
-                Local Ollama Service Not Detected
+                {aiStatus.is_cloud ? 'Cloud AI Service Offline' : 'Local Ollama Service Not Detected'}
               </strong>
-              <span>
-                The backend is configured to connect to <code>{aiStatus.endpoint}</code> with model <code>{aiStatus.model}</code>. To activate local AI tutoring on Windows:
-                <br />
-                1. Open PowerShell and run: <code>ollama serve</code>
-                <br />
-                2. In another terminal, pull the model: <code>ollama run qwen3:8b</code>
-                <br />
-                The tutor will automatically connect once Ollama is running.
-              </span>
-
-              <div style={{ marginTop: '0.85rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <button
-                  onClick={handleInitOllama}
-                  disabled={initializingOllama}
-                  className="btn btn-sm btn-primary"
-                  style={{ fontSize: '0.8rem', padding: '0.35rem 0.85rem' }}
-                >
-                  <RefreshCw size={14} className={initializingOllama ? 'animate-spin' : ''} />
-                  <span>{initializingOllama ? 'Testing & Initializing...' : 'Initialize & Connect Ollama'}</span>
-                </button>
-                <span style={{ fontSize: '0.75rem', color: '#B45309' }}>
-                  CLI: <code>npm run ollama:init</code>
+              {aiStatus.is_cloud ? (
+                <span>
+                  The backend is configured to use Cloud AI (<code>{aiStatus.provider}</code>: <code>{aiStatus.model}</code>).
+                  <br />
+                  {aiStatus.status_message || 'Please check that CLOUD_AI_API_KEY is valid and not rate-limited.'}
                 </span>
-              </div>
+              ) : (
+                <span>
+                  The backend is configured to connect to <code>{aiStatus.endpoint}</code> with model <code>{aiStatus.model}</code>.
+                  <br />
+                  1. Local development: Run <code>ollama serve</code> in your terminal and pull <code>ollama run {aiStatus.model || 'qwen2.5:0.5b'}</code>.
+                  <br />
+                  2. Cloud deployment: Add <code>CLOUD_AI_PROVIDER=groq</code> and <code>CLOUD_AI_API_KEY=your_key</code> in backend environment variables.
+                </span>
+              )}
+
+              {!aiStatus.is_cloud && (
+                <div style={{ marginTop: '0.85rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={handleInitOllama}
+                    disabled={initializingOllama}
+                    className="btn btn-sm btn-primary"
+                    style={{ fontSize: '0.8rem', padding: '0.35rem 0.85rem' }}
+                  >
+                    <RefreshCw size={14} className={initializingOllama ? 'animate-spin' : ''} />
+                    <span>{initializingOllama ? 'Testing & Initializing...' : 'Initialize & Connect Ollama'}</span>
+                  </button>
+                  <span style={{ fontSize: '0.75rem', color: '#B45309' }}>
+                    CLI: <code>npm run ollama:init</code>
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}

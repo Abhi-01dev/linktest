@@ -4,6 +4,7 @@
 import { mockTestService } from '../services/mockTestService.js';
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
+import { batchRepository } from '../repositories/batchRepository.js';
 import { notificationService } from '../services/notificationService.js';
 
 export const mockTestController = {
@@ -55,6 +56,25 @@ export const mockTestController = {
           success: false,
           error: { code: 'NOT_FOUND', message: 'Mock test not found.' }
         });
+      }
+
+      // CRITICAL SECURITY: Batch-restricted Mock Tests (Requirements 2 & 20)
+      if (test.batch_id) {
+        if (!req.user) {
+          return res.status(401).json({
+            success: false,
+            error: { code: 'UNAUTHORIZED', message: 'Authentication required to access this batch-restricted mock test.' }
+          });
+        }
+        if (req.user.role === 'STUDENT') {
+          const isEnrolled = await batchRepository.isStudentInBatch(req.user.id, test.batch_id);
+          if (!isEnrolled) {
+            return res.status(403).json({
+              success: false,
+              error: { code: 'FORBIDDEN', message: 'You are not enrolled in the batch assigned to this mock test.' }
+            });
+          }
+        }
       }
 
       const isTeacherOrAdmin = req.user && ['TEACHER', 'ADMIN'].includes(req.user.role);
@@ -260,6 +280,11 @@ export const mockTestController = {
       }
 
       testData.created_by = req.user.id;
+      testData.batch_id = testData.batch_id || req.body.target_batch || req.body.targetBatch || req.body.batchId || null;
+      if (req.body.duration || req.body.duration_minutes) {
+        testData.duration_minutes = parseInt(req.body.duration_minutes || req.body.duration, 10);
+      }
+
       const created = await mockTestRepository.createTest(testData, questions, sections);
 
       await mockTestRepository.logAudit({
@@ -267,7 +292,7 @@ export const mockTestController = {
         actorId: req.user.id,
         actorRole: req.user.role,
         action: 'MOCK_TEST_CREATED',
-        details: { title: created.title, questions_count: questions.length }
+        details: { title: created.title, questions_count: questions.length, batch_id: testData.batch_id }
       });
 
       return res.status(201).json({
@@ -299,6 +324,13 @@ export const mockTestController = {
           success: false,
           error: { code: 'FORBIDDEN', message: 'You do not have permission to edit this test.' }
         });
+      }
+
+      if (req.body.target_batch !== undefined || req.body.targetBatch !== undefined || req.body.batch_id !== undefined || req.body.batchId !== undefined) {
+        testData.batch_id = req.body.batch_id || req.body.target_batch || req.body.targetBatch || req.body.batchId || null;
+      }
+      if (req.body.duration !== undefined || req.body.duration_minutes !== undefined) {
+        testData.duration_minutes = parseInt(req.body.duration_minutes || req.body.duration, 10);
       }
 
       const updated = await mockTestRepository.updateTest(id, testData);
@@ -480,8 +512,17 @@ export const mockTestController = {
     try {
       const { attemptId } = req.params;
       const events = await mockTestRepository.getProctoringEvents(attemptId);
+      const attempt = await mockTestRepository.getAttemptById(attemptId);
 
-      return res.status(200).json({ success: true, data: { events } });
+      return res.status(200).json({
+        success: true,
+        data: {
+          events,
+          integrity_trust_index: attempt?.integrity_trust_index ?? 100,
+          disqualified: Boolean(attempt?.disqualified),
+          proctoring_summary: attempt?.proctoring_summary || {}
+        }
+      });
     } catch (err) {
       next(err);
     }
@@ -859,11 +900,33 @@ export const mockTestController = {
         });
       }
 
+      const numericScore = parseFloat(score);
+      if (numericScore < 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_SCORE', message: 'Awarded score cannot be negative.' }
+        });
+      }
+
+      const question = await mockTestRepository.getQuestionById(questionId);
+      if (question) {
+        const maxMarks = parseFloat(question.marks || 0);
+        if (maxMarks > 0 && numericScore > maxMarks) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'SCORE_EXCEEDS_MAX',
+              message: `Awarded score (${numericScore}) cannot exceed maximum marks (${maxMarks}).`
+            }
+          });
+        }
+      }
+
       const updatedAttempt = await mockTestRepository.manuallyEvaluateResponse(
         attemptId,
         questionId,
         {
-          score: parseFloat(score),
+          score: numericScore,
           comment: comment || '',
           evaluatorId: req.user.id
         }

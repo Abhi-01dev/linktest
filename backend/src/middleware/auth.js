@@ -3,32 +3,69 @@ import { config } from '../config/env.js';
 import { userRepository } from '../repositories/userRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
 
-export async function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+/**
+ * Standard unauthorized (401) JSON response
+ */
+function sendUnauthorized(res, message = 'Unauthorized') {
+  return res.status(401).json({
+    success: false,
+    error: {
+      code: 'UNAUTHORIZED',
+      message
+    }
+  });
+}
 
+/**
+ * Standard forbidden (403) JSON response
+ */
+function sendForbidden(res, code, message) {
+  return res.status(403).json({
+    success: false,
+    error: {
+      code,
+      message
+    }
+  });
+}
+
+/**
+ * Authenticate JWT Bearer Token middleware
+ * Verifies Authorization header, extracts Bearer token, validates signature/expiration,
+ * checks database user existence and account status (active vs suspended/deactivated).
+ */
+export async function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+
+  if (!authHeader || typeof authHeader !== 'string') {
+    return sendUnauthorized(res);
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return sendUnauthorized(res);
+  }
+
+  const token = match[1].trim();
   if (!token) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Access denied. No authentication token provided.'
-      }
-    });
+    return sendUnauthorized(res);
+  }
+
+  const secret = config.jwtSecret || process.env.JWT_SECRET;
+  if (!secret) {
+    return sendUnauthorized(res);
   }
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
+    const decoded = jwt.verify(token, secret);
+    if (!decoded || !decoded.id) {
+      return sendUnauthorized(res);
+    }
+
     const user = await userRepository.findById(decoded.id);
 
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: {
-          code: 'UNAUTHORIZED',
-          message: 'The account associated with this session no longer exists.'
-        }
-      });
+      return sendUnauthorized(res);
     }
 
     if (user.status === 'suspended') {
@@ -41,13 +78,12 @@ export async function authenticateToken(req, res, next) {
         userAgent: req.headers['user-agent'],
         details: `Suspended user attempted to access ${req.method} ${req.originalUrl}`
       }).catch(() => {});
-      return res.status(403).json({
-        success: false,
-        error: {
-          code: 'ACCOUNT_SUSPENDED',
-          message: 'Your account has been suspended. Please contact an administrator.'
-        }
-      });
+
+      return sendForbidden(
+        res,
+        'ACCOUNT_SUSPENDED',
+        'Your account has been suspended. Please contact an administrator.'
+      );
     }
 
     if (user.status === 'deactivated') {
@@ -60,119 +96,64 @@ export async function authenticateToken(req, res, next) {
         userAgent: req.headers['user-agent'],
         details: `Deactivated user attempted to access ${req.method} ${req.originalUrl}`
       }).catch(() => {});
-      return res.status(403).json({
-        success: false,
-        error: {
-          code: 'ACCOUNT_DEACTIVATED',
-          message: 'This account has been deactivated.'
-        }
-      });
+
+      return sendForbidden(
+        res,
+        'ACCOUNT_DEACTIVATED',
+        'This account has been deactivated.'
+      );
     }
 
     req.user = user;
     next();
   } catch (err) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Invalid, malformed, or expired authentication token.'
-      }
-    });
+    // Return standardized 401 without exposing JWT internals or stack traces
+    return sendUnauthorized(res);
   }
 }
 
 export const requireAuth = authenticateToken;
 
 /**
- * Require a specific role (single role check)
- * Usage: requireRole('ADMIN')
+ * Optional authentication middleware:
+ * Populates req.user if a valid token is present; otherwise leaves req.user = null and continues.
  */
-export function requireRole(requiredRole) {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Authentication required for this action.' }
-      });
-    }
-
-    if (req.user.role !== requiredRole) {
-      securityLogRepository.logEvent({
-        eventType: 'UNAUTHORIZED_ACCESS_ATTEMPT',
-        severity: 'WARNING',
-        userId: req.user.id,
-        userEmail: req.user.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for'],
-        userAgent: req.headers['user-agent'],
-        details: `User with role ${req.user.role} attempted to access route requiring ${requiredRole}: ${req.method} ${req.originalUrl}`,
-        metadata: { path: req.originalUrl, method: req.method, requiredRole, userRole: req.user.role }
-      }).catch(() => {});
-      return res.status(403).json({
-        success: false,
-        error: {
-          code: 'FORBIDDEN',
-          message: `Forbidden: Only users with role '${requiredRole}' can perform this operation.`
-        }
-      });
-    }
-
-    next();
-  };
-}
-
-/**
- * Require any of the listed roles
- * Usage: requireAnyRole('ADMIN', 'TEACHER')
- */
-export function requireAnyRole(...roles) {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Authentication required for this action.' }
-      });
-    }
-
-    if (!roles.includes(req.user.role)) {
-      securityLogRepository.logEvent({
-        eventType: 'UNAUTHORIZED_ACCESS_ATTEMPT',
-        severity: 'WARNING',
-        userId: req.user.id,
-        userEmail: req.user.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for'],
-        userAgent: req.headers['user-agent'],
-        details: `User with role ${req.user.role} attempted to access route requiring one of [${roles.join(', ')}]: ${req.method} ${req.originalUrl}`,
-        metadata: { path: req.originalUrl, method: req.method, requiredRoles: roles, userRole: req.user.role }
-      }).catch(() => {});
-      return res.status(403).json({
-        success: false,
-        error: {
-          code: 'FORBIDDEN',
-          message: `Forbidden: This operation requires one of: ${roles.join(', ')}.`
-        }
-      });
-    }
-
-    next();
-  };
-}
-
 export async function optionalAuth(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
+  if (!authHeader || typeof authHeader !== 'string') {
+    req.user = null;
+    return next();
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    req.user = null;
+    return next();
+  }
+
+  const token = match[1].trim();
   if (!token) {
     req.user = null;
     return next();
   }
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret);
+    const secret = config.jwtSecret || process.env.JWT_SECRET;
+    const decoded = jwt.verify(token, secret);
+    if (!decoded || !decoded.id) {
+      req.user = null;
+      return next();
+    }
+
     const user = await userRepository.findById(decoded.id);
-    req.user = user || null;
+    req.user = (user && user.status === 'active') ? user : null;
   } catch (err) {
     req.user = null;
   }
+
   next();
 }
+
+// Re-export role guard functions for seamless backward compatibility
+export { requireRole, requireAnyRole } from './roleGuard.js';
