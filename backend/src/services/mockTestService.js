@@ -492,7 +492,7 @@ export const mockTestService = {
     summary.total_events = (summary.total_events || 0) + 1;
 
     // Strict separate counters
-    const MAX_WARNINGS = 5;
+    const MAX_WARNINGS = 3;
     const MAX_FULLSCREEN_EXITS = 2;
 
     let newSecurityWarningCount = attempt.security_warning_count || 0;
@@ -557,7 +557,7 @@ export const mockTestService = {
       };
     }
 
-    // Limit 2: Fifth security warning -> MAX_SECURITY_WARNINGS
+    // Limit 2: Third security warning -> MAX_SECURITY_WARNINGS
     if (newSecurityWarningCount >= MAX_WARNINGS) {
       await mockTestRepository.updateAttempt(attemptId, {
         warning_count: newWarningCount,
@@ -584,7 +584,7 @@ export const mockTestService = {
         severity: 'CRITICAL',
         userId: student.id,
         userEmail: student.email,
-        details: `Candidate reached maximum security warnings (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
+        details: `Candidate reached maximum security strikes (${newSecurityWarningCount}/${MAX_WARNINGS}). Initiating auto-submission.`,
         metadata: { attemptId, testId: attempt.test_id, warning_count: newSecurityWarningCount }
       });
 
@@ -636,7 +636,7 @@ export const mockTestService = {
       userEmail: student.email,
       details: isFullscreenExit
         ? `Fullscreen exit 1/${MAX_FULLSCREEN_EXITS} recorded.`
-        : `Security warning ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
+        : `Security strike ${newSecurityWarningCount}/${MAX_WARNINGS} recorded (${rawType}).`,
       metadata: {
         attemptId,
         testId: attempt.test_id,
@@ -1462,7 +1462,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       else distribution[4].count++;
     });
 
-    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 5);
+    const flaggedAttempts = attempts.filter(a => a.proctoring_summary?.flagged || a.warning_count >= 3);
 
     const testBatch = test.batch_id ? await batchRepository.getBatchById(test.batch_id) : null;
     const testBatchName = testBatch ? testBatch.name : 'All Batches';
