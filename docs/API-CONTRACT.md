@@ -259,6 +259,9 @@ Authorization: Bearer <jwt_token>
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/admin/dashboard` | Admin | Overview statistics (users, courses, quizzes, attempts) |
 | `GET` | `/api/admin/users` | Admin | List registered users with roles and enrollment counts |
+| `POST` | `/api/batches` | Admin | Create a batch; blank optional relationship IDs are stored as `null` |
+| `PATCH` | `/api/batches/:batchId` | Admin | Update a batch; blank optional relationship IDs clear the association |
+| `DELETE` | `/api/batches/:batchId` | Admin | Delete a batch and its teacher, student, and class-enrollment joins atomically |
 | `POST` | `/api/admin/courses` | Admin | Create a new course |
 | `PUT` | `/api/admin/courses/:id` | Admin | Update course metadata and published status |
 | `DELETE` | `/api/admin/courses/:id` | Admin | Archive or delete a course |
@@ -279,6 +282,8 @@ Authorization: Bearer <jwt_token>
 | `GET` | `/api/admin/leave-requests` | Admin | Review teacher leave requests |
 | `PUT` | `/api/admin/leave-requests/:id` | Admin | Approve or reject teacher leave |
 | `GET` | `/api/admin/audit-logs` | Admin | View tamper-evident audit logs |
+
+Optional foreign-key fields in admin timetable and live-class payloads normalize empty or whitespace-only strings to `null`.
 
 ---
 
@@ -341,4 +346,3 @@ Authorization: Bearer <jwt_token>
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/livekit/status` | Public | Provider status & external meeting fallback report |
 | `POST` | `/api/livekit/token` | Authenticated | Generate WebRTC room token for live lecture |
-

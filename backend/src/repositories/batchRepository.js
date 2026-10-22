@@ -1,5 +1,6 @@
 import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import crypto from 'crypto';
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 export const batchRepository = {
   async getAllBatches(filters = {}) {
@@ -247,11 +248,11 @@ export const batchRepository = {
     } = data;
 
     const normalizedCode = (code || `BATCH-${id.toUpperCase()}`).trim().toUpperCase();
-    const normalizedCourseId = (course_id && String(course_id).trim() !== '') ? String(course_id).trim() : null;
-    const normalizedClassId = (class_id && String(class_id).trim() !== '') ? String(class_id).trim() : null;
-    const normalizedTeacherId = (class_teacher_id && String(class_teacher_id).trim() !== '') ? String(class_teacher_id).trim() : null;
-    const normalizedStartDate = (start_date && String(start_date).trim() !== '') ? String(start_date).trim() : null;
-    const normalizedEndDate = (end_date && String(end_date).trim() !== '') ? String(end_date).trim() : null;
+    const normalizedCourseId = sanitizeOptionalString(course_id);
+    const normalizedClassId = sanitizeOptionalString(class_id);
+    const normalizedTeacherId = sanitizeOptionalString(class_teacher_id);
+    const normalizedStartDate = sanitizeOptionalString(start_date);
+    const normalizedEndDate = sanitizeOptionalString(end_date);
 
     if (isPostgresConnected && pool) {
       const query = `
@@ -301,6 +302,12 @@ export const batchRepository = {
     if (!existing) return null;
 
     const now = new Date().toISOString();
+    const normalizedUpdates = { ...updates };
+    for (const key of ['course_id', 'class_id', 'class_teacher_id', 'start_date', 'end_date']) {
+      if (normalizedUpdates[key] !== undefined) {
+        normalizedUpdates[key] = sanitizeOptionalString(normalizedUpdates[key]);
+      }
+    }
 
     if (isPostgresConnected && pool) {
       const fields = [];
@@ -308,12 +315,9 @@ export const batchRepository = {
 
       const allowed = ['name', 'code', 'course_id', 'class_id', 'description', 'start_date', 'end_date', 'capacity', 'status', 'class_teacher_id'];
       allowed.forEach(key => {
-        if (updates[key] !== undefined) {
-          let val = updates[key];
+        if (normalizedUpdates[key] !== undefined) {
+          let val = normalizedUpdates[key];
           if (key === 'code' && val) val = val.trim().toUpperCase();
-          if (['course_id', 'class_id', 'class_teacher_id', 'start_date', 'end_date'].includes(key)) {
-            val = (val && String(val).trim() !== '') ? String(val).trim() : null;
-          }
           values.push(val);
           fields.push(`${key} = $${values.length}`);
         }
@@ -332,7 +336,7 @@ export const batchRepository = {
 
     const b = (memoryStore.batches || []).find(batch => batch.id === id);
     if (!b) return null;
-    Object.assign(b, updates, { updated_at: now });
+    Object.assign(b, normalizedUpdates, { updated_at: now });
     if (b.code) b.code = b.code.trim().toUpperCase();
     return b;
   },
@@ -346,11 +350,25 @@ export const batchRepository = {
     if (!batch) return { success: false, code: 'NOT_FOUND', message: 'Batch not found.' };
 
     if (isPostgresConnected && pool) {
-      await pool.query('DELETE FROM batch_enrollments WHERE batch_id = $1', [id]);
-      await pool.query('DELETE FROM batch_teachers WHERE batch_id = $1', [id]);
-      await pool.query('DELETE FROM student_class_enrollments WHERE batch_id = $1', [id]);
-      await pool.query('DELETE FROM batches WHERE id = $1', [id]);
-      return { success: true };
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM batch_enrollments WHERE batch_id = $1', [id]);
+        await client.query('DELETE FROM batch_teachers WHERE batch_id = $1', [id]);
+        await client.query('DELETE FROM student_class_enrollments WHERE batch_id = $1', [id]);
+        await client.query('DELETE FROM batches WHERE id = $1', [id]);
+        await client.query('COMMIT');
+        return { success: true };
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          console.error('[BatchRepository] Failed to roll back batch deletion:', rollbackErr.message);
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
     }
 
     if (memoryStore.batch_enrollments) {
@@ -358,6 +376,9 @@ export const batchRepository = {
     }
     if (memoryStore.batch_teachers) {
       memoryStore.batch_teachers = memoryStore.batch_teachers.filter(t => t.batch_id !== id);
+    }
+    if (memoryStore.student_class_enrollments) {
+      memoryStore.student_class_enrollments = memoryStore.student_class_enrollments.filter(e => e.batch_id !== id);
     }
     const idx = (memoryStore.batches || []).findIndex(b => b.id === id);
     if (idx !== -1) memoryStore.batches.splice(idx, 1);
@@ -685,4 +706,3 @@ export const batchRepository = {
     return Array.from(set);
   }
 };
-

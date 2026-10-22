@@ -5,8 +5,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
-
-const sanitizeOptionalString = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const normalizeStatus = (val) => {
   if (!val) return 'Active';
