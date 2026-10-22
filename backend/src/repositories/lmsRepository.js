@@ -171,6 +171,117 @@ export const lmsRepository = {
       });
   },
 
+  async getAssignedClassesWithStudents(teacherId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+       `SELECT bt.id as batch_teacher_id, bt.assigned_at as batch_assigned_at,
+               b.id as batch_id, b.name as batch_name, c.id as class_id, c.name as class_name,
+               ta.id as assignment_id, ta.subject_id, ta.assigned_at as subject_assigned_at,
+               s.name as subject_name, s.code as subject_code,
+               u.id as student_id, u.full_name, u.email, sp.enrollment_number
+        FROM batch_teachers bt
+        JOIN batches b ON b.id = bt.batch_id
+        JOIN classes c ON c.id = b.class_id
+        LEFT JOIN teacher_assignments ta
+          ON ta.teacher_id = bt.teacher_id AND ta.batch_id = bt.batch_id AND ta.class_id = b.class_id
+        LEFT JOIN subjects s ON s.id = ta.subject_id
+        LEFT JOIN batch_enrollments be ON be.batch_id = b.id AND be.status = 'active'
+        LEFT JOIN users u ON u.id = be.student_id AND u.role = 'STUDENT'
+        LEFT JOIN student_profiles sp ON sp.user_id = u.id
+        WHERE bt.teacher_id = $1
+        ORDER BY c.name, b.name, s.name, u.full_name`,
+       [teacherId]
+      );
+
+      const classesByAssignment = new Map();
+      for (const row of res.rows) {
+       const key = `${row.batch_id}:${row.subject_id || ''}`;
+       let assignment = classesByAssignment.get(key);
+       if (!assignment) {
+         assignment = {
+           id: row.assignment_id || row.batch_teacher_id,
+           teacher_id: teacherId,
+           class_id: row.class_id,
+           batch_id: row.batch_id,
+           subject_id: row.subject_id,
+           assigned_at: row.subject_assigned_at || row.batch_assigned_at,
+           class_name: row.class_name,
+           batch_name: row.batch_name,
+           subject_name: row.subject_name,
+           subject_code: row.subject_code,
+           students: [],
+           student_count: 0
+         };
+         classesByAssignment.set(key, assignment);
+       }
+       if (row.student_id) {
+         assignment.students.push({
+           student_id: row.student_id,
+           full_name: row.full_name,
+           enrollment_number: row.enrollment_number,
+           email: row.email
+         });
+       }
+      }
+
+      const assignments = Array.from(classesByAssignment.values());
+      for (const assignment of assignments) {
+       assignment.student_count = assignment.students.length;
+      }
+      return assignments;
+    }
+
+    const assignedBatches = memoryStore.batch_teachers.filter(item => item.teacher_id === teacherId);
+    const classesByAssignment = new Map();
+    for (const batchTeacher of assignedBatches) {
+      const batch = memoryStore.batches.find(item => item.id === batchTeacher.batch_id);
+      if (!batch) continue;
+      const cls = memoryStore.classes.find(item => item.id === batch.class_id);
+      if (!cls) continue;
+      const subjectAssignments = memoryStore.teacher_assignments.filter(assignment =>
+       assignment.teacher_id === teacherId &&
+       assignment.batch_id === batch.id &&
+       assignment.class_id === batch.class_id
+      );
+      const assignments = subjectAssignments.length > 0 ? subjectAssignments : [null];
+      for (const subjectAssignment of assignments) {
+       const subject = subjectAssignment
+         ? memoryStore.subjects.find(item => item.id === subjectAssignment.subject_id)
+         : null;
+       const students = memoryStore.batch_enrollments
+         .filter(enrollment => enrollment.batch_id === batch.id && enrollment.status === 'active')
+         .map(enrollment => {
+           const user = memoryStore.users.find(item => item.id === enrollment.student_id && item.role === 'STUDENT');
+           const profile = memoryStore.student_profiles.find(item => item.user_id === enrollment.student_id);
+           return user ? {
+             student_id: user.id,
+             full_name: user.full_name,
+             enrollment_number: profile?.enrollment_number || null,
+             email: user.email
+           } : null;
+         })
+         .filter(Boolean)
+         .sort((left, right) => left.full_name.localeCompare(right.full_name));
+       const assignmentId = subjectAssignment?.id || batchTeacher.id;
+       classesByAssignment.set(`${batch.id}:${subjectAssignment?.subject_id || ''}`, {
+         id: assignmentId,
+         teacher_id: teacherId,
+         class_id: cls.id,
+         batch_id: batch.id,
+         subject_id: subjectAssignment?.subject_id || null,
+         assigned_at: subjectAssignment?.assigned_at || batchTeacher.assigned_at,
+         class_name: cls.name,
+         batch_name: batch.name,
+         subject_name: subject?.name,
+         subject_code: subject?.code,
+         students,
+         student_count: students.length
+       });
+      }
+    }
+    return Array.from(classesByAssignment.values());
+  },
+
   async getAssignmentById(assignmentId) {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
