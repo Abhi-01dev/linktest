@@ -31,6 +31,67 @@ function createTimetableCollisionError(conflicts) {
 }
 
 export const lmsRepository = {
+  async isTeacherAssignedToStudent(teacherId, studentId) {
+    if (isPostgresConnected && pool) {
+      const res = await pool.query(
+        `SELECT
+           EXISTS (
+             SELECT 1
+             FROM student_class_enrollments sce
+             WHERE sce.student_id = $2
+               AND (
+                 EXISTS (
+                   SELECT 1
+                   FROM teacher_assignments ta
+                   WHERE ta.teacher_id = $1
+                     AND ta.class_id = sce.class_id
+                     AND (ta.batch_id IS NULL OR ta.batch_id = sce.batch_id)
+                 )
+                 OR EXISTS (
+                   SELECT 1
+                   FROM batch_teachers bt
+                   WHERE bt.teacher_id = $1
+                     AND bt.batch_id = sce.batch_id
+                 )
+               )
+           )
+           OR EXISTS (
+             SELECT 1
+             FROM batch_enrollments be
+             JOIN batch_teachers bt ON bt.batch_id = be.batch_id
+             WHERE be.student_id = $2
+               AND be.status = 'active'
+               AND bt.teacher_id = $1
+           ) AS authorized`,
+        [teacherId, studentId]
+      );
+      return Boolean(res.rows[0]?.authorized);
+    }
+
+    const classEnrollments = (memoryStore.student_class_enrollments || [])
+      .filter(enrollment => enrollment.student_id === studentId);
+    const classAssignment = classEnrollments.some(enrollment =>
+      (memoryStore.teacher_assignments || []).some(assignment =>
+        assignment.teacher_id === teacherId &&
+        assignment.class_id === enrollment.class_id &&
+        (!assignment.batch_id || assignment.batch_id === enrollment.batch_id)
+      )
+    );
+    const assignedBatches = new Set([
+      ...classEnrollments.map(enrollment => enrollment.batch_id).filter(Boolean),
+      ...(memoryStore.batch_enrollments || [])
+        .filter(enrollment => enrollment.student_id === studentId && enrollment.status === 'active')
+        .map(enrollment => enrollment.batch_id)
+    ]);
+    const batchAssignment = [...assignedBatches].some(batchId =>
+      (memoryStore.batch_teachers || []).some(
+        assignment => assignment.teacher_id === teacherId && assignment.batch_id === batchId
+      )
+    );
+
+    return classAssignment || batchAssignment;
+  },
+
   // ============================================================
   // CLASSES
   // ============================================================

@@ -4,6 +4,7 @@
 import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { mockTestJoinRequestRepository } from '../repositories/mockTestJoinRequestRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
+import { lmsRepository } from '../repositories/lmsRepository.js';
 import { batchRepository } from '../repositories/batchRepository.js';
 import { mockTestScoringService } from './mockTestScoringService.js';
 import { aiService } from './aiService.js';
@@ -868,6 +869,22 @@ export const mockTestService = {
       throw err;
     }
 
+    // Critical Security: Students can only view their own result.
+    if (student.role === 'STUDENT' && attempt.student_id !== student.id) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
+      const err = new Error('You are not authorized to view this result.');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
+
     const test = await mockTestRepository.getTestById(attempt.test_id);
     if (!test) {
       const err = new Error('Associated examination record not found.');
@@ -875,22 +892,32 @@ export const mockTestService = {
       throw err;
     }
 
-    // Critical Security: Student can ONLY view their own attempt result and must belong to target batch
-    if (student.role === 'STUDENT') {
-      if (attempt.student_id !== student.id) {
-        const err = new Error('You are not authorized to view this result.');
+    if (
+      student.role === 'TEACHER' &&
+      test.created_by !== student.id &&
+      !(await lmsRepository.isTeacherAssignedToStudent(student.id, attempt.student_id))
+    ) {
+      await securityLogRepository.logEvent({
+        eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+        severity: 'HIGH',
+        userId: student.id,
+        userEmail: student.email,
+        details: 'Unauthorized mock-test scorecard access was denied.',
+        metadata: { attemptId, targetStudentId: attempt.student_id, resourceType: 'mock_test_attempt' }
+      });
+      const err = new Error('You are not authorized to view this result.');
+      err.status = 403;
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
+    if (student.role === 'STUDENT' && test.batch_id) {
+      const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
+      if (!isEnrolled) {
+        const err = new Error('You are not enrolled in the batch assigned to this mock test.');
         err.status = 403;
+        err.statusCode = 403;
+        err.code = 'FORBIDDEN';
         throw err;
-      }
-      if (test.batch_id) {
-        const isEnrolled = await batchRepository.isStudentInBatch(student.id, test.batch_id);
-        if (!isEnrolled) {
-          const err = new Error('You are not enrolled in the batch assigned to this mock test.');
-          err.status = 403;
-          err.statusCode = 403;
-          err.code = 'FORBIDDEN';
-          throw err;
-        }
       }
     }
 
