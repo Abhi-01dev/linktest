@@ -10,6 +10,7 @@ import { authService } from '../services/authService.js';
 import { getDbStatus, pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const inviteTeacherSchema = z.object({
@@ -20,6 +21,21 @@ const inviteTeacherSchema = z.object({
 
 const updateStatusSchema = z.object({
   status: z.enum(['active', 'suspended', 'deactivated'])
+});
+
+const createStudentSchema = z.object({
+  full_name: z.string().trim().min(2).max(150),
+  email: z.string().trim().email().transform(value => value.toLowerCase()),
+  password: z.string().min(8).max(128).optional(),
+  enrollment_id: z.string().trim().min(1).max(64).optional(),
+  phone: z.string().trim().max(32).optional()
+});
+
+const studentStatusSchema = z.object({
+  status: z.preprocess(
+    value => typeof value === 'string' ? value.toLowerCase() : value,
+    z.enum(['active', 'suspended'])
+  )
 });
 
 const assignTeacherSchema = z.object({
@@ -165,13 +181,19 @@ export const adminController = {
 
   async createStudent(req, res, next) {
     try {
-      const { email, full_name, password = 'StudentDefault123!', phone } = req.body;
-      if (!email || !full_name) {
-        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'email and full_name are required.' } });
-      }
+      const { email, full_name, password: providedPassword, enrollment_id, phone } = createStudentSchema.parse(req.body);
       const existing = await userRepository.findByEmail(email);
       if (existing) {
         return res.status(409).json({ success: false, error: { code: 'EMAIL_ALREADY_EXISTS', message: 'A user with this email already exists.' } });
+      }
+      const password = providedPassword || crypto.randomBytes(24).toString('base64url');
+      const generatedEnrollmentId = enrollment_id || `LT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      const existingEnrollment = await lmsRepository.getStudentProfileByEnrollmentNumber(generatedEnrollmentId);
+      if (existingEnrollment) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'ENROLLMENT_ID_ALREADY_EXISTS', message: 'A student with this enrollment ID already exists.' }
+        });
       }
       const passwordHash = await bcrypt.hash(password, 10);
       const student = await userRepository.create({
@@ -183,6 +205,7 @@ export const adminController = {
         emailVerifiedAt: new Date().toISOString(),
         status: 'active'
       });
+      await lmsRepository.upsertStudentProfile(student.id, { enrollmentNumber: generatedEnrollmentId });
       if (phone) {
         await userRepository.updateProfile(student.id, { phone });
       }
@@ -192,9 +215,17 @@ export const adminController = {
         action: 'STUDENT_CREATED',
         resourceType: 'user',
         resourceId: student.id,
-        summary: `Admin created student account for ${email}`
+        summary: `Admin created student account with enrollment ID ${generatedEnrollmentId}`
       });
-      return res.status(201).json({ success: true, data: { student }, message: 'Student created successfully.' });
+      return res.status(201).json({
+        success: true,
+        data: {
+          student,
+          enrollment_id: generatedEnrollmentId,
+          ...(providedPassword ? {} : { temporary_password: password })
+        },
+        message: 'Student created successfully.'
+      });
     } catch (err) { next(err); }
   },
 
@@ -228,6 +259,47 @@ export const adminController = {
       if (!updated) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found.' } });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'USER_STATUS_CHANGED', resourceType: 'user', resourceId: id, summary: `User ${updated.email} status changed to ${status}` });
       return res.status(200).json({ success: true, data: { user: updated }, message: `User status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async updateStudentStatus(req, res, next) {
+    try {
+      const { status } = studentStatusSchema.parse(req.body);
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const updated = await userRepository.updateStatus(student.id, status);
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_STATUS_CHANGED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: `Student status changed to ${status}`,
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: { student: updated }, message: `Student status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async resetStudentPassword(req, res, next) {
+    try {
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const result = await authService.sendAdminPasswordReset({ user: student });
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_CREDENTIAL_RESET_REQUESTED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: 'Admin requested a secure password reset link for student',
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: result, message: result.message });
     } catch (err) { next(err); }
   },
 

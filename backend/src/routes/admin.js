@@ -25,6 +25,8 @@ router.post('/students', adminController.createStudent);
 router.get('/students/:id', adminController.getStudentDetail);
 router.put('/students/:id', adminController.updateStudent);
 router.post('/students/:id/status', adminController.updateUserStatus);
+router.put('/students/:id/status', adminController.updateStudentStatus);
+router.post('/students/:id/reset-password', adminController.resetStudentPassword);
 router.post('/students/enroll', adminController.enrollStudent);
 
 // ── Teacher Management ─────────────────────────────────────

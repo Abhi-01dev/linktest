@@ -296,6 +296,11 @@ export const emailService = {
       const info = await transporter.sendMail(payload);
       return { success: true, messageId: info.messageId };
     }
+    if (config.nodeEnv === 'production') {
+      const err = new Error('Password reset email cannot be sent because SMTP is not configured.');
+      err.code = 'EMAIL_DELIVERY_FAILED';
+      throw err;
+    }
     console.log('================================================================');
     console.log('  [LinkTest Email Simulator] PASSWORD RESET LINK');
     console.log('----------------------------------------------------------------');

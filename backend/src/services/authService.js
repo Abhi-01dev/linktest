@@ -618,6 +618,38 @@ export const authService = {
     };
   },
 
+  async sendAdminPasswordReset({ user }) {
+    if (!user.email_verified) {
+      const err = new Error('Student email must be verified before a password reset can be sent.');
+      err.statusCode = 400;
+      err.code = 'EMAIL_NOT_VERIFIED';
+      throw err;
+    }
+
+    const rawToken = generateSecureToken();
+    const tokenHash = hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await passwordResetRepository.create({ userId: user.id, tokenHash, expiresAt });
+    const resetUrl = `${config.frontendUrl}/reset-password?token=${rawToken}`;
+
+    try {
+      await emailService.sendPasswordReset({
+        email: user.email,
+        fullName: user.full_name,
+        resetUrl,
+        expiresAt
+      });
+    } catch (err) {
+      console.error('[PasswordReset] Email delivery error:', err.message);
+      const deliveryErr = new Error('Failed to deliver password reset email.');
+      deliveryErr.statusCode = 502;
+      deliveryErr.code = 'EMAIL_DELIVERY_FAILED';
+      throw deliveryErr;
+    }
+
+    return { message: 'A secure password reset link has been sent to the student.' };
+  },
+
   async resetPassword({ token, newPassword }) {
     const tokenHash = hashToken(token);
     const record = await passwordResetRepository.findByTokenHash(tokenHash);
