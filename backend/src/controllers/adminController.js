@@ -10,107 +10,220 @@ import { authService } from '../services/authService.js';
 import { getDbStatus, pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import crypto from 'node:crypto';
+import { sanitizeOptionalString } from '../utils/sanitize.js';
 
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
-  full_name: z.string().min(2).max(150)
+  full_name: z.string().min(2).max(150),
+  department: z.string().trim().min(2).max(150)
 });
 
 const updateStatusSchema = z.object({
   status: z.enum(['active', 'suspended', 'deactivated'])
 });
 
+const createStudentSchema = z.object({
+  full_name: z.string().trim().min(2).max(150),
+  email: z.string().trim().email().transform(value => value.toLowerCase()),
+  password: z.string().min(8).max(128).optional(),
+  enrollment_id: z.string().trim().min(1).max(64).optional(),
+  phone: z.string().trim().max(32).optional()
+});
+
+const studentStatusSchema = z.object({
+  status: z.preprocess(
+    value => typeof value === 'string' ? value.toLowerCase() : value,
+    z.enum(['active', 'suspended'])
+  )
+});
+
 const assignTeacherSchema = z.object({
-  teacher_id: z.string().min(1, 'teacher_id is required').optional(),
-  class_id: z.string().optional().nullable(),
-  batch_id: z.string().optional().nullable(),
-  subject_id: z.string().min(1, 'subject_id is required')
+  teacher_id: z.string().trim().min(1, 'teacher_id is required').optional(),
+  class_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  batch_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  subject_id: z.string().optional().nullable().transform(sanitizeOptionalString)
+});
+
+const subjectQuerySchema = z.object({
+  status: z.enum(['active', 'inactive']).optional(),
+  department: z.string().trim().min(1).max(150).optional()
+});
+
+const createSubjectSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  code: z.string().trim().toUpperCase().min(2).max(50).regex(/^[A-Z0-9]+$/, 'Subject code must contain only letters and numbers'),
+  description: z.string().trim().max(2000).optional().nullable(),
+  department: z.string().trim().min(1).max(150).optional().nullable(),
+  status: z.enum(['active', 'inactive']).default('active')
+});
+
+const createClassSchema = z.object({
+  name: z.string().trim().min(2).max(150),
+  description: z.string().trim().max(2000).optional().default(''),
+  academic_session_id: z.string().optional().nullable().transform(value =>
+    typeof value === 'string' && value.trim() ? value.trim() : null
+  )
+});
+
+const timetableQuerySchema = z.object({
+  class_id: z.string().optional(),
+  batch_id: z.string().optional(),
+  teacher_id: z.string().optional(),
+  day_of_week: z.coerce.number().int().min(1).max(7).optional()
+});
+
+const createTimetableEntrySchema = z.object({
+  class_id: z.string().trim().min(1),
+  batch_id: z.string().optional().nullable().transform(sanitizeOptionalString),
+  subject_id: z.string().trim().min(1),
+  teacher_id: z.string().trim().min(1),
+  day_of_week: z.coerce.number().int().min(1).max(7),
+  start_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'start_time must use HH:MM 24-hour format'),
+  end_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'end_time must use HH:MM 24-hour format'),
+  room: z.string().trim().max(50).nullable().optional(),
+  academic_session_id: z.string().optional().nullable().transform(sanitizeOptionalString)
+}).refine(entry => entry.start_time < entry.end_time, {
+  message: 'end_time must be later than start_time',
+  path: ['end_time']
 });
 
 export const adminController = {
   // ── Dashboard ──────────────────────────────────────────────
   async getDashboardStats(req, res, next) {
     try {
-      let stats;
+      let counts;
+      let recentActivity;
       if (isPostgresConnected && pool) {
-        const [uCounts, cRes, qRes, aRes, classRes, liveRes, assignRes, batchRes] = await Promise.all([
-          pool.query(`SELECT role, status, COUNT(*)::int as count FROM users GROUP BY role, status`),
-          pool.query(`SELECT COUNT(*)::int as count FROM courses WHERE published = true`),
-          pool.query(`SELECT COUNT(*)::int as count FROM quizzes`),
-          pool.query(`SELECT COUNT(*)::int as count FROM quiz_attempts`),
-          pool.query(`SELECT COUNT(*)::int as count FROM classes`),
-          pool.query(`SELECT COUNT(*)::int as count FROM live_class_sessions WHERE status = 'scheduled' AND scheduled_at > NOW()`),
-          pool.query(`SELECT COUNT(*)::int as count FROM assignments WHERE status = 'published' AND due_date >= CURRENT_DATE`),
-          pool.query(`SELECT COUNT(*)::int as count FROM batches WHERE status = 'Active'`)
-        ]);
-
-        const byRoleStatus = {};
-        uCounts.rows.forEach(r => {
-          if (!byRoleStatus[r.role]) byRoleStatus[r.role] = { total: 0, active: 0 };
-          byRoleStatus[r.role].total += r.count;
-          if (r.status === 'active') byRoleStatus[r.role].active += r.count;
-        });
-
+        const countResult = await pool.query(`
+          WITH user_metrics AS (
+            SELECT
+              COUNT(*) FILTER (WHERE role = 'STUDENT')::int AS total_students,
+              COUNT(*) FILTER (WHERE role = 'STUDENT' AND status = 'active')::int AS active_students,
+              COUNT(*) FILTER (WHERE role = 'TEACHER')::int AS total_teachers,
+              COUNT(*) FILTER (WHERE role = 'TEACHER' AND status = 'active')::int AS active_teachers,
+              COUNT(*)::int AS user_count
+            FROM users
+          ),
+          course_metrics AS (
+            SELECT COUNT(*)::int AS course_count,
+                   COUNT(*) FILTER (WHERE published = true)::int AS active_courses
+            FROM courses
+          ),
+          quiz_metrics AS (SELECT COUNT(*)::int AS quiz_count FROM quizzes),
+          quiz_attempt_metrics AS (SELECT COUNT(*)::int AS attempt_count FROM quiz_attempts),
+          class_metrics AS (SELECT COUNT(*)::int AS class_count FROM classes),
+          batch_metrics AS (
+            SELECT COUNT(*) FILTER (WHERE LOWER(status) = 'active')::int AS batch_count
+            FROM batches
+          ),
+          lesson_metrics AS (SELECT COUNT(*)::int AS lesson_count FROM lessons),
+          live_class_metrics AS (
+            SELECT COUNT(*)::int AS upcoming_live_classes
+            FROM live_class_sessions
+            WHERE status = 'scheduled' AND scheduled_at > NOW()
+          ),
+          assignment_metrics AS (
+            SELECT COUNT(*)::int AS pending_assignments
+            FROM assignments
+            WHERE status = 'published' AND due_date >= CURRENT_DATE
+          ),
+          mock_test_metrics AS (SELECT COUNT(*)::int AS mock_test_count FROM mock_tests),
+          mock_attempt_metrics AS (
+            SELECT COUNT(*)::int AS mock_test_attempt_count,
+                   COUNT(*) FILTER (WHERE status IN ('submitted', 'evaluated'))::int AS conducted_exams
+            FROM mock_test_attempts
+          )
+          SELECT * FROM user_metrics
+          CROSS JOIN course_metrics
+          CROSS JOIN quiz_metrics
+          CROSS JOIN quiz_attempt_metrics
+          CROSS JOIN class_metrics
+          CROSS JOIN batch_metrics
+          CROSS JOIN lesson_metrics
+          CROSS JOIN live_class_metrics
+          CROSS JOIN assignment_metrics
+          CROSS JOIN mock_test_metrics
+          CROSS JOIN mock_attempt_metrics
+        `);
+        counts = countResult.rows[0];
         const recentAttempts = await pool.query(
           `SELECT qa.id, qa.score, qa.total_questions, qa.submitted_at, u.full_name as student_name, q.title as quiz_title
            FROM quiz_attempts qa JOIN users u ON qa.user_id = u.id JOIN quizzes q ON qa.quiz_id = q.id
            ORDER BY qa.submitted_at DESC LIMIT 5`
         );
-
-        stats = {
-          total_students: byRoleStatus['STUDENT']?.total || 0,
-          active_students: byRoleStatus['STUDENT']?.active || 0,
-          total_teachers: byRoleStatus['TEACHER']?.total || 0,
-          active_teachers: byRoleStatus['TEACHER']?.active || 0,
-          active_courses: cRes.rows[0]?.count || 0,
-          course_count: cRes.rows[0]?.count || 0,
-          user_count: (byRoleStatus['STUDENT']?.total || 0) + (byRoleStatus['TEACHER']?.total || 0) + (byRoleStatus['ADMIN']?.total || 0),
-          quiz_count: qRes.rows[0]?.count || 0,
-          attempt_count: aRes.rows[0]?.count || 0,
-          class_count: classRes.rows[0]?.count || 0,
-          batch_count: batchRes.rows[0]?.count || 0,
-          upcoming_live_classes: liveRes.rows[0]?.count || 0,
-          pending_assignments: assignRes.rows[0]?.count || 0,
-          recent_activity: recentAttempts.rows,
-          database: getDbStatus()
-        };
+        recentActivity = recentAttempts.rows;
       } else {
-        const roleCounts = await userRepository.countByRole();
-        const activeStudents = memoryStore.users.filter(u => u.role === 'STUDENT' && u.status === 'active').length;
-        const activeTeachers = memoryStore.users.filter(u => u.role === 'TEACHER' && u.status === 'active').length;
+        const users = memoryStore.users || [];
+        const courses = memoryStore.courses || [];
+        const quizzes = memoryStore.quizzes || [];
+        const quizAttempts = memoryStore.quiz_attempts || [];
+        const mockTests = memoryStore.mock_tests || [];
+        const mockTestAttempts = memoryStore.mock_test_attempts || [];
         const now = new Date();
-        const upcoming = memoryStore.live_class_sessions.filter(
+        const upcoming = (memoryStore.live_class_sessions || []).filter(
           s => s.status === 'scheduled' && new Date(s.scheduled_at) > now
         ).length;
-        const pendingAssign = memoryStore.assignments.filter(
+        const pendingAssign = (memoryStore.assignments || []).filter(
           a => a.status === 'published' && new Date(a.due_date) >= now
         ).length;
-        const recent = [...memoryStore.quiz_attempts].reverse().slice(0, 5).map(qa => {
-          const u = memoryStore.users.find(user => user.id === qa.user_id);
-          const q = memoryStore.quizzes.find(quiz => quiz.id === qa.quiz_id);
+        recentActivity = [...quizAttempts].reverse().slice(0, 5).map(qa => {
+          const u = users.find(user => user.id === qa.user_id);
+          const q = quizzes.find(quiz => quiz.id === qa.quiz_id);
           return { id: qa.id, score: qa.score, total_questions: qa.total_questions, submitted_at: qa.submitted_at, student_name: u?.full_name || 'Student', quiz_title: q?.title || 'Assessment' };
         });
-
-        stats = {
-          total_students: roleCounts.STUDENT,
-          active_students: activeStudents,
-          total_teachers: roleCounts.TEACHER,
-          active_teachers: activeTeachers,
-          active_courses: memoryStore.courses.filter(c => c.published).length,
-          course_count: memoryStore.courses.length,
-          user_count: memoryStore.users.length,
-          lesson_count: memoryStore.lessons.length,
-          quiz_count: memoryStore.quizzes.length,
-          attempt_count: memoryStore.quiz_attempts.length,
-          class_count: memoryStore.classes.length,
-          batch_count: (memoryStore.batches || []).filter(b => b.status === 'Active').length,
+        counts = {
+          total_students: users.filter(user => user.role === 'STUDENT').length,
+          active_students: users.filter(user => user.role === 'STUDENT' && user.status === 'active').length,
+          total_teachers: users.filter(user => user.role === 'TEACHER').length,
+          active_teachers: users.filter(user => user.role === 'TEACHER' && user.status === 'active').length,
+          user_count: users.length,
+          course_count: courses.length,
+          active_courses: courses.filter(course => course.published).length,
+          quiz_count: quizzes.length,
+          attempt_count: quizAttempts.length,
+          class_count: (memoryStore.classes || []).length,
+          batch_count: (memoryStore.batches || []).filter(batch => String(batch.status).toLowerCase() === 'active').length,
+          lesson_count: (memoryStore.lessons || []).length,
           upcoming_live_classes: upcoming,
           pending_assignments: pendingAssign,
-          recent_activity: recent,
-          database: getDbStatus()
+          mock_test_count: mockTests.length,
+          mock_test_attempt_count: mockTestAttempts.length,
+          conducted_exams: mockTestAttempts.filter(attempt => ['submitted', 'evaluated'].includes(attempt.status)).length
         };
       }
 
+      const stats = {
+        total_students: counts.total_students,
+        active_students: counts.active_students,
+        total_teachers: counts.total_teachers,
+        active_teachers: counts.active_teachers,
+        active_courses: counts.active_courses,
+        course_count: counts.course_count,
+        user_count: counts.user_count,
+        lesson_count: counts.lesson_count,
+        quiz_count: counts.quiz_count,
+        attempt_count: counts.attempt_count,
+        class_count: counts.class_count,
+        batch_count: counts.batch_count,
+        upcoming_live_classes: counts.upcoming_live_classes,
+        pending_assignments: counts.pending_assignments,
+        mock_test_count: counts.mock_test_count,
+        mock_test_attempt_count: counts.mock_test_attempt_count,
+        totalStudents: counts.total_students,
+        totalTeachers: counts.total_teachers,
+        activeTeachers: counts.active_teachers,
+        activeBatches: counts.batch_count,
+        totalCourses: counts.course_count,
+        totalExams: counts.mock_test_count,
+        conductedExams: counts.conducted_exams,
+        totalExamAttempts: counts.mock_test_attempt_count,
+        student_count: counts.total_students,
+        teacher_count: counts.total_teachers,
+        systemUptime: Math.floor(process.uptime()),
+        recent_activity: recentActivity,
+        database: getDbStatus()
+      };
       return res.status(200).json({ success: true, data: { stats }, message: 'Admin dashboard statistics.' });
     } catch (err) { next(err); }
   },
@@ -118,9 +231,17 @@ export const adminController = {
   // ── User Management ────────────────────────────────────────
   async getUsers(req, res, next) {
     try {
-      const { role, status, search, limit, offset } = req.query;
-      const users = await userRepository.getAllUsers({ role, status, search, limit: parseInt(limit) || 100, offset: parseInt(offset) || 0 });
-      return res.status(200).json({ success: true, data: { users }, message: 'User list retrieved.' });
+      const { role, status, search, limit, offset, page } = req.query;
+      const parsedLimit = limit === 'all' ? 1000 : (parseInt(limit, 10) || 500);
+      const parsedOffset = offset !== undefined ? parseInt(offset, 10) : ((parseInt(page, 10) || 1) - 1) * parsedLimit;
+      const users = await userRepository.getAllUsers({
+        role,
+        status,
+        search,
+        limit: parsedLimit,
+        offset: parsedOffset
+      });
+      return res.status(200).json({ success: true, data: { users, count: users.length }, message: 'User list retrieved.' });
     } catch (err) { next(err); }
   },
 
@@ -134,13 +255,19 @@ export const adminController = {
 
   async createStudent(req, res, next) {
     try {
-      const { email, full_name, password = 'StudentDefault123!', phone } = req.body;
-      if (!email || !full_name) {
-        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'email and full_name are required.' } });
-      }
+      const { email, full_name, password: providedPassword, enrollment_id, phone } = createStudentSchema.parse(req.body);
       const existing = await userRepository.findByEmail(email);
       if (existing) {
         return res.status(409).json({ success: false, error: { code: 'EMAIL_ALREADY_EXISTS', message: 'A user with this email already exists.' } });
+      }
+      const password = providedPassword || crypto.randomBytes(24).toString('base64url');
+      const generatedEnrollmentId = enrollment_id || `LT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      const existingEnrollment = await lmsRepository.getStudentProfileByEnrollmentNumber(generatedEnrollmentId);
+      if (existingEnrollment) {
+        return res.status(409).json({
+          success: false,
+          error: { code: 'ENROLLMENT_ID_ALREADY_EXISTS', message: 'A student with this enrollment ID already exists.' }
+        });
       }
       const passwordHash = await bcrypt.hash(password, 10);
       const student = await userRepository.create({
@@ -152,6 +279,7 @@ export const adminController = {
         emailVerifiedAt: new Date().toISOString(),
         status: 'active'
       });
+      await lmsRepository.upsertStudentProfile(student.id, { enrollmentNumber: generatedEnrollmentId });
       if (phone) {
         await userRepository.updateProfile(student.id, { phone });
       }
@@ -161,9 +289,17 @@ export const adminController = {
         action: 'STUDENT_CREATED',
         resourceType: 'user',
         resourceId: student.id,
-        summary: `Admin created student account for ${email}`
+        summary: `Admin created student account with enrollment ID ${generatedEnrollmentId}`
       });
-      return res.status(201).json({ success: true, data: { student }, message: 'Student created successfully.' });
+      return res.status(201).json({
+        success: true,
+        data: {
+          student,
+          enrollment_id: generatedEnrollmentId,
+          ...(providedPassword ? {} : { temporary_password: password })
+        },
+        message: 'Student created successfully.'
+      });
     } catch (err) { next(err); }
   },
 
@@ -197,6 +333,47 @@ export const adminController = {
       if (!updated) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found.' } });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'USER_STATUS_CHANGED', resourceType: 'user', resourceId: id, summary: `User ${updated.email} status changed to ${status}` });
       return res.status(200).json({ success: true, data: { user: updated }, message: `User status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async updateStudentStatus(req, res, next) {
+    try {
+      const { status } = studentStatusSchema.parse(req.body);
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const updated = await userRepository.updateStatus(student.id, status);
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_STATUS_CHANGED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: `Student status changed to ${status}`,
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: { student: updated }, message: `Student status updated to ${status}.` });
+    } catch (err) { next(err); }
+  },
+
+  async resetStudentPassword(req, res, next) {
+    try {
+      const student = await userRepository.findById(req.params.id);
+      if (!student || student.role !== 'STUDENT') {
+        return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Student not found.' } });
+      }
+      const result = await authService.sendAdminPasswordReset({ user: student });
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'STUDENT_CREDENTIAL_RESET_REQUESTED',
+        resourceType: 'user',
+        resourceId: student.id,
+        summary: 'Admin requested a secure password reset link for student',
+        ipAddress: req.ip
+      });
+      return res.status(200).json({ success: true, data: result, message: result.message });
     } catch (err) { next(err); }
   },
 
@@ -263,10 +440,11 @@ export const adminController = {
 
   async inviteTeacher(req, res, next) {
     try {
-      const { email, full_name } = inviteTeacherSchema.parse(req.body);
+      const { email, full_name, department } = inviteTeacherSchema.parse(req.body);
       const result = await authService.inviteTeacher({
         email,
         fullName: full_name,
+        department,
         invitedBy: req.user.id,
         inviterName: req.user.full_name
       });
@@ -299,17 +477,16 @@ export const adminController = {
 
   async assignTeacher(req, res, next) {
     try {
-      const teacherId = req.params.id || req.body.teacher_id || req.body.teacherId;
+      const validated = assignTeacherSchema.parse({
+        teacher_id: req.params.teacherId || req.params.id || req.body.teacher_id || req.body.teacherId,
+        class_id: req.body.class_id || req.body.classId,
+        batch_id: req.body.batch_id || req.body.batchId,
+        subject_id: req.body.subject_id || req.body.subjectId || req.body.subject || req.body.subject_code || req.body.code
+      });
+      const { teacher_id: teacherId, class_id: rawClass, batch_id: rawBatch, subject_id: rawSubject } = validated;
       if (!teacherId) {
         return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'teacher_id is required.' } });
       }
-
-      const parsed = assignTeacherSchema.parse({
-        teacher_id: teacherId,
-        class_id: req.body.class_id || req.body.classId || null,
-        batch_id: req.body.batch_id || req.body.batchId || null,
-        subject_id: req.body.subject_id || req.body.subjectId
-      });
 
       // 1. Validate Teacher
       const teacher = await userRepository.findById(teacherId);
@@ -317,26 +494,14 @@ export const adminController = {
         return res.status(400).json({ success: false, error: { code: 'INVALID_TEACHER', message: 'Selected faculty member does not exist or is not a teacher.' } });
       }
 
-      // 2. Validate Subject
-      let subject = null;
-      if (isPostgresConnected && pool) {
-        const sRes = await pool.query('SELECT * FROM subjects WHERE id = $1', [parsed.subject_id]);
-        subject = sRes.rows[0];
-      } else {
-        subject = (memoryStore.subjects || []).find(s => s.id === parsed.subject_id);
-      }
-      if (!subject) {
-        return res.status(400).json({ success: false, error: { code: 'INVALID_SUBJECT', message: `Selected subject (${parsed.subject_id}) does not exist.` } });
-      }
-
-      // 3. Resolve Batch & Class
-      let classId = parsed.class_id;
+      // 2. Resolve Batch & Class
+      let classId = rawClass || null;
       let batch = null;
 
-      if (parsed.batch_id) {
-        batch = await batchRepository.getBatchById(parsed.batch_id);
+      if (rawBatch) {
+        batch = await batchRepository.getBatchById(rawBatch);
         if (!batch) {
-          return res.status(400).json({ success: false, error: { code: 'INVALID_BATCH', message: `Selected batch (${parsed.batch_id}) does not exist.` } });
+          return res.status(400).json({ success: false, error: { code: 'INVALID_BATCH', message: `Selected batch (${rawBatch}) does not exist.` } });
         }
         if (!classId) {
           classId = batch.class_id;
@@ -349,8 +514,8 @@ export const adminController = {
           const clsRes = await pool.query('SELECT id FROM classes ORDER BY created_at ASC LIMIT 1');
           if (clsRes.rows.length > 0) {
             classId = clsRes.rows[0].id;
-            if (parsed.batch_id) {
-              await pool.query('UPDATE batches SET class_id = $1 WHERE id = $2', [classId, parsed.batch_id]);
+            if (rawBatch) {
+              await pool.query('UPDATE batches SET class_id = $1 WHERE id = $2', [classId, rawBatch]);
             }
           }
         } else {
@@ -358,36 +523,84 @@ export const adminController = {
         }
       }
 
-      if (!classId) {
-        return res.status(400).json({ success: false, error: { code: 'INVALID_CLASS', message: 'class_id is required or batch must be linked to a class.' } });
-      }
-
-      // 4. Create Subject-Teacher Assignment
-      let assignment;
-      try {
-        assignment = await lmsRepository.assignTeacher({
-          teacherId,
-          classId,
-          batchId: parsed.batch_id || null,
-          subjectId: parsed.subject_id
-        });
-      } catch (assignErr) {
-        if (assignErr.code === 'ALREADY_ASSIGNED' || assignErr.statusCode === 409) {
-          return res.status(409).json({
-            success: false,
-            error: {
-              code: 'ALREADY_ASSIGNED',
-              message: 'This subject is already assigned to this teacher for the specified cohort.'
-            }
-          });
+      // If classId is still null, create a fallback class if DB connected
+      if (!classId && isPostgresConnected && pool) {
+        const newClassId = crypto.randomUUID();
+        await pool.query("INSERT INTO classes (id, name) VALUES ($1, 'General Cohort')", [newClassId]);
+        classId = newClassId;
+        if (rawBatch) {
+          await pool.query('UPDATE batches SET class_id = $1 WHERE id = $2', [classId, rawBatch]);
         }
-        throw assignErr;
       }
 
-      // 5. Synchronize with batch_teachers table
-      if (parsed.batch_id) {
+      // 3. Resolve Subject
+      let subject = null;
+      if (rawSubject) {
+        if (isPostgresConnected && pool) {
+          const sRes = await pool.query(
+            'SELECT * FROM subjects WHERE id = $1 OR code = $1 OR LOWER(name) = LOWER($1)',
+            [rawSubject]
+          );
+          subject = sRes.rows[0];
+        } else {
+          subject = (memoryStore.subjects || []).find(
+            s => s.id === rawSubject || s.code === rawSubject || s.name?.toLowerCase() === String(rawSubject).toLowerCase()
+          );
+        }
+        if (!subject) {
+          return res.status(400).json({ success: false, error: { code: 'INVALID_SUBJECT', message: `Selected subject (${rawSubject}) does not exist.` } });
+        }
+      } else {
+        // If subject is omitted, default to the first available subject
+        if (isPostgresConnected && pool) {
+          const sRes = await pool.query('SELECT * FROM subjects ORDER BY created_at ASC LIMIT 1');
+          subject = sRes.rows[0] || null;
+        } else {
+          subject = memoryStore.subjects?.[0] || null;
+        }
+      }
+
+      // 4. Create Subject-Teacher Assignment if subject & class are available
+      let assignment = null;
+      if (subject && classId) {
+        try {
+          assignment = await lmsRepository.assignTeacher({
+            teacherId,
+            classId,
+            batchId: rawBatch || null,
+            subjectId: subject.id
+          });
+        } catch (assignErr) {
+          if (assignErr.code === 'ALREADY_ASSIGNED' || assignErr.statusCode === 409) {
+            // Already assigned - fetch existing assignment
+            if (isPostgresConnected && pool) {
+              const exRes = await pool.query(
+                `SELECT id FROM teacher_assignments WHERE teacher_id=$1 AND class_id=$2 AND subject_id=$3 AND (batch_id=$4 OR (batch_id IS NULL AND $4 IS NULL))`,
+                [teacherId, classId, subject.id, rawBatch || null]
+              );
+              if (exRes.rows.length > 0) {
+                assignment = await lmsRepository.getAssignmentById(exRes.rows[0].id);
+              }
+            }
+            if (!assignment) {
+              return res.status(409).json({
+                success: false,
+                error: {
+                  code: 'ALREADY_ASSIGNED',
+                  message: 'This subject is already assigned to this teacher for the specified cohort.'
+                }
+              });
+            }
+          } else {
+            throw assignErr;
+          }
+        }
+      }
+
+      // 5. Synchronize with batch_teachers table if batch provided
+      if (rawBatch) {
         await batchRepository.assignTeacherToBatch({
-          batchId: parsed.batch_id,
+          batchId: rawBatch,
           teacherId,
           assignedBy: req.user.id
         }).catch(() => {});
@@ -398,14 +611,14 @@ export const adminController = {
         actorEmail: req.user.email,
         action: 'TEACHER_ASSIGNED',
         resourceType: 'teacher_assignment',
-        resourceId: assignment.id,
-        summary: `Admin assigned teacher ${teacher.full_name} to subject '${subject.name}' (${batch ? `Batch: ${batch.name}` : `Class ID: ${classId}`})`
+        resourceId: assignment?.id || teacherId,
+        summary: `Admin assigned teacher ${teacher.full_name} (${teacher.email}) ${subject ? `to subject '${subject.name}'` : ''} ${batch ? `(Batch: ${batch.name})` : ''}`
       });
 
       return res.status(201).json({
         success: true,
         data: { assignment },
-        message: `Subject '${subject.name}' assigned to ${teacher.full_name} successfully.`
+        message: `Subject '${subject?.name || 'General'}' assigned to ${teacher.full_name} successfully.`
       });
     } catch (err) {
       next(err);
@@ -525,9 +738,17 @@ export const adminController = {
 
   async createClass(req, res, next) {
     try {
-      const { name, description, academic_session_id } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Class name is required.' } });
-      const cls = await lmsRepository.createClass({ name, description, academicSessionId: academic_session_id });
+      const { name, description, academic_session_id: academicSessionId } = createClassSchema.parse(req.body);
+      if (academicSessionId) {
+        const sessions = await lmsRepository.getAcademicSessions();
+        if (!sessions.some(session => session.id === academicSessionId)) {
+          const err = new Error(`Academic session '${academicSessionId}' does not exist.`);
+          err.statusCode = 400;
+          err.code = 'INVALID_ACADEMIC_SESSION';
+          throw err;
+        }
+      }
+      const cls = await lmsRepository.createClass({ name, description, academicSessionId });
       await logAudit({ actorId: req.user.id, actorEmail: req.user.email, action: 'CLASS_CREATED', resourceType: 'class', resourceId: cls.id, summary: `Class '${name}' created` });
       return res.status(201).json({ success: true, data: { class: cls }, message: 'Class created.' });
     } catch (err) { next(err); }
@@ -605,16 +826,16 @@ export const adminController = {
   // ── Subjects ───────────────────────────────────────────────
   async getSubjects(req, res, next) {
     try {
-      const subjects = await lmsRepository.getSubjects();
+      const { status, department } = subjectQuerySchema.parse(req.query);
+      const subjects = await lmsRepository.getSubjects({ status, department });
       return res.status(200).json({ success: true, data: { subjects }, message: 'Subjects retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createSubject(req, res, next) {
     try {
-      const { name, code, description } = req.body;
-      if (!name) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject name is required.' } });
-      const subject = await lmsRepository.createSubject({ name, code, description });
+      const { name, code, description, department, status } = createSubjectSchema.parse(req.body);
+      const subject = await lmsRepository.createSubject({ name, code, description, department, status });
       await logAudit({
         actorId: req.user.id,
         actorEmail: req.user.email,
@@ -630,19 +851,16 @@ export const adminController = {
   // ── Timetable ──────────────────────────────────────────────
   async getTimetable(req, res, next) {
     try {
-      const { class_id, batch_id, teacher_id, day_of_week } = req.query;
-      const entries = await lmsRepository.getTimetable({ classId: class_id, batchId: batch_id, teacherId: teacher_id, dayOfWeek: day_of_week !== undefined ? parseInt(day_of_week) : undefined });
+      const { class_id: classId, batch_id: batchId, teacher_id: teacherId, day_of_week: dayOfWeek } = timetableQuerySchema.parse(req.query);
+      const entries = await lmsRepository.getTimetable({ classId, batchId, teacherId, dayOfWeek });
       return res.status(200).json({ success: true, data: { entries }, message: 'Timetable retrieved.' });
     } catch (err) { next(err); }
   },
 
   async createTimetableEntry(req, res, next) {
     try {
-      const { class_id, batch_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, academic_session_id } = req.body;
-      if (!class_id || !subject_id || !teacher_id || day_of_week === undefined || !start_time || !end_time) {
-        return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'class_id, subject_id, teacher_id, day_of_week, start_time, end_time are required.' } });
-      }
-      const entry = await lmsRepository.createTimetableEntry({ classId: class_id, batchId: batch_id, subjectId: subject_id, teacherId: teacher_id, dayOfWeek: parseInt(day_of_week), startTime: start_time, endTime: end_time, room, academicSessionId: academic_session_id });
+      const { class_id: classId, batch_id: batchId, subject_id: subjectId, teacher_id: teacherId, day_of_week: dayOfWeek, start_time: startTime, end_time: endTime, room, academic_session_id: academicSessionId } = createTimetableEntrySchema.parse(req.body);
+      const entry = await lmsRepository.createTimetableEntry({ classId, batchId, subjectId, teacherId, dayOfWeek, startTime, endTime, room, academicSessionId });
       return res.status(201).json({ success: true, data: { entry }, message: 'Timetable entry created.' });
     } catch (err) { next(err); }
   },
@@ -722,11 +940,11 @@ export const adminController = {
       const session = await lmsRepository.createLiveClass({
         title,
         description: description || '',
-        teacherId: teacher_id || req.user.id,
-        classId: class_id || null,
-        batchId: batch_id || null,
-        subjectId: subject_id || null,
-        courseId: course_id || null,
+        teacherId: sanitizeOptionalString(teacher_id) || req.user.id,
+        classId: sanitizeOptionalString(class_id),
+        batchId: sanitizeOptionalString(batch_id),
+        subjectId: sanitizeOptionalString(subject_id),
+        courseId: sanitizeOptionalString(course_id),
         scheduledAt: scheduled_at,
         meetingUrl: meeting_url || null,
         meetingProvider: 'livekit'
@@ -1177,7 +1395,7 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
   const studentCount = users.filter(u => u.role === 'STUDENT').length;
   const teacherCount = users.filter(u => u.role === 'TEACHER').length;
 
-  const allAttempts = [
+  let allAttempts = [
     ...quizAttempts.map(qa => {
       const q = quizzes.find(x => x.id === qa.quiz_id);
       const u = users.find(x => x.id === qa.user_id);
@@ -1236,6 +1454,18 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
     if (end_date && submittedAt > new Date(end_date).getTime()) return false;
     return true;
   }).sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+
+  if (start_date) {
+    const startObj = new Date(start_date);
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) >= startObj);
+  }
+  if (end_date) {
+    const endObj = new Date(end_date);
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) <= endObj);
+  }
+  if (course_id && course_id !== 'ALL') {
+    allAttempts = allAttempts.filter(a => a.course_id === course_id);
+  }
 
   const totalAttempts = allAttempts.length;
   const passedAttempts = allAttempts.filter(a => a.passed).length;

@@ -99,19 +99,25 @@ export function TeacherAttendancePage() {
   };
 
   const handleSave = async () => {
+    if (!selectedAssignment?.batch_id || !selectedAssignment.subject_id) {
+      showToast('Select an assigned batch and subject before saving attendance', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
       const records = students.map(s => ({
         student_id: s.id,
-        class_id: selectedAssignment.class_id,
-        batch_id: selectedAssignment.batch_id || null,
-        subject_id: selectedAssignment.subject_id || null,
-        date,
         status: attendanceMap[s.id]?.status || 'present',
         remarks: attendanceMap[s.id]?.remarks || ''
       }));
 
-      await api.markTeacherAttendance(records);
+      await api.markTeacherAttendance({
+        batch_id: selectedAssignment.batch_id,
+        date,
+        subject_id: selectedAssignment.subject_id,
+        records
+      });
       showToast('Attendance saved successfully!', 'success');
     } catch (err) {
       showToast(err.message || 'Failed to save attendance', 'error');

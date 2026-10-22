@@ -1,4 +1,6 @@
 import { quizRepository } from '../repositories/quizRepository.js';
+import { lmsRepository } from '../repositories/lmsRepository.js';
+import { securityLogRepository } from '../repositories/securityLogRepository.js';
 import { quizService } from '../services/quizService.js';
 import { submitQuizAttemptSchema } from '../validators/index.js';
 
@@ -27,9 +29,15 @@ export const quizController = {
           error: { code: 'NOT_FOUND', message: 'Quiz not found.' }
         });
       }
+      const canViewAnswerKeys = req.user.role === 'ADMIN' ||
+        (req.user.role === 'TEACHER' && quiz.teacher_id === req.user.id);
+      const quizDetails = canViewAnswerKeys
+        ? await quizRepository.getQuizForTaker(id, { includeAnswerKey: true })
+        : quiz;
+
       return res.status(200).json({
         success: true,
-        data: { quiz },
+        data: { quiz: quizDetails },
         message: 'Quiz questions retrieved.'
       });
     } catch (err) {
@@ -72,13 +80,36 @@ export const quizController = {
   async getAttemptDetails(req, res, next) {
     try {
       const { attemptId } = req.params;
-      const details = await quizRepository.getAttemptDetails(attemptId, req.user.id);
+      const details = await quizRepository.getAttemptDetails(attemptId);
       if (!details) {
         return res.status(404).json({
           success: false,
-          error: { code: 'NOT_FOUND', message: 'Quiz attempt not found or unauthorized.' }
+          error: { code: 'NOT_FOUND', message: 'Quiz attempt not found.' }
         });
       }
+
+      const authorized = req.user.role === 'ADMIN' ||
+        (req.user.role === 'STUDENT' && details.user_id === req.user.id) ||
+        (req.user.role === 'TEACHER' &&
+          await lmsRepository.isTeacherAssignedToStudent(req.user.id, details.user_id));
+
+      if (!authorized) {
+        await securityLogRepository.logEvent({
+          eventType: 'UNAUTHORIZED_SCORECARD_ACCESS',
+          severity: 'HIGH',
+          userId: req.user.id,
+          userEmail: req.user.email,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+          details: 'Unauthorized quiz scorecard access was denied.',
+          metadata: { attemptId, targetStudentId: details.user_id, resourceType: 'quiz_attempt' }
+        });
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'You are not authorized to view this quiz scorecard.' }
+        });
+      }
+
       return res.status(200).json({
         success: true,
         data: { attempt: details },
@@ -103,7 +134,8 @@ export const quizController = {
         courseId,
         title,
         description: description || '',
-        questions: questions || []
+        questions: questions || [],
+        teacherId: req.user.id
       });
       return res.status(201).json({
         success: true,
