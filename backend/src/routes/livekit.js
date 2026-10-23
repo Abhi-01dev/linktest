@@ -117,7 +117,7 @@ router.post('/token', requireAuth, async (req, res, next) => {
       });
     }
 
-    const isPublisher = true; // In interactive classroom, allow both teacher and student to publish audio/video tracks
+    const isPublisher = req.user.role === 'TEACHER' || req.user.role === 'ADMIN';
     const result = livekitService.generateToken({
       roomName: targetRoomName,
       participantIdentity: req.user.id,
