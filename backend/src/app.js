@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config/env.js';
+import { corsOptions } from './config/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { getDbStatus } from './db/index.js';
 
@@ -41,48 +42,14 @@ app.use((req, res, next) => {
 });
 
 // Security and utility middleware
-app.use(helmet());
-
-// Strictly allowed frontend origins (supporting dev ports 5173, 5174, 3000, comma-separated env values, and Vercel preview domains)
-const configuredOrigins = (config.frontendUrl || '')
-  .split(',')
-  .map(url => url.trim().replace(/\/+$/, ''))
-  .filter(Boolean);
-
-const defaultOrigins = [
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:3000',
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:5174'
-];
-
-const allowedOrigins = Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow non-browser requests (like server-to-server or tests without origin)
-    if (!origin) return callback(null, true);
-
-    const normalizedOrigin = origin.replace(/\/+$/, '');
-    if (allowedOrigins.includes(normalizedOrigin)) {
-      return callback(null, true);
-    }
-
-    // Allow Vercel preview and production deployments safely
-    try {
-      const parsed = new URL(origin);
-      if (parsed.hostname.endsWith('.vercel.app')) {
-        return callback(null, true);
-      }
-    } catch {
-      // Ignore URL parsing errors
-    }
-
-    return callback(new Error(`CORS policy does not allow access from origin ${origin}`));
-  },
-  credentials: true
+app.use(helmet({
+  frameguard: { action: 'sameorigin' },
+  noSniff: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
 }));
+
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -101,6 +68,12 @@ app.get('/api/health', (req, res) => {
       name: 'LinkTest API Server',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
+      security: {
+        helmet: 'enabled',
+        cors_policy: 'strict_whitelist',
+        frameguard: 'SAMEORIGIN',
+        content_type_options: 'nosniff'
+      },
       services: {
         database: dbStatus.connected ? 'connected' : 'unavailable',
         api: 'online',
