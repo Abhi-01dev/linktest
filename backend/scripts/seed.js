@@ -30,21 +30,40 @@ import {
   SEED_MOCK_TEST_PROCTORING_EVENTS
 } from '../src/db/seedMockTests.js';
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config();
+
 const { Pool } = pg;
 
-async function runSeed() {
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
+export async function runSeed({ dbUrl = null, dbPool = null } = {}) {
+  const connectionUrl = (dbUrl !== null && dbUrl !== undefined ? dbUrl : (process.env.DATABASE_URL || '')).trim();
+  if (!dbPool && !connectionUrl) {
     console.error('[Seed] Error: DATABASE_URL is not defined in environment.');
-    process.exit(1);
+    throw new Error('[Seed] Error: DATABASE_URL is not defined in environment.');
   }
 
-  const isNeonOrCloud = dbUrl.includes('neon.tech') || dbUrl.includes('render.com') || dbUrl.includes('sslmode=require');
-  const pool = new Pool({
-    connectionString: dbUrl,
-    ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false
-  });
+  let pool = dbPool;
+  let shouldClosePool = false;
+
+  if (!pool) {
+    const isNeonOrCloud = connectionUrl.includes('neon.tech') ||
+                          connectionUrl.includes('render.com') ||
+                          connectionUrl.includes('supabase.co') ||
+                          connectionUrl.includes('sslmode=require') ||
+                          connectionUrl.includes('ssl=true');
+    pool = new Pool({
+      connectionString: connectionUrl,
+      ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false
+    });
+    shouldClosePool = true;
+  }
 
   const client = await pool.connect();
   try {
@@ -371,14 +390,32 @@ async function runSeed() {
     console.log('  Teacher User:  teacher@linktest.io   | Password: Teacher123!   ');
     console.log('  Admin User:    admin@linktest.io     | Password: Admin123!     ');
     console.log('================================================================');
+    return true;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rbErr) {
+      console.error('[Seed Error] Rollback error:', rbErr.message);
+    }
     console.error('[Seed] Database seeding failed:', err.message);
-    process.exit(1);
+    throw err;
   } finally {
     client.release();
-    await pool.end();
+    if (shouldClosePool && pool) {
+      await pool.end();
+    }
   }
 }
 
-runSeed();
+async function runCli() {
+  try {
+    await runSeed();
+    process.exit(0);
+  } catch (err) {
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+  runCli();
+}
