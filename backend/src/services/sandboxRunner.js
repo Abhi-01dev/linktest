@@ -215,11 +215,12 @@ function execute({ code, testCases = [], timeLimitSeconds = 2.0 }) {
     } catch (err) {
       testPassed = false;
       const isTimeout = err.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT' || err.message?.includes('timed out');
-      tcError = isTimeout ? `Time Limit Exceeded (> ${timeLimitSeconds}s)` : (err.message || 'Runtime Error');
+      const isMemory = err.message?.includes('out of memory') || err.message?.includes('allocation failed') || err.message?.includes('Maximum call stack');
+      tcError = isTimeout ? 'TIME_LIMIT_EXCEEDED' : (isMemory ? 'MEMORY_LIMIT_EXCEEDED' : (err.message || 'Runtime Error'));
 
       if (!firstError) {
         firstError = tcError;
-        overallStatus = isTimeout ? 'timeout' : 'runtime_error';
+        overallStatus = isTimeout ? 'TIME_LIMIT_EXCEEDED' : (isMemory ? 'MEMORY_LIMIT_EXCEEDED' : 'runtime_error');
       }
     }
 

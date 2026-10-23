@@ -10,6 +10,9 @@ const router = Router();
 // All coding routes require authentication
 router.use(authenticateToken);
 
+// Standalone sandbox execution runner
+router.post('/execute', codingController.execute);
+
 // Candidate [Run Code] during test (public test cases only)
 router.post('/run', codingController.runPublicTestCases);
 
