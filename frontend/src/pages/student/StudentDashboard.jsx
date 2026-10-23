@@ -17,12 +17,18 @@ import {
   FileCheck2,
   ShieldCheck,
   Camera,
-  AlertTriangle
+  AlertTriangle,
+  Calendar,
+  FileText,
+  MapPin,
+  User,
+  Code2
 } from 'lucide-react';
 import { StudentNav } from '../../components/student/StudentNav';
 
 export function StudentDashboard() {
   const { user } = useAuth();
+  const [dashboardData, setDashboardData] = useState(null);
   const [enrolledCourses, setEnrolledCourses] = useState([]);
   const [quizAttempts, setQuizAttempts] = useState([]);
   const [mockTests, setMockTests] = useState([]);
@@ -33,13 +39,15 @@ export function StudentDashboard() {
   useEffect(() => {
     async function loadDashboardData() {
       try {
-        const [courses, attempts, tests, lives, results] = await Promise.all([
+        const [dash, courses, attempts, tests, lives, results] = await Promise.all([
+          api.getStudentDashboard().catch(() => null),
           api.getMyCourses().catch(() => []),
           api.getMyAttempts().catch(() => []),
           api.getMockTests({ status: 'published' }).catch(() => []),
           api.getStudentLiveClasses().catch(() => []),
           api.getMyMockTestResults().catch(() => [])
         ]);
+        setDashboardData(dash);
         setEnrolledCourses(courses || []);
         setQuizAttempts(attempts || []);
         setMockTests(Array.isArray(tests) ? tests : []);
@@ -67,6 +75,16 @@ export function StudentDashboard() {
     : 0;
 
   const currentCourse = enrolledCourses[0] || null;
+
+  const attendancePercentage = dashboardData?.attendance_stats?.percentage ?? 100;
+  const attendanceTotal = dashboardData?.attendance_stats?.total_days ?? 0;
+  const attendancePresent = dashboardData?.attendance_stats?.present_days ?? 0;
+  const todaySchedule = dashboardData?.today_schedule || [];
+  const pendingAssignments = dashboardData?.pending_assignments || [];
+
+  const attendanceColor = attendancePercentage >= 75 ? '#16A34A' : attendancePercentage >= 65 ? '#D97706' : '#DC2626';
+  const attendanceBg = attendancePercentage >= 75 ? '#DCFCE7' : attendancePercentage >= 65 ? '#FEF3C7' : '#FEE2E2';
+  const attendanceLabel = attendancePercentage >= 75 ? 'Meets Safe Criteria (≥75%)' : attendancePercentage >= 65 ? 'Attendance Warning (65-74%)' : 'Critical Shortage (<65%)';
 
   return (
     <div style={{ padding: '1.5rem 0 3.5rem' }}>
@@ -110,7 +128,7 @@ export function StudentDashboard() {
               Welcome back, {user?.full_name?.split(' ')[0] || user?.full_name || 'Learner'}! 👋
             </h1>
             <p style={{ color: '#94A3B8', fontSize: '0.9rem', margin: 0 }}>
-              Track your technical coursework, assessment evaluations, and AI study sessions.
+              Track your lecture schedule, attendance turnout, pending coursework, and exam evaluations.
             </p>
           </div>
 
@@ -135,48 +153,329 @@ export function StudentDashboard() {
             marginBottom: '2rem'
           }}
         >
+          {/* Card 1: Attendance Turnout with Safety Gauge Color */}
+          <div className="card" style={{ padding: '1.5rem', borderLeft: `5px solid ${attendanceColor}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Attendance Turnout</span>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '4px', background: attendanceBg, color: attendanceColor }}>
+                {attendancePercentage >= 75 ? 'Safe' : attendancePercentage >= 65 ? 'Warning' : 'Critical'}
+              </span>
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: attendanceColor }}>
+              {attendancePercentage}%
+            </div>
+            <div style={{
+              width: '100%',
+              height: 6,
+              background: '#E2E8F0',
+              borderRadius: '999px',
+              marginTop: '0.5rem',
+              overflow: 'hidden'
+            }}>
+              <div style={{ width: `${Math.min(100, attendancePercentage)}%`, height: '100%', background: attendanceColor, borderRadius: '999px' }} />
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.35rem', display: 'block' }}>
+              {attendanceLabel}
+            </span>
+          </div>
+
+          {/* Card 2: Today's Schedule */}
+          <div className="card" style={{ padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Today's Lectures</span>
+              <Calendar size={20} style={{ color: 'var(--color-orange)' }} />
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-navy)' }}>
+              {todaySchedule.length}
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Classes scheduled today</span>
+          </div>
+
+          {/* Card 3: Pending Homework */}
+          <div className="card" style={{ padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Pending Homework</span>
+              <FileText size={20} style={{ color: '#E11D48' }} />
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 800, color: pendingAssignments.length > 0 ? '#E11D48' : 'var(--color-navy)' }}>
+              {pendingAssignments.length}
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Tasks awaiting submission</span>
+          </div>
+
+          {/* Card 4: Enrolled Courses */}
           <div className="card" style={{ padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Enrolled Courses</span>
-              <BookOpen size={20} style={{ color: 'var(--color-orange)' }} />
+              <BookOpen size={20} style={{ color: '#2563EB' }} />
             </div>
             <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-navy)' }}>
               {enrolledCourses.length}
             </div>
             <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Active curriculum tracks</span>
           </div>
+        </div>
 
-          <div className="card" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Completed Lessons</span>
-              <CheckCircle2 size={20} style={{ color: 'var(--color-success)' }} />
+        {/* ── 2-Column Section: Today's Schedule & Attendance Safety Gauge ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+          {/* Today's Schedule Widget */}
+          <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Clock size={18} style={{ color: 'var(--color-orange)' }} />
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--color-navy)', margin: 0 }}>
+                    Today's Lecture Schedule
+                  </h3>
+                </div>
+                <Link to="/timetable" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-orange-dark)', textDecoration: 'none' }}>
+                  Full Timetable →
+                </Link>
+              </div>
+
+              {todaySchedule.length === 0 ? (
+                <div style={{ padding: '2rem 1rem', textAlign: 'center', background: 'var(--color-bg-alt)', borderRadius: '8px' }}>
+                  <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.88rem' }}>
+                    No lectures scheduled for today. Great time for coursework or revision!
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {todaySchedule.map((p, idx) => (
+                    <div
+                      key={p.id || idx}
+                      style={{
+                        padding: '0.75rem 1rem',
+                        background: 'var(--color-bg-alt)',
+                        borderRadius: '8px',
+                        border: '1px solid var(--color-border)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700, color: 'var(--color-navy)', fontSize: '0.9rem' }}>
+                          {p.subject_name || p.subject_title || 'Class'}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.2rem' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                            <User size={11} />
+                            {p.teacher_name || 'Faculty'}
+                          </span>
+                          {p.room && (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                              <MapPin size={11} />
+                              {p.room}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{
+                          padding: '0.2rem 0.5rem',
+                          background: '#EFF6FF',
+                          color: '#1D4ED8',
+                          borderRadius: '4px',
+                          fontSize: '0.78rem',
+                          fontWeight: 700
+                        }}>
+                          {p.start_time?.slice(0, 5)} - {p.end_time?.slice(0, 5)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-navy)' }}>
-              {totalLessonsCompleted}
+            <div style={{ marginTop: '1rem', borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <Link to="/timetable" className="btn btn-sm btn-outline" style={{ width: '100%', justifyContent: 'center' }}>
+                <Calendar size={14} />
+                <span>View Weekly Timetable</span>
+              </Link>
             </div>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Modules finished</span>
           </div>
 
-          <div className="card" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Quizzes Taken</span>
-              <Award size={20} style={{ color: '#2563EB' }} />
+          {/* Attendance Safety Gauge Widget */}
+          <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <ShieldCheck size={18} style={{ color: attendanceColor }} />
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--color-navy)', margin: 0 }}>
+                    Attendance Safety Gauge
+                  </h3>
+                </div>
+                <Link to="/attendance" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-orange-dark)', textDecoration: 'none' }}>
+                  Attendance Sheet →
+                </Link>
+              </div>
+
+              {/* Safety Level Badge Banner */}
+              <div style={{
+                padding: '0.85rem 1rem',
+                borderRadius: '8px',
+                background: attendanceBg,
+                border: `1px solid ${attendanceColor}40`,
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem'
+              }}>
+                <div style={{ fontSize: '1.75rem', fontWeight: 900, color: attendanceColor }}>
+                  {attendancePercentage}%
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: attendanceColor }}>
+                    {attendanceLabel}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--color-text-secondary)', marginTop: '0.15rem' }}>
+                    Institutional policy mandates ≥ 75% turnout to maintain exam qualification.
+                  </div>
+                </div>
+              </div>
+
+              {/* Turnout Statistics Breakdown */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div style={{ padding: '0.65rem 0.85rem', background: 'var(--color-bg-alt)', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>Classes Attended</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#16A34A', marginTop: '0.15rem' }}>
+                    {attendancePresent} / {attendanceTotal}
+                  </div>
+                </div>
+                <div style={{ padding: '0.65rem 0.85rem', background: 'var(--color-bg-alt)', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>Status Tier</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: attendanceColor, marginTop: '0.25rem' }}>
+                    {attendancePercentage >= 75 ? 'Safe Band' : attendancePercentage >= 65 ? 'Warning Band' : 'Critical Risk'}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--color-navy)' }}>
-              {quizAttempts.length}
+
+            <div style={{ marginTop: '1rem', borderTop: '1px solid var(--color-border)', paddingTop: '0.75rem' }}>
+              <Link to="/attendance" className="btn btn-sm btn-outline" style={{ width: '100%', justifyContent: 'center' }}>
+                <FileCheck2 size={14} />
+                <span>Open Full Attendance Record</span>
+              </Link>
             </div>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Evaluations recorded</span>
+          </div>
+        </div>
+
+        {/* ── Pending Homework & Coursework Submissions Widget ── */}
+        <div className="card" style={{ padding: '1.5rem', marginBottom: '2.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-navy)', margin: 0 }}>
+                Pending Homework & Assignments
+              </h3>
+              <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.82rem', margin: '0.2rem 0 0' }}>
+                Active problem sets assigned by your instructors awaiting submission.
+              </p>
+            </div>
+            <Link to="/assignments" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--color-orange-dark)', textDecoration: 'none' }}>
+              All Assignments →
+            </Link>
           </div>
 
-          <div className="card" style={{ padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>Average Score</span>
-              <TrendingUp size={20} style={{ color: '#10B981' }} />
+          {pendingAssignments.length === 0 ? (
+            <div style={{ padding: '2rem 1rem', textAlign: 'center', background: 'var(--color-bg-alt)', borderRadius: '8px' }}>
+              <CheckCircle2 size={32} style={{ color: '#16A34A', margin: '0 auto 0.5rem' }} />
+              <p style={{ margin: 0, fontWeight: 700, color: 'var(--color-navy)', fontSize: '0.95rem' }}>
+                All caught up! No pending homework.
+              </p>
+              <p style={{ margin: '0.25rem 0 0', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                You have completed all active assignments for your enrolled subjects.
+              </p>
             </div>
-            <div style={{ fontSize: '2rem', fontWeight: 800, color: avgQuizScore >= 60 ? 'var(--color-success)' : 'var(--color-orange)' }}>
-              {avgQuizScore}%
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+              {pendingAssignments.map(a => (
+                <div
+                  key={a.id}
+                  style={{
+                    padding: '1rem',
+                    borderRadius: '8px',
+                    border: '1px solid var(--color-border)',
+                    background: '#FFFFFF',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#1D4ED8', background: '#EFF6FF', padding: '0.15rem 0.45rem', borderRadius: '4px' }}>
+                        {a.subject_name || 'Subject'}
+                      </span>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#D97706' }}>
+                        Max: {a.max_marks || 20} pts
+                      </span>
+                    </div>
+                    <div style={{ fontWeight: 700, color: 'var(--color-navy)', fontSize: '0.92rem', marginBottom: '0.4rem' }}>
+                      {a.title}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <Clock size={12} />
+                      <span>Due: {a.due_date ? new Date(a.due_date).toLocaleDateString() : 'Upcoming'}</span>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '0.85rem' }}>
+                    <Link
+                      to="/assignments"
+                      className="btn btn-sm btn-primary"
+                      style={{ width: '100%', justifyContent: 'center', fontSize: '0.78rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      <span>Submit Solution</span>
+                      <ArrowRight size={13} />
+                    </Link>
+                  </div>
+                </div>
+              ))}
             </div>
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Server-graded assessments</span>
+          )}
+        </div>
+
+        {/* ── Quick Tools & Learning Hub Navigation ── */}
+        <div style={{ marginBottom: '2.5rem' }}>
+          <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '0.85rem' }}>
+            Quick Tools & Learning Hub
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+            <Link to="/timetable" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <Calendar size={22} style={{ color: 'var(--color-orange)', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Timetable</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Class periods</div>
+            </Link>
+            <Link to="/attendance" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <ShieldCheck size={22} style={{ color: '#16A34A', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Attendance</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Turnout history</div>
+            </Link>
+            <Link to="/assignments" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <FileText size={22} style={{ color: '#2563EB', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Homework</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Active tasks</div>
+            </Link>
+            <Link to="/materials" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <BookOpen size={22} style={{ color: '#8B5CF6', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Materials</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Lecture notes</div>
+            </Link>
+            <Link to="/ai-tutor" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <Sparkles size={22} style={{ color: 'var(--color-orange)', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>AI Tutor</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>24/7 mentor</div>
+            </Link>
+            <Link to="/coding" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <Code2 size={22} style={{ color: '#059669', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Coding Lab</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Code sandbox</div>
+            </Link>
+            <Link to="/mock-tests" className="card" style={{ padding: '1rem', textAlign: 'center', textDecoration: 'none', color: 'inherit' }}>
+              <Award size={22} style={{ color: '#D97706', margin: '0 auto 0.4rem' }} />
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>Mock Tests</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Exam runner</div>
+            </Link>
           </div>
         </div>
 

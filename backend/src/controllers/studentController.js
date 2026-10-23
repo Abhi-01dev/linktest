@@ -56,6 +56,13 @@ export const studentController = {
             present_days: presentDays,
             percentage: attendancePercentage
           },
+          metrics: {
+            enrolled_classes_count: enrollments.length,
+            pending_assignments_count: pendingAssignments.length,
+            attendance_percentage: attendancePercentage,
+            today_classes_count: timetable.length,
+            completed_quizzes_count: quizAttempts.length
+          },
           summary: {
             enrolled_classes_count: enrollments.length,
             pending_assignments_count: pendingAssignments.length,
