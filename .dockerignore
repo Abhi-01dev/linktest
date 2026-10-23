@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env*
+frontend
+tests
+coverage
+*.md
+.DS_Store
