@@ -1,6 +1,7 @@
 import { questionBankService } from '../services/questionBankService.js';
 import { questionBankRepository } from '../repositories/questionBankRepository.js';
 import { notificationService } from '../services/notificationService.js';
+import { recordAuditLog } from '../repositories/auditRepository.js';
 
 export const questionBankController = {
   /**
@@ -280,6 +281,18 @@ export const questionBankController = {
         created_by: req.user.id
       });
 
+      await recordAuditLog({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'QUESTION_CREATED',
+        resourceType: 'question_bank',
+        resourceId: created.id,
+        targetResource: `question_bank:${created.id}`,
+        summary: `Question '${created.subject} - ${created.topic}' created in question bank`,
+        ipAddress: req.ip || req.headers['x-forwarded-for'],
+        userAgent: req.headers['user-agent']
+      });
+
       return res.status(201).json({
         success: true,
         data: created,
@@ -315,6 +328,18 @@ export const questionBankController = {
       }
 
       await questionBankRepository.deleteQuestion(id);
+
+      await recordAuditLog({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'QUESTION_DELETED',
+        resourceType: 'question_bank',
+        resourceId: id,
+        targetResource: `question_bank:${id}`,
+        summary: `Question ${id} deleted from question bank`,
+        ipAddress: req.ip || req.headers['x-forwarded-for'],
+        userAgent: req.headers['user-agent']
+      });
 
       return res.status(200).json({
         success: true,

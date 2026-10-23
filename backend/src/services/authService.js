@@ -612,6 +612,15 @@ export const authService = {
       console.error('[PasswordReset] Email delivery error:', err.message);
     }
 
+    securityLogRepository.recordSecurityLog({
+      eventType: 'PASSWORD_RESET_REQUESTED',
+      severity: 'INFO',
+      userId: user.id,
+      userEmail: user.email,
+      targetResource: `user:${user.id}`,
+      details: `Password reset link requested for ${user.email}`
+    }).catch(() => {});
+
     return {
       message: 'If an account exists for this email, a password reset link has been sent.',
       ...(config.nodeEnv === 'development' ? { dev_reset_url: resetUrl } : {})

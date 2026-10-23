@@ -3,6 +3,7 @@
 
 import { pool, isPostgresConnected, memoryStore } from '../db/index.js';
 import { mockTestScoringService } from '../services/mockTestScoringService.js';
+import { recordAuditLog } from './auditRepository.js';
 import crypto from 'crypto';
 
 export const mockTestRepository = {
@@ -1222,6 +1223,22 @@ export const mockTestRepository = {
         id, test_id: testId, attempt_id: attemptId, actor_id: actorId, actor_role: actorRole,
         action, details, ip_address: ipAddress, created_at: now
       });
+    }
+
+    // Automatically append canonical audit log record
+    try {
+      await recordAuditLog({
+        actorId: actorId || null,
+        action: action || 'MOCK_TEST_ACTION',
+        targetResource: testId ? `mock_test:${testId}` : (attemptId ? `mock_test_attempt:${attemptId}` : null),
+        resourceType: testId ? 'mock_test' : (attemptId ? 'mock_test_attempt' : null),
+        resourceId: testId || attemptId || null,
+        summary: typeof details === 'string' ? details : (details ? JSON.stringify(details) : ''),
+        ipAddress: ipAddress || null,
+        createdAt: now
+      });
+    } catch (err) {
+      // Non-breaking
     }
   }
 };

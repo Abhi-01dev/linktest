@@ -1,6 +1,7 @@
 import { courseRepository } from '../repositories/courseRepository.js';
 import { lessonRepository } from '../repositories/lessonRepository.js';
 import { createCourseSchema, updateCourseSchema } from '../validators/index.js';
+import { recordAuditLog } from '../repositories/auditRepository.js';
 
 export const courseController = {
   async getAll(req, res, next) {
@@ -84,6 +85,19 @@ export const courseController = {
         instructor_name: req.body.instructor_name || req.user?.full_name || 'LinkTest Faculty'
       });
       const course = await courseRepository.create(validated);
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'COURSE_CREATED',
+          resourceType: 'course',
+          resourceId: course.id,
+          targetResource: `course:${course.id}`,
+          summary: `Course '${course.title}' created`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
+        });
+      }
       return res.status(201).json({
         success: true,
         data: { course },
@@ -105,6 +119,19 @@ export const courseController = {
           error: { code: 'NOT_FOUND', message: 'Course not found.' }
         });
       }
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'COURSE_UPDATED',
+          resourceType: 'course',
+          resourceId: id,
+          targetResource: `course:${id}`,
+          summary: `Course '${updated.title}' updated`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
+        });
+      }
       return res.status(200).json({
         success: true,
         data: { course: updated },
@@ -123,6 +150,19 @@ export const courseController = {
         return res.status(404).json({
           success: false,
           error: { code: 'NOT_FOUND', message: 'Course not found.' }
+        });
+      }
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'COURSE_DELETED',
+          resourceType: 'course',
+          resourceId: id,
+          targetResource: `course:${id}`,
+          summary: `Course ${id} deleted`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
         });
       }
       return res.status(200).json({
