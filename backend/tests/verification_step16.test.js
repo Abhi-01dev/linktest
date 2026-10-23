@@ -224,7 +224,9 @@ describe('Step 16: End-to-End Verification Matrix', () => {
       },
       body: JSON.stringify({
         email: teacherEmail,
-        full_name: teacherName
+        full_name: teacherName,
+        department: 'Science & Engineering',
+        subjects: ['Computer Science']
       })
     });
     assert.strictEqual(inviteRes.status, 201, 'Teacher invitation must be created successfully');

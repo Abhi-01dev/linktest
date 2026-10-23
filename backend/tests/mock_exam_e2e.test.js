@@ -42,7 +42,7 @@ describe('Mock Exam Complete System End-to-End Verification Suite', () => {
     const suffix = Date.now();
 
     // 1. Authenticate Admin
-    const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
+    let adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -50,6 +50,16 @@ describe('Mock Exam Complete System End-to-End Verification Suite', () => {
         password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!'
       })
     });
+    if (adminRes.status !== 200) {
+      adminRes = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'admin@linktest.io',
+          password: 'Admin123!'
+        })
+      });
+    }
     const adminBody = await adminRes.json();
     assert.equal(adminRes.status, 200);
     adminToken = adminBody.data.token;
