@@ -39,15 +39,19 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/webp'
 ]);
 
-const ALLOWED_EXTENSIONS = new Set([
+export const ALLOWED_EXTENSIONS = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.txt', '.md', '.zip', '.jpg', '.jpeg', '.png', '.webp'
+]);
+
+export const DISALLOWED_EXTENSIONS = new Set([
+  '.exe', '.sh', '.bat', '.cmd', '.js', '.mjs', '.vbs', '.scr', '.msi', '.com', '.php', '.py', '.bin', '.dll', '.jar'
 ]);
 
 /**
  * Sanitize filename to prevent directory traversal and overwrite attacks
  */
 export function sanitizeFilename(originalName) {
-  const ext = path.extname(originalName).toLowerCase();
+  const ext = path.extname(originalName || '').toLowerCase();
   const safeExt = ALLOWED_EXTENSIONS.has(ext) ? ext : '.bin';
   const randomHex = crypto.randomBytes(16).toString('hex');
   const timestamp = Date.now();
@@ -59,21 +63,33 @@ export function sanitizeFilename(originalName) {
  */
 export function validateUploadFile(file) {
   if (!file) {
-    throw new Error('No file provided for upload.');
+    const err = new Error('No file provided for upload.');
+    err.code = 'NO_FILE';
+    err.statusCode = 400;
+    throw err;
   }
 
   const maxBytes = config.storage.maxFileSizeMb * 1024 * 1024;
   if (file.size > maxBytes) {
-    throw new Error(`File size exceeds maximum allowable limit of ${config.storage.maxFileSizeMb} MB.`);
+    const err = new Error(`File size exceeds maximum allowable limit of ${config.storage.maxFileSizeMb} MB.`);
+    err.code = 'FILE_TOO_LARGE';
+    err.statusCode = 400;
+    throw err;
   }
 
   const ext = path.extname(file.originalname || file.name || '').toLowerCase();
-  if (!ALLOWED_EXTENSIONS.has(ext)) {
-    throw new Error(`File extension '${ext}' is not permitted. Allowed: ${Array.from(ALLOWED_EXTENSIONS).join(', ')}`);
+  if (DISALLOWED_EXTENSIONS.has(ext) || !ALLOWED_EXTENSIONS.has(ext)) {
+    const err = new Error(`File extension '${ext}' is not permitted. Executable or unsupported formats are rejected.`);
+    err.code = 'DISALLOWED_FILE_TYPE';
+    err.statusCode = 400;
+    throw err;
   }
 
   if (file.mimetype && !ALLOWED_MIME_TYPES.has(file.mimetype.toLowerCase())) {
-    throw new Error(`File MIME type '${file.mimetype}' is not permitted.`);
+    const err = new Error(`File MIME type '${file.mimetype}' is not permitted.`);
+    err.code = 'DISALLOWED_FILE_TYPE';
+    err.statusCode = 400;
+    throw err;
   }
 
   return true;
@@ -84,12 +100,22 @@ export function validateUploadFile(file) {
  */
 export function getSafeFilePath(category, filename) {
   const targetDir = DIRECTORIES[category] || DIRECTORIES.materials;
-  const safeFilename = path.basename(filename); // Strip any ../ or directory separators
+  if (!filename || typeof filename !== 'string' || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    const err = new Error('Path traversal attempt detected. Access denied.');
+    err.code = 'FORBIDDEN';
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const safeFilename = path.basename(filename); // Strip any remaining path characters
   const resolvedPath = path.resolve(targetDir, safeFilename);
 
   // Guard against path traversal out of target directory
   if (!resolvedPath.startsWith(targetDir)) {
-    throw new Error('Path traversal attempt detected. Access denied.');
+    const err = new Error('Path traversal attempt detected. Access denied.');
+    err.code = 'FORBIDDEN';
+    err.statusCode = 403;
+    throw err;
   }
 
   return resolvedPath;
