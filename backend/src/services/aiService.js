@@ -1,13 +1,14 @@
+import os from 'os';
 import { config } from '../config/env.js';
 import { aiRepository } from '../repositories/aiRepository.js';
 import crypto from 'crypto';
 
-const SYSTEM_PROMPT = `You are LinkTest AI Tutor, an intelligent, patient, and highly engaging educational mentor designed for Indian college students, competitive exam aspirants, and technology learners.
+export const SYSTEM_PROMPT = `You are LinkTest AI Tutor, an intelligent, patient, and highly engaging educational mentor designed for Indian college students, competitive exam aspirants, and technology learners.
 
 Core Responsibilities:
 1. Explain technical, scientific, and mathematical concepts in simple, intuitive terms.
 2. Provide step-by-step breakdowns, relatable real-world analogies, and clean code examples where appropriate.
-3. Encourage the student and guide them toward understanding rather than merely giving quick answers.
+3. Act as a Socratic tutor: Never provide direct, copy-paste homework solutions outright; instead guide the student with conceptual hints, questions, and step-by-step reasoning to build their own understanding.
 4. When asked for practice questions, format clear multiple-choice questions with options and explanations.
 5. If you do not know an answer or if a query is ambiguous, honestly admit uncertainty and ask clarifying questions.
 6. Always maintain a professional, motivating, and educational tone.`;
@@ -49,6 +50,21 @@ export const aiService = {
     const baseUrl = config.ollama.baseUrl.replace(/\/+$/, '');
     const targetModel = config.ollama.model;
 
+    const totalMemGb = parseFloat((os.totalmem() / (1024 ** 3)).toFixed(2));
+    const freeMemGb = parseFloat((os.freemem() / (1024 ** 3)).toFixed(2));
+    const memoryDiagnostic = {
+      total_ram_gb: totalMemGb,
+      free_ram_gb: freeMemGb,
+      ram_sufficient_for_local_llm: totalMemGb >= 8.0
+    };
+
+    const onboardingInstructions = [
+      '1. Download and install Ollama from https://ollama.com',
+      "2. Start the local daemon in your terminal: 'ollama serve'",
+      `3. Pull the recommended educational model: 'ollama pull ${targetModel}'`,
+      '4. Alternatively, configure CLOUD_AI_API_KEY in your environment for cloud-hosted inference.'
+    ];
+
     // Check Cloud AI provider first if configured
     if (config.cloudAi.apiKey) {
       const endpoint = resolveCloudEndpoint(config.cloudAi.baseUrl, config.cloudAi.provider);
@@ -76,6 +92,7 @@ export const aiService = {
         supported_models: supportedModels.length > 0 ? supportedModels : ['qwen/qwen3.8-27b', 'openai/gpt-oss-20b'],
         endpoint,
         is_cloud: true,
+        system_memory: memoryDiagnostic,
         status_message: `Cloud AI provider (${config.cloudAi.provider || 'groq'}) is configured with model ${config.cloudAi.model}.`
       };
     }
@@ -89,7 +106,9 @@ export const aiService = {
         model: config.cloudAi.model,
         endpoint,
         is_cloud: true,
+        system_memory: memoryDiagnostic,
         error: 'Missing API key',
+        onboarding_instructions: onboardingInstructions,
         status_message: `Cloud AI provider '${config.cloudAi.provider}' is configured, but CLOUD_AI_API_KEY is not set.`
       };
     }
@@ -110,7 +129,9 @@ export const aiService = {
           model: targetModel,
           endpoint: baseUrl,
           is_cloud: false,
+          system_memory: memoryDiagnostic,
           error: `Ollama returned HTTP ${response.status}`,
+          onboarding_instructions: onboardingInstructions,
           status_message: `Ollama service reachable at ${baseUrl} but responded with status ${response.status}.`
         };
       }
@@ -126,6 +147,7 @@ export const aiService = {
         installed_models: models.map(m => m.name),
         endpoint: baseUrl,
         is_cloud: false,
+        system_memory: memoryDiagnostic,
         status_message: hasModel
           ? `Ollama is active and ${targetModel} is ready for tutoring.`
           : `Ollama is active at ${baseUrl}, but model '${targetModel}' was not found in installed models. Run 'ollama pull ${targetModel}'.`
@@ -136,7 +158,9 @@ export const aiService = {
         model: targetModel,
         endpoint: baseUrl,
         is_cloud: false,
+        system_memory: memoryDiagnostic,
         error: err.name === 'AbortError' ? 'Connection timed out' : err.message,
+        onboarding_instructions: onboardingInstructions,
         status_message: `Local Ollama service is not responding at ${baseUrl}. Ensure Ollama is running ('ollama serve') or configure CLOUD_AI_API_KEY for online deployment.`
       };
     }
