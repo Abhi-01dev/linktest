@@ -16,7 +16,7 @@ import { sanitizeOptionalString } from '../utils/sanitize.js';
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(2).max(150),
-  department: z.string().trim().min(2).max(150)
+  department: z.string().trim().min(2).max(150).optional().default('General')
 });
 
 const updateStatusSchema = z.object({
