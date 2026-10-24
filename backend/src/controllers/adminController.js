@@ -16,7 +16,7 @@ import { sanitizeOptionalString } from '../utils/sanitize.js';
 const inviteTeacherSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(2).max(150),
-  department: z.string().trim().min(2).max(150)
+  department: z.string().trim().min(2).max(150).optional().default('General')
 });
 
 const updateStatusSchema = z.object({
@@ -407,8 +407,26 @@ export const adminController = {
         action: 'USER_ROLE_OR_STATUS_UPDATED',
         resourceType: 'user',
         resourceId: userId,
-        summary: `Admin updated user ${user.email} (Role: ${role || user.role}, Status: ${status || user.status})`
+        summary: `Admin updated user ${user.email} (Role: ${role || user.role}, Status: ${status || user.status})`,
+        ipAddress: req.ip || req.headers['x-forwarded-for'],
+        userAgent: req.headers['user-agent']
       });
+
+      if (role && role !== user.role) {
+        await securityLogRepository.recordSecurityLog({
+          eventType: 'USER_ROLE_UPDATED',
+          severity: 'HIGH',
+          userId: user.id,
+          userEmail: user.email,
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          targetResource: `user:${userId}`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent'],
+          details: `Role for user ${user.email} updated from ${user.role} to ${role} by admin ${req.user.email}`,
+          metadata: { previousRole: user.role, newRole: role, updatedBy: req.user.id }
+        });
+      }
 
       return res.status(200).json({
         success: true,
@@ -759,6 +777,16 @@ export const adminController = {
       const { name, description, academic_session_id } = req.body;
       const cls = await lmsRepository.updateClass(req.params.id, { name, description, academicSessionId: academic_session_id });
       if (!cls) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Class not found.' } });
+      await logAudit({
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        action: 'CLASS_UPDATED',
+        resourceType: 'class',
+        resourceId: cls.id,
+        summary: `Class '${cls.name || name}' updated`,
+        ipAddress: req.ip || req.headers['x-forwarded-for'],
+        userAgent: req.headers['user-agent']
+      });
       return res.status(200).json({ success: true, data: { class: cls }, message: 'Class updated.' });
     } catch (err) { next(err); }
   },
@@ -1013,19 +1041,60 @@ export const adminController = {
   // ── Audit Logs ─────────────────────────────────────────────
   async getAuditLogs(req, res, next) {
     try {
-      const { action, resource_type, actor_id, search, start_date, end_date, limit, page, offset } = req.query;
+      const {
+        action,
+        category,
+        action_type,
+        actionType,
+        resource_type,
+        resourceType,
+        target_resource,
+        targetResource,
+        actor_id,
+        actorId,
+        search,
+        q,
+        start_date,
+        startDate,
+        end_date,
+        endDate,
+        limit,
+        page,
+        offset
+      } = req.query;
+
+      const sDate = start_date || startDate;
+      const eDate = end_date || endDate;
+
+      if (sDate && isNaN(Date.parse(sDate))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Invalid start_date format.' }
+        });
+      }
+      if (eDate && isNaN(Date.parse(eDate))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Invalid end_date format.' }
+        });
+      }
+
       const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 20, 100));
-      const parsedOffset = offset !== undefined ? parseInt(offset, 10) : ((parseInt(page, 10) || 1) - 1) * parsedLimit;
+      const parsedOffset = offset !== undefined && offset !== null
+        ? Math.max(0, parseInt(offset, 10) || 0)
+        : (Math.max(1, parseInt(page, 10) || 1) - 1) * parsedLimit;
 
       const result = await auditRepository.getLogs({
-        action,
-        resourceType: resource_type,
-        actorId: actor_id,
-        search,
-        startDate: start_date,
-        endDate: end_date,
+        action: action || category || action_type || actionType,
+        resourceType: resource_type || resourceType,
+        targetResource: target_resource || targetResource,
+        actorId: actor_id || actorId,
+        search: search || q,
+        startDate: sDate,
+        endDate: eDate,
         limit: parsedLimit,
-        offset: parsedOffset
+        offset: parsedOffset,
+        page
       });
 
       return res.status(200).json({
@@ -1039,18 +1108,61 @@ export const adminController = {
   // ── Security Logs ──────────────────────────────────────────
   async getSecurityLogs(req, res, next) {
     try {
-      const { event_type, severity, search, start_date, end_date, limit, page, offset } = req.query;
+      const {
+        event_type,
+        eventType,
+        action,
+        category,
+        severity,
+        user_id,
+        userId,
+        actor_id,
+        actorId,
+        target_resource,
+        targetResource,
+        search,
+        q,
+        start_date,
+        startDate,
+        end_date,
+        endDate,
+        limit,
+        page,
+        offset
+      } = req.query;
+
+      const sDate = start_date || startDate;
+      const eDate = end_date || endDate;
+
+      if (sDate && isNaN(Date.parse(sDate))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Invalid start_date format.' }
+        });
+      }
+      if (eDate && isNaN(Date.parse(eDate))) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'Invalid end_date format.' }
+        });
+      }
+
       const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 20, 100));
-      const parsedOffset = offset !== undefined ? parseInt(offset, 10) : ((parseInt(page, 10) || 1) - 1) * parsedLimit;
+      const parsedOffset = offset !== undefined && offset !== null
+        ? Math.max(0, parseInt(offset, 10) || 0)
+        : (Math.max(1, parseInt(page, 10) || 1) - 1) * parsedLimit;
 
       const result = await securityLogRepository.getLogs({
-        eventType: event_type,
+        eventType: event_type || eventType || action || category,
         severity,
-        search,
-        startDate: start_date,
-        endDate: end_date,
+        userId: user_id || userId || actor_id || actorId,
+        targetResource: target_resource || targetResource,
+        search: search || q,
+        startDate: sDate,
+        endDate: eDate,
         limit: parsedLimit,
-        offset: parsedOffset
+        offset: parsedOffset,
+        page
       });
 
       return res.status(200).json({
@@ -1465,6 +1577,16 @@ export async function calculateAcademicReports({ course_id, batch_id, start_date
   }
   if (course_id && course_id !== 'ALL') {
     allAttempts = allAttempts.filter(a => a.course_id === course_id);
+  }
+
+  if (course_id && course_id !== 'ALL') {
+    allAttempts = allAttempts.filter(a => a.course_id === course_id);
+  }
+  if (start_date) {
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) >= new Date(start_date));
+  }
+  if (end_date) {
+    allAttempts = allAttempts.filter(a => new Date(a.submitted_at) <= new Date(end_date));
   }
 
   const totalAttempts = allAttempts.length;
