@@ -1438,6 +1438,29 @@ class ApiClient {
     return res.data;
   }
 
+  async uploadFile(file, category = 'submissions') {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('category', category);
+    const url = `${BASE_URL}/upload`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {})
+      },
+      body: formData
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error?.message || 'File upload failed');
+    }
+    return data.data;
+  }
+
+  async executeCode(payload) {
+    return this.runCode(payload);
+  }
+
   async evaluateQuizAnswer(attemptId, questionId, { score, comment }) {
     const res = await this.request(`/quizzes/attempts/${attemptId}/answers/${questionId}/evaluate`, {
       method: 'POST',
@@ -1448,3 +1471,31 @@ class ApiClient {
 }
 
 export const api = new ApiClient();
+
+export const studentApi = {
+  getDashboard: () => api.getStudentDashboard(),
+  getClasses: () => api.getStudentClasses(),
+  getTimetable: (params) => api.getStudentTimetable(params),
+  getAttendance: () => api.getStudentAttendance(),
+  getAssignments: () => api.getStudentAssignments(),
+  submitAssignment: (id, data) => api.submitStudentAssignment(id, data),
+  getMaterials: () => api.getStudentMaterials(),
+  getLiveClasses: () => api.getStudentLiveClasses(),
+  getAnnouncements: () => api.getStudentAnnouncements()
+};
+
+export const codingApi = {
+  executeCode: (payload) => api.runCode(payload),
+  runCode: (payload) => api.runCode(payload),
+  submitSolution: (payload) => api.submitCodingSolution(payload)
+};
+
+export const aiApi = {
+  chat: (message, history) => api.chatAiTutor(message, history),
+  getStatus: () => api.getAiStatus(),
+  init: () => api.initOllama(),
+  generateQuiz: (payload) => api.generateAiQuestions(payload)
+};
+
+export default api;
+

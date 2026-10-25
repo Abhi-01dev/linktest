@@ -39,6 +39,7 @@ const LessonViewerPage = lazyNamed(() => import('./pages/student/LessonViewerPag
 const AITutorPage = lazyNamed(() => import('./pages/student/AITutorPage'), 'AITutorPage');
 const StudentProgressPage = lazyNamed(() => import('./pages/student/StudentProgressPage'), 'StudentProgressPage');
 const ProfilePage = lazyNamed(() => import('./pages/student/ProfilePage'), 'ProfilePage');
+const CodingChallengePage = lazyNamed(() => import('./pages/student/CodingChallengePage'), 'CodingChallengePage');
 
 // Quiz Pages (Lazy-loaded chunks)
 const QuizTakePage = lazyNamed(() => import('./pages/quizzes/QuizTakePage'), 'QuizTakePage');
@@ -138,6 +139,8 @@ function AppContent() {
                 <Route path="/support" element={<ProtectedRoute requiredRole="STUDENT"><StudentSupportTicketsPage /></ProtectedRoute>} />
                 <Route path="/progress" element={<ProtectedRoute requiredRole="STUDENT"><StudentProgressPage /></ProtectedRoute>} />
                 <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+                <Route path="/coding" element={<ProtectedRoute requiredRole="STUDENT"><CodingChallengePage /></ProtectedRoute>} />
+                <Route path="/coding/:id" element={<ProtectedRoute requiredRole="STUDENT"><CodingChallengePage /></ProtectedRoute>} />
                 <Route path="/courses/:courseId/lessons/:lessonId" element={<ProtectedRoute requiredRole="STUDENT"><LessonViewerPage /></ProtectedRoute>} />
                 <Route path="/quiz/:quizId" element={<ProtectedRoute requiredRole="STUDENT"><QuizTakePage /></ProtectedRoute>} />
                 <Route path="/quiz/results/:attemptId" element={<ProtectedRoute requiredRole="STUDENT"><QuizResultPage /></ProtectedRoute>} />
