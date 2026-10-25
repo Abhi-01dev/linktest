@@ -44,6 +44,7 @@ jobs:
           NODE_ENV: test
           PORT: 8081
           JWT_SECRET: test_jwt_secret_must_be_at_least_32_characters_long!
+          ADMIN_PASSWORD: Admin123!
 
       - name: Install frontend dependencies
         run: |

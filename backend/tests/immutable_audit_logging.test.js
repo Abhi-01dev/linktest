@@ -39,7 +39,7 @@ describe('Immutable Audit Logging & Security Logging Test Suite', () => {
     const adminRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'LinkTest#ProdAdmin2026!' })
+      body: JSON.stringify({ email: 'admin@linktest.io', password: process.env.ADMIN_PASSWORD || 'Admin123!' })
     });
     const adminData = await adminRes.json();
     assert.equal(adminRes.status, 200);
