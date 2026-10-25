@@ -87,16 +87,36 @@ export function MockTestRunnerPage() {
   const responsesRef = useRef({});
   const preventClipboardAction = (event) => event.preventDefault();
 
+  // Proctoring Authoritative References to avoid closure drift
+  const securityWarningCountRef = useRef(0);
+  const fullscreenExitCountRef = useRef(0);
+  const isFinalizedRef = useRef(false);
+  const examDataRef = useRef(null);
+  const lastTabOrBlurTimeRef = useRef(0);
+  const lastFaceMissingTimeRef = useRef(0);
+  const lastMultiFaceTimeRef = useRef(0);
+  const lastCameraFailureTimeRef = useRef(0);
+
   const DEBUG_PROCTOR = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
     Boolean(window.DEBUG_PROCTOR)
   );
 
-  // Sync ref with state
+  // Sync refs with state
   useEffect(() => {
     responsesRef.current = responses;
   }, [responses]);
+
+  useEffect(() => {
+    examDataRef.current = examData;
+  }, [examData]);
+
+  useEffect(() => {
+    if (autoSubmittedState?.submitted) {
+      isFinalizedRef.current = true;
+    }
+  }, [autoSubmittedState]);
 
   // Request browser Fullscreen via user gesture
   const requestBrowserFullscreen = async () => {
@@ -120,45 +140,187 @@ export function MockTestRunnerPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // 1. WEBCAM PROCTORING INTEGRATION & SECURITY EVENTS
+  // 1. CENTRALIZED SECURITY VIOLATION PIPELINE (Requirement 2)
+  // All proctoring violations flow through this single authoritative handler:
+  // - FULLSCREEN_EXIT
+  // - TAB_HIDDEN
+  // - WINDOW_BLURRED
+  // - FACE_NOT_DETECTED
+  // - MULTIPLE_FACES
+  // - CAMERA_DISCONNECTED
+  // - CAMERA_PERMISSION_REVOKED
+  // - SUSPICIOUS_KEY_COMBINATION
   // ---------------------------------------------------------------------------
 
-  const handleProctorEvent = useCallback(async (eventPayload) => {
-    try {
-      const payloadType = (eventPayload.event_type || eventPayload.eventType || '').toUpperCase();
+  const handleSecurityViolation = useCallback(async (eventTypeOrPayload, metadata = {}) => {
+    let eventType = '';
+    let meta = {};
+    if (typeof eventTypeOrPayload === 'string') {
+      eventType = eventTypeOrPayload.toUpperCase();
+      meta = metadata || {};
+    } else if (eventTypeOrPayload && typeof eventTypeOrPayload === 'object') {
+      eventType = (eventTypeOrPayload.eventType || eventTypeOrPayload.event_type || '').toUpperCase();
+      meta = { ...eventTypeOrPayload, ...metadata };
+    }
+    if (!eventType) return;
 
-      // Fullscreen exit is strictly handled by dedicated handleFullscreenChange
-      if (payloadType === 'FULLSCREEN_EXIT') return;
+    // 1. Ignore violations after the attempt is submitted or finalized
+    const attemptStatus = examDataRef.current?.status || examDataRef.current?.attempt?.status;
+    if (
+      isFinalizedRef.current ||
+      autoSubmittedState?.submitted ||
+      ['submitted', 'evaluated', 'completed', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attemptStatus)
+    ) {
+      if (DEBUG_PROCTOR) console.log(`[PROCTOR] Violation ${eventType} ignored because attempt is finalized.`);
+      return;
+    }
 
-      if (DEBUG_PROCTOR) {
-        console.log('[PROCTOR] Sending proctoring event:', payloadType, eventPayload);
+    const now = Date.now();
+
+    // 2. Apply the appropriate debounce/cooldown
+    if (eventType === 'FULLSCREEN_EXIT') {
+      if (now - lastFullscreenExitRef.current < 2000) {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FULLSCREEN_EXIT debounced');
+        return;
       }
+      lastFullscreenExitRef.current = now;
+    } else if (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED') {
+      if (now - lastTabOrBlurTimeRef.current < 2500) {
+        if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
+        return;
+      }
+      lastTabOrBlurTimeRef.current = now;
+    } else if (eventType === 'FACE_NOT_DETECTED') {
+      if (now - lastFaceMissingTimeRef.current < 4000) {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FACE_NOT_DETECTED debounced');
+        return;
+      }
+      lastFaceMissingTimeRef.current = now;
+    } else if (eventType === 'MULTIPLE_FACES') {
+      if (now - lastMultiFaceTimeRef.current < 4000) {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate MULTIPLE_FACES debounced');
+        return;
+      }
+      lastMultiFaceTimeRef.current = now;
+    } else if (eventType === 'CAMERA_DISCONNECTED' || eventType === 'CAMERA_PERMISSION_REVOKED') {
+      if (now - lastCameraFailureTimeRef.current < 4000) {
+        if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
+        return;
+      }
+      lastCameraFailureTimeRef.current = now;
+    }
 
+    // 3. Increment the correct local counter & 4. Update the visible UI immediately
+    if (eventType === 'FULLSCREEN_EXIT') {
+      const nextExitCount = fullscreenExitCountRef.current + 1;
+      fullscreenExitCountRef.current = nextExitCount;
+      setFullscreenExitCount(nextExitCount);
+
+      if (nextExitCount >= 2) {
+        isFinalizedRef.current = true;
+        setAutoSubmittedState({
+          submitted: true,
+          reason: 'SECOND_FULLSCREEN_EXIT',
+          message: 'Your test was automatically submitted because fullscreen mode was exited twice.'
+        });
+        stopCamera();
+        setActiveWarningModal(null);
+      } else {
+        setActiveWarningModal({
+          title: 'Fullscreen exits: 1 / 2',
+          message: 'You have exited full-screen mode. Please return to full screen immediately. A second exit will automatically submit your exam.',
+          count: 1,
+          type: 'warning'
+        });
+      }
+    } else {
+      // Security warning
+      const nextStrikeCount = securityWarningCountRef.current + 1;
+      securityWarningCountRef.current = nextStrikeCount;
+      setSecurityWarningCount(nextStrikeCount);
+      setWarningCount(prev => prev + 1);
+
+      if (nextStrikeCount >= 3) {
+        isFinalizedRef.current = true;
+        const finalReason = (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED')
+          ? 'MAX_TAB_SWITCHES'
+          : 'MAX_SECURITY_WARNINGS';
+        setAutoSubmittedState({
+          submitted: true,
+          reason: finalReason,
+          message: finalReason === 'MAX_TAB_SWITCHES'
+            ? 'Your test was automatically submitted because maximum tab switches were detected.'
+            : 'Your test was automatically submitted because the maximum number of security warnings was reached.'
+        });
+        stopCamera();
+        setActiveWarningModal(null);
+      } else {
+        let warningMsg = 'Please follow the test rules and remain on the exam screen.';
+        if (eventType === 'TAB_HIDDEN') {
+          warningMsg = 'You navigated away from the examination tab. Please stay on this tab to maintain exam session integrity.';
+        } else if (eventType === 'WINDOW_BLURRED') {
+          warningMsg = 'Focus shifted away from the examination window. Please keep the test active and focused.';
+        } else if (eventType === 'MULTIPLE_FACES') {
+          warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
+        } else if (eventType === 'FACE_NOT_DETECTED') {
+          warningMsg = 'Your face was not detected in the camera view for over 5 seconds. Please adjust your camera or lighting.';
+        } else if (eventType === 'CAMERA_DISCONNECTED') {
+          warningMsg = 'Webcam disconnected. A functioning camera is required for this examination.';
+        } else if (eventType === 'CAMERA_PERMISSION_REVOKED') {
+          warningMsg = 'Camera permission was revoked. Please enable camera access in browser settings.';
+        } else if (eventType === 'SUSPICIOUS_KEY_COMBINATION') {
+          warningMsg = 'Prohibited keyboard shortcut or key combination was pressed.';
+        }
+
+        setActiveWarningModal({
+          title: `Security warnings: ${nextStrikeCount} / 3`,
+          message: warningMsg,
+          count: nextStrikeCount,
+          type: 'warning'
+        });
+      }
+    }
+
+    // 5. Persist the event to backend
+    try {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Persisting violation to server:', eventType, meta);
       const res = await api.logMockTestSecurityEvent(attemptId, {
-        ...eventPayload,
-        eventType: payloadType,
-        event_type: payloadType,
+        ...meta,
+        eventType,
+        event_type: eventType,
+        client_timestamp: new Date().toISOString(),
         answers: responsesRef.current
       });
 
-      if (DEBUG_PROCTOR) {
-        console.log('[PROCTOR] Proctoring event response:', res);
-      }
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Server authoritative response:', res);
 
+      // 6. Receive authoritative server response & 7. Synchronize frontend counter
       if (res) {
         if (res.security_warning_count !== undefined) {
           setSecurityWarningCount(res.security_warning_count);
+          securityWarningCountRef.current = res.security_warning_count;
+        }
+        if (res.fullscreen_exit_count !== undefined) {
+          setFullscreenExitCount(res.fullscreen_exit_count);
+          fullscreenExitCountRef.current = res.fullscreen_exit_count;
         }
         if (res.warning_count !== undefined) {
           setWarningCount(res.warning_count);
         }
-        if (res.fullscreen_exit_count !== undefined) {
-          setFullscreenExitCount(res.fullscreen_exit_count);
-        }
 
-        if (res.auto_submitted) {
-          const reasonCode = res.submission_reason || 'MAX_SECURITY_WARNINGS';
-          let msg = 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+        // 8. Determine whether configured threshold reached & 9. Auto-submit & 10. Display correct reason
+        const isServerAutoSubmitted = Boolean(
+          res.auto_submitted ||
+          res.autoSubmitted ||
+          res.status === 'AUTO_SUBMITTED' ||
+          (res.fullscreen_exit_count && res.fullscreen_exit_count >= 2) ||
+          (res.security_warning_count && res.security_warning_count >= 3)
+        );
+
+        if (isServerAutoSubmitted) {
+          isFinalizedRef.current = true;
+          const reasonCode = res.submission_reason || res.submissionReason || (eventType === 'FULLSCREEN_EXIT' ? 'SECOND_FULLSCREEN_EXIT' : 'MAX_SECURITY_WARNINGS');
+          let msg = 'Your test was automatically submitted because the maximum number of security violations was reached.';
           if (reasonCode === 'SECOND_FULLSCREEN_EXIT') {
             msg = 'Your test was automatically submitted because fullscreen mode was exited twice.';
           } else if (reasonCode === 'MAX_TAB_SWITCHES') {
@@ -170,34 +332,13 @@ export function MockTestRunnerPage() {
             message: msg
           });
           stopCamera();
-          return;
-        }
-
-        if (!res.debounced) {
-          const currentCount = res.security_warning_count ?? (securityWarningCount + 1);
-          let warningMsg = 'Please follow the test rules and remain on the exam screen.';
-          if (payloadType === 'TAB_HIDDEN') {
-            warningMsg = 'You navigated away from the examination tab. Please stay on this tab to maintain exam session integrity.';
-          } else if (payloadType === 'WINDOW_BLURRED') {
-            warningMsg = 'Focus shifted away from the examination window. Please keep the test active and focused.';
-          } else if (payloadType === 'MULTIPLE_FACES') {
-            warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
-          } else if (payloadType === 'FACE_NOT_DETECTED') {
-            warningMsg = 'Your face was not detected in the camera view for over 5 seconds. Please adjust your camera or lighting.';
-          }
-
-          setActiveWarningModal({
-            title: `Security Strike ${currentCount}/3`,
-            message: warningMsg,
-            count: currentCount,
-            type: 'warning'
-          });
+          setActiveWarningModal(null);
         }
       }
     } catch (err) {
-      console.warn('[Runner] Failed to log proctoring event:', err);
+      console.warn('[Runner] Failed to persist security violation to server:', err);
     }
-  }, [attemptId, securityWarningCount]);
+  }, [attemptId, stopCamera, autoSubmittedState, DEBUG_PROCTOR]);
 
   const {
     videoRef,
@@ -211,7 +352,8 @@ export function MockTestRunnerPage() {
   } = useWebcamProctor({
     enabled: Boolean(examData?.proctoring_config?.webcam_required),
     faceDetectionEnabled: Boolean(examData?.proctoring_config?.face_detection),
-    onEvent: handleProctorEvent
+    onViolation: handleSecurityViolation,
+    onEvent: handleSecurityViolation
   });
 
   // ---------------------------------------------------------------------------
@@ -268,9 +410,14 @@ export function MockTestRunnerPage() {
         setRemainingSeconds(remaining);
 
         // Restore authoritative counters from backend
-        setWarningCount(data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0);
-        setSecurityWarningCount(data.security_warning_count ?? data.attempt?.security_warning_count ?? 0);
-        setFullscreenExitCount(data.fullscreen_exit_count ?? data.attempt?.fullscreen_exit_count ?? 0);
+        const initialWarn = data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0;
+        const initialSec = data.security_warning_count ?? data.attempt?.security_warning_count ?? 0;
+        const initialFs = data.fullscreen_exit_count ?? data.attempt?.fullscreen_exit_count ?? 0;
+        setWarningCount(initialWarn);
+        setSecurityWarningCount(initialSec);
+        securityWarningCountRef.current = initialSec;
+        setFullscreenExitCount(initialFs);
+        fullscreenExitCountRef.current = initialFs;
 
         // Preload saved answers
         if (data.responses) {
@@ -340,26 +487,12 @@ export function MockTestRunnerPage() {
     const handleVisibilityChange = () => {
       const isHidden = Boolean(document.hidden || document.visibilityState === 'hidden');
       if (isHidden) {
-        const now = Date.now();
-        // Clear any pending blur timeout since tab visibility transition is authoritative
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] visibility: hidden -> triggering TAB_HIDDEN violation');
         if (blurTimeoutRef.current) {
           clearTimeout(blurTimeoutRef.current);
           blurTimeoutRef.current = null;
         }
-
-        // Debounce duplicate visibility events (3500ms matching backend limit)
-        if (now - lastTabHiddenTimeRef.current < 3500) {
-          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate TAB_HIDDEN debounced');
-          return;
-        }
-        lastTabHiddenTimeRef.current = now;
-
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] visibility: hidden -> emitting TAB_HIDDEN');
-        handleProctorEvent({
-          event_type: 'TAB_HIDDEN',
-          severity: 'warning',
-          client_timestamp: new Date().toISOString()
-        });
+        handleSecurityViolation('TAB_HIDDEN');
       } else {
         if (DEBUG_PROCTOR) console.log('[PROCTOR] visibility: visible (no strike recorded)');
       }
@@ -368,41 +501,22 @@ export function MockTestRunnerPage() {
     const handleWindowBlur = () => {
       if (DEBUG_PROCTOR) console.log('[PROCTOR] window blur event triggered');
 
-      // If a tab switch was already recorded within 3500ms, suppress blur
-      if (Date.now() - lastTabHiddenTimeRef.current < 3500) {
+      // If a tab switch was already recorded recently, suppress blur to prevent double counting
+      if (Date.now() - lastTabOrBlurTimeRef.current < 2500) {
         if (DEBUG_PROCTOR) console.log('[PROCTOR] blur suppressed (correlated with recent TAB_HIDDEN)');
         return;
       }
 
-      // Defer blur evaluation by 120ms to allow visibilitychange to fire first if tab switched
       if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);
       }
       blurTimeoutRef.current = setTimeout(() => {
         blurTimeoutRef.current = null;
-
-        // If the document became hidden in the meantime, visibilitychange handled it
         if (document.hidden || document.visibilityState === 'hidden') {
           if (DEBUG_PROCTOR) console.log('[PROCTOR] blur ignored because tab is hidden');
           return;
         }
-
-        const now = Date.now();
-        if (now - lastTabHiddenTimeRef.current < 3500) {
-          return;
-        }
-        if (now - lastBlurTimeRef.current < 3500) {
-          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate WINDOW_BLURRED debounced');
-          return;
-        }
-        lastBlurTimeRef.current = now;
-
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] emitting WINDOW_BLURRED');
-        handleProctorEvent({
-          event_type: 'WINDOW_BLURRED',
-          severity: 'warning',
-          client_timestamp: new Date().toISOString()
-        });
+        handleSecurityViolation('WINDOW_BLURRED');
       }, 120);
     };
 
@@ -410,7 +524,7 @@ export function MockTestRunnerPage() {
       if (DEBUG_PROCTOR) console.log('[PROCTOR] window focus (no strike recorded)');
     };
 
-    const handleFullscreenChange = async () => {
+    const handleFullscreenChange = () => {
       const isNowFullscreen = Boolean(
         document.fullscreenElement ||
         document.webkitFullscreenElement ||
@@ -423,59 +537,25 @@ export function MockTestRunnerPage() {
         console.log(`[PROCTOR] fullscreenchange | active: ${isNowFullscreen}`);
       }
 
-      // Remember when fullscreen is successfully active
       if (isNowFullscreen) {
         wasFullscreenRef.current = true;
         return;
       }
 
-      // Only count an actual transition: fullscreen active -> fullscreenElement becomes null
       if (wasFullscreenRef.current && !isNowFullscreen) {
         wasFullscreenRef.current = false;
+        handleSecurityViolation('FULLSCREEN_EXIT');
+      }
+    };
 
-        // Debounce rapid duplicate fullscreenchange events (2000ms)
-        const now = Date.now();
-        if (now - lastFullscreenExitRef.current < 2000) {
-          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate fullscreen exit event debounced');
-          return;
-        }
-        lastFullscreenExitRef.current = now;
-
-        try {
-          if (DEBUG_PROCTOR) console.log('[PROCTOR] Emitting FULLSCREEN_EXIT to server');
-          const res = await api.logMockTestSecurityEvent(attemptId, {
-            eventType: 'FULLSCREEN_EXIT',
-            event_type: 'FULLSCREEN_EXIT',
-            client_timestamp: new Date().toISOString(),
-            answers: responsesRef.current
-          });
-
-          if (DEBUG_PROCTOR) console.log('[PROCTOR] FULLSCREEN_EXIT response:', res);
-
-          if (res) {
-            if (res.fullscreen_exit_count !== undefined) {
-              setFullscreenExitCount(res.fullscreen_exit_count);
-            }
-            if (res.security_warning_count !== undefined) {
-              setSecurityWarningCount(res.security_warning_count);
-            }
-            if (res.warning_count !== undefined) {
-              setWarningCount(res.warning_count);
-            }
-
-            if (res.auto_submitted || (res.fullscreen_exit_count && res.fullscreen_exit_count >= 2)) {
-              setAutoSubmittedState({
-                submitted: true,
-                reason: res.submission_reason || 'SECOND_FULLSCREEN_EXIT',
-                message: 'Your test was automatically submitted because fullscreen mode was exited twice.'
-              });
-              stopCamera();
-              return;
-            }
-          }
-        } catch (err) {
-          console.warn('[Runner] Fullscreen exit notification failed:', err.message);
-        }
+    const handleKeyDown = (e) => {
+      if (
+        e.key === 'F12' ||
+        (e.ctrlKey && e.shiftKey && ['I', 'J', 'C'].includes((e.key || '').toUpperCase())) ||
+        (e.ctrlKey && (e.key || '').toUpperCase() === 'U')
+      ) {
+        e.preventDefault();
+        handleSecurityViolation('SUSPICIOUS_KEY_COMBINATION', { key: e.key });
       }
     };
 
@@ -485,6 +565,7 @@ export function MockTestRunnerPage() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
+    window.addEventListener('keydown', handleKeyDown);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('mozfullscreenchange', handleFullscreenChange);
@@ -500,6 +581,7 @@ export function MockTestRunnerPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
@@ -507,7 +589,7 @@ export function MockTestRunnerPage() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [examData, attemptId, handleProctorEvent, stopCamera, DEBUG_PROCTOR]);
+  }, [examData, handleSecurityViolation, DEBUG_PROCTOR]);
 
   // ---------------------------------------------------------------------------
   // 5. ANSWER STATE PERSISTENCE
@@ -1060,7 +1142,7 @@ export function MockTestRunnerPage() {
               }}
             >
               <ShieldAlert size={14} />
-              <span>Security Strikes: {securityWarningCount} / 3</span>
+              <span>Security warnings: {securityWarningCount} / 3</span>
             </div>
 
             {/* Fullscreen Exits */}
@@ -1081,7 +1163,7 @@ export function MockTestRunnerPage() {
               }}
             >
               <Maximize2 size={14} />
-              <span>Fullscreen Exits: {fullscreenExitCount} / 2</span>
+              <span>Fullscreen exits: {fullscreenExitCount} / 2</span>
             </div>
           </div>
         </div>
@@ -1143,7 +1225,8 @@ export function MockTestRunnerPage() {
           flex: 1,
           padding: '1.75rem 2rem 4rem',
           overflowY: 'auto',
-          maxWidth: 'calc(100vw - 320px)'
+          minWidth: 0,
+          width: '100%'
         }}>
           {activeQuestion ? (
             <div style={{
@@ -1465,10 +1548,16 @@ export function MockTestRunnerPage() {
                               minWidth: '220px'
                             }}
                           >
-                            <option value="">-- Select Match --</option>
-                            {targets.map((t, tIdx) => (
-                              <option key={tIdx} value={t}>{t}</option>
-                            ))}
+                            {targets.length === 0 ? (
+                              <option value="" disabled>No options</option>
+                            ) : (
+                              <>
+                                <option value="">-- Select Match --</option>
+                                {targets.map((t, tIdx) => (
+                                  <option key={tIdx} value={t}>{t}</option>
+                                ))}
+                              </>
+                            )}
                           </select>
                         </div>
                       );
@@ -1818,13 +1907,12 @@ export function MockTestRunnerPage() {
         ------------------------------------------------------------------- */}
         <aside style={{
           width: '320px',
+          flexShrink: 0,
           background: '#FFFFFF',
           borderLeft: '1px solid var(--color-border)',
           display: 'flex',
           flexDirection: 'column',
-          position: 'sticky',
-          top: '60px',
-          height: 'calc(100vh - 60px)',
+          height: '100%',
           overflowY: 'auto'
         }}>
           {/* Webcam Mini Preview Widget */}
@@ -1906,7 +1994,7 @@ export function MockTestRunnerPage() {
           </div>
 
           {/* Palette Number Grid */}
-          <div style={{ padding: '1.25rem', flex: 1, overflowY: 'auto' }}>
+          <div style={{ padding: '1.25rem', flex: 1 }}>
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(5, 1fr)',

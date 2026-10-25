@@ -449,7 +449,11 @@ export const mockTestService = {
       }
     }
 
-    // Check for duplicate debouncing: ignore identical event if received within 3.5 seconds
+    // Strict separate counters (Requirement 2 & 10)
+    const MAX_WARNINGS = 3;
+    const MAX_FULLSCREEN_EXITS = 2;
+
+    // Check for duplicate debouncing: ignore identical event if received within 2.5 seconds
     const existingEvents = await mockTestRepository.getProctoringEvents(attemptId);
     const isTabSwitchSignal = ['TAB_HIDDEN', 'WINDOW_BLURRED'].includes(rawType);
     const lastMatching = existingEvents
@@ -460,18 +464,27 @@ export const mockTestService = {
 
     if (lastMatching) {
       const elapsed = Date.now() - new Date(lastMatching.server_timestamp).getTime();
-      if (elapsed < 3500) {
+      if (elapsed < 2500) {
         return {
           recorded: false,
           debounced: true,
           warning_count: attempt.warning_count || 0,
+          warningCount: attempt.warning_count || 0,
           security_warning_count: attempt.security_warning_count || 0,
+          securityWarningCount: attempt.security_warning_count || 0,
           fullscreen_exit_count: attempt.fullscreen_exit_count || 0,
+          fullscreenExitCount: attempt.fullscreen_exit_count || 0,
+          max_security_warnings: MAX_WARNINGS,
+          maxSecurityWarnings: MAX_WARNINGS,
+          max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
+          maxFullscreenExits: MAX_FULLSCREEN_EXITS,
           integrity_trust_index: attempt.integrity_trust_index ?? 100,
           disqualified: Boolean(attempt.disqualified),
           auto_submitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
+          autoSubmitted: ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status),
           status: attempt.status,
-          submission_reason: attempt.submission_reason || null
+          submission_reason: attempt.submission_reason || null,
+          submissionReason: attempt.submission_reason || null
         };
       }
     }
@@ -515,10 +528,6 @@ export const mockTestService = {
     summary.total_events = (summary.total_events || 0) + 1;
     summary.integrity_trust_index = integrityTrustIndex;
 
-    // Strict separate counters
-    const MAX_WARNINGS = 3;
-    const MAX_FULLSCREEN_EXITS = 2;
-
     const isSecurityWarning = normalizedSeverity !== 'info';
     let newSecurityWarningCount = attempt.security_warning_count || 0;
     let newFullscreenExitCount = attempt.fullscreen_exit_count || 0;
@@ -555,13 +564,22 @@ export const mockTestService = {
         recorded: true,
         event_id: recorded.id,
         warning_count: newWarningCount,
+        warningCount: newWarningCount,
         security_warning_count: newSecurityWarningCount,
+        securityWarningCount: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        fullscreenExitCount: newFullscreenExitCount,
+        max_security_warnings: MAX_WARNINGS,
+        maxSecurityWarnings: MAX_WARNINGS,
+        max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
+        maxFullscreenExits: MAX_FULLSCREEN_EXITS,
         integrity_trust_index: integrityTrustIndex,
         disqualified: true,
         auto_submitted: true,
+        autoSubmitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'MAX_TAB_SWITCHES',
+        submissionReason: 'MAX_TAB_SWITCHES',
         result: submissionResult
       };
     }
@@ -605,13 +623,22 @@ export const mockTestService = {
         recorded: true,
         event_id: recorded.id,
         warning_count: newWarningCount,
+        warningCount: newWarningCount,
         security_warning_count: newSecurityWarningCount,
+        securityWarningCount: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        fullscreenExitCount: newFullscreenExitCount,
+        max_security_warnings: MAX_WARNINGS,
+        maxSecurityWarnings: MAX_WARNINGS,
+        max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
+        maxFullscreenExits: MAX_FULLSCREEN_EXITS,
         integrity_trust_index: integrityTrustIndex,
         disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
+        autoSubmitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'SECOND_FULLSCREEN_EXIT',
+        submissionReason: 'SECOND_FULLSCREEN_EXIT',
         result: submissionResult
       };
     }
@@ -658,13 +685,22 @@ export const mockTestService = {
         recorded: true,
         event_id: recorded.id,
         warning_count: newWarningCount,
+        warningCount: newWarningCount,
         security_warning_count: newSecurityWarningCount,
+        securityWarningCount: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
+        fullscreenExitCount: newFullscreenExitCount,
+        max_security_warnings: MAX_WARNINGS,
+        maxSecurityWarnings: MAX_WARNINGS,
+        max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
+        maxFullscreenExits: MAX_FULLSCREEN_EXITS,
         integrity_trust_index: integrityTrustIndex,
         disqualified: Boolean(attempt.disqualified),
         auto_submitted: true,
+        autoSubmitted: true,
         status: 'AUTO_SUBMITTED',
         submission_reason: 'MAX_SECURITY_WARNINGS',
+        submissionReason: 'MAX_SECURITY_WARNINGS',
         result: submissionResult
       };
     }
@@ -713,13 +749,22 @@ export const mockTestService = {
       recorded: true,
       event_id: recorded.id,
       warning_count: newWarningCount,
+      warningCount: newWarningCount,
       security_warning_count: newSecurityWarningCount,
+      securityWarningCount: newSecurityWarningCount,
       fullscreen_exit_count: newFullscreenExitCount,
+      fullscreenExitCount: newFullscreenExitCount,
+      max_security_warnings: MAX_WARNINGS,
+      maxSecurityWarnings: MAX_WARNINGS,
+      max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
+      maxFullscreenExits: MAX_FULLSCREEN_EXITS,
       integrity_trust_index: integrityTrustIndex,
       disqualified: Boolean(attempt.disqualified),
       auto_submitted: false,
+      autoSubmitted: false,
       status: attempt.status,
       submission_reason: null,
+      submissionReason: null,
       flagged: summary.flagged
     };
   },

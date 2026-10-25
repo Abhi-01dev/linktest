@@ -13,6 +13,7 @@ const DEBUG_PROCTOR = typeof window !== 'undefined' && (
 export function useWebcamProctor({
   enabled = true,
   faceDetectionEnabled = true,
+  onViolation = null,
   onEvent = null,
   absenceThresholdSeconds = 5,
   multiFaceThresholdSeconds = 3
@@ -29,12 +30,23 @@ export function useWebcamProctor({
   const [faceCount, setFaceCount] = useState(1);
   const [warningMessage, setWarningMessage] = useState(null);
 
-  // Counters for continuous state transitions
+  // State machine timers & single-warning locks
   const absenceSecondsRef = useRef(0);
   const multiFaceSecondsRef = useRef(0);
-  const hasEmittedAbsenceWarningRef = useRef(false);
-  const hasEmittedMultiFaceWarningRef = useRef(false);
+  const faceAbsentWarnedRef = useRef(false);
+  const multiFaceWarnedRef = useRef(false);
   const nativeDetectorRef = useRef(null);
+
+  // Unified violation dispatcher supporting both onViolation(type, meta) and onEvent(type, meta)
+  const notifyViolation = useCallback((eventType, metadata = {}) => {
+    if (onViolation) {
+      onViolation(eventType, metadata);
+    } else if (onEvent) {
+      if (typeof onEvent === 'function') {
+        onEvent(eventType, metadata);
+      }
+    }
+  }, [onViolation, onEvent]);
 
   // Check if browser has native FaceDetector API (experimental Chrome flag)
   useEffect(() => {
@@ -80,7 +92,7 @@ export function useWebcamProctor({
       sumLuminance += (0.299 * r + 0.587 * g + 0.114 * b);
     }
     const meanLuminance = sumLuminance / (totalPixels / 2);
-    if (meanLuminance < 12) {
+    if (meanLuminance < 10) {
       return { faceCount: 0, state: 'NO_FACE', reason: 'dark_or_covered' };
     }
 
@@ -113,8 +125,8 @@ export function useWebcamProctor({
             const cb = -0.168736 * red - 0.331264 * green + 0.5 * blue + 128;
             const cr = 0.5 * red - 0.418688 * green - 0.081312 * blue + 128;
 
-            const isSkin = cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173 &&
-                           red > 45 && green > 30 && blue > 20 &&
+            const isSkin = cb >= 75 && cb <= 135 && cr >= 130 && cr <= 180 &&
+                           red > 40 && green > 25 && blue > 15 &&
                            red > green && red > blue &&
                            Math.abs(red - green) > 8;
 
@@ -125,8 +137,8 @@ export function useWebcamProctor({
 
         const skinRatio = skinCount / sampled;
         const contrast = maxLum - minLum;
-        // Face region must have both skin chrominance and facial texture contrast (eyes/nose/mouth)
-        if (skinRatio >= 0.35 && contrast >= 15) {
+        // Face region must have skin chrominance and facial texture contrast (eyes/nose/mouth)
+        if (skinRatio >= 0.30 && contrast >= 10) {
           grid[r][c] = 1;
         }
       }
@@ -249,96 +261,93 @@ export function useWebcamProctor({
       }
 
       // -----------------------------------------------------------------------
-      // NO-FACE DETECTION & DEBOUNCE
+      // NO-FACE DETECTION & DEBOUNCE (State Machine)
       // -----------------------------------------------------------------------
       if (state === 'NO_FACE') {
         // Reset multi-face timer
         multiFaceSecondsRef.current = 0;
-        hasEmittedMultiFaceWarningRef.current = false;
+        multiFaceWarnedRef.current = false;
 
-        absenceSecondsRef.current += 1;
-        if (DEBUG_PROCTOR) {
-          console.log(`[PROCTOR] Absence duration: ${absenceSecondsRef.current}/${absenceThresholdSeconds}s`);
-        }
+        if (!faceAbsentWarnedRef.current) {
+          absenceSecondsRef.current += 1;
+          if (DEBUG_PROCTOR) {
+            console.log(`[PROCTOR] Absence duration: ${absenceSecondsRef.current}/${absenceThresholdSeconds}s`);
+          }
 
-        if (absenceSecondsRef.current >= absenceThresholdSeconds) {
-          setWarningMessage('Your face is not clearly visible. Please adjust your camera or lighting to remain on screen.');
-          if (!hasEmittedAbsenceWarningRef.current) {
-            hasEmittedAbsenceWarningRef.current = true;
-            if (DEBUG_PROCTOR) console.log('[PROCTOR] event sent: FACE_NOT_DETECTED');
-            if (onEvent) {
-              onEvent({
-                event_type: 'FACE_NOT_DETECTED',
-                severity: 'warning',
-                metadata: { duration_seconds: absenceSecondsRef.current }
-              });
-            }
+          if (absenceSecondsRef.current >= absenceThresholdSeconds) {
+            faceAbsentWarnedRef.current = true;
+            setWarningMessage('Your face is not clearly visible. Please adjust your camera or lighting to remain on screen.');
+            if (DEBUG_PROCTOR) console.log('[PROCTOR] Emitting FACE_NOT_DETECTED violation');
+            notifyViolation('FACE_NOT_DETECTED', { duration_seconds: absenceSecondsRef.current });
           }
         }
       } else {
-        // Face returned before or after threshold: reset absence timer immediately
-        if (absenceSecondsRef.current > 0 && DEBUG_PROCTOR) {
-          console.log('[PROCTOR] Face returned. Absence timer reset.');
+        // Face returned: reset absence timer and warning lock
+        if (absenceSecondsRef.current > 0 || faceAbsentWarnedRef.current) {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Face returned. Absence timer and violation state reset.');
         }
         absenceSecondsRef.current = 0;
-        hasEmittedAbsenceWarningRef.current = false;
+        faceAbsentWarnedRef.current = false;
       }
 
       // -----------------------------------------------------------------------
-      // MULTIPLE-FACE DETECTION & DEBOUNCE
+      // MULTIPLE-FACE DETECTION & DEBOUNCE (State Machine)
       // -----------------------------------------------------------------------
       if (state === 'MULTIPLE_FACES') {
         // Reset absence timer
         absenceSecondsRef.current = 0;
-        hasEmittedAbsenceWarningRef.current = false;
+        faceAbsentWarnedRef.current = false;
 
-        multiFaceSecondsRef.current += 1;
-        if (DEBUG_PROCTOR) {
-          console.log(`[PROCTOR] Multi-face duration: ${multiFaceSecondsRef.current}/${multiFaceThresholdSeconds}s`);
-        }
+        if (!multiFaceWarnedRef.current) {
+          multiFaceSecondsRef.current += 1;
+          if (DEBUG_PROCTOR) {
+            console.log(`[PROCTOR] Multi-face duration: ${multiFaceSecondsRef.current}/${multiFaceThresholdSeconds}s`);
+          }
 
-        if (multiFaceSecondsRef.current >= multiFaceThresholdSeconds) {
-          setWarningMessage('Multiple faces detected in camera view. Ensure you are taking this examination alone.');
-          if (!hasEmittedMultiFaceWarningRef.current) {
-            hasEmittedMultiFaceWarningRef.current = true;
-            if (DEBUG_PROCTOR) console.log('[PROCTOR] event sent: MULTIPLE_FACES');
-            if (onEvent) {
-              onEvent({
-                event_type: 'MULTIPLE_FACES',
-                severity: 'warning',
-                metadata: { face_count: count }
-              });
-            }
+          if (multiFaceSecondsRef.current >= multiFaceThresholdSeconds) {
+            multiFaceWarnedRef.current = true;
+            setWarningMessage('Multiple faces detected in camera view. Ensure you are taking this examination alone.');
+            if (DEBUG_PROCTOR) console.log('[PROCTOR] Emitting MULTIPLE_FACES violation');
+            notifyViolation('MULTIPLE_FACES', { face_count: count });
           }
         }
       } else {
-        // Multiple faces cleared / returned to single face: cancel warning timer
-        if (multiFaceSecondsRef.current > 0 && DEBUG_PROCTOR) {
-          console.log('[PROCTOR] Multi-face cleared. Multiple-face timer reset.');
+        // Extra faces cleared: reset multi-face timer and warning lock
+        if (multiFaceSecondsRef.current > 0 || multiFaceWarnedRef.current) {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Extra faces cleared. Multi-face timer reset.');
         }
         multiFaceSecondsRef.current = 0;
-        hasEmittedMultiFaceWarningRef.current = false;
+        multiFaceWarnedRef.current = false;
       }
 
-      // Normal single face: clear all warning messages
+      // Normal single face: clear warning message
       if (state === 'ONE_FACE' && absenceSecondsRef.current === 0 && multiFaceSecondsRef.current === 0) {
         setWarningMessage(null);
       }
     } catch (err) {
       if (DEBUG_PROCTOR) console.warn('[WebcamProctor] Detection frame error:', err.message);
     }
-  }, [isStreaming, faceDetectionEnabled, onEvent, absenceThresholdSeconds, multiFaceThresholdSeconds, analyzeCanvasFrame]);
+  }, [isStreaming, faceDetectionEnabled, notifyViolation, absenceThresholdSeconds, multiFaceThresholdSeconds, analyzeCanvasFrame]);
 
   /**
    * Request user camera permission and start video stream
    */
   const startCamera = useCallback(async () => {
-    if (!enabled) return;
     setError(null);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Your browser does not support webcam capture.');
+      }
+
+      // If already streaming, reattach if needed and return
+      if (streamRef.current && streamRef.current.active) {
+        if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+          videoRef.current.play().catch(() => {});
+        }
+        setIsStreaming(true);
+        return;
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -361,21 +370,16 @@ export function useWebcamProctor({
       setHasPermission(true);
       setIsStreaming(true);
       setDetectionState('ONE_FACE');
+      setError(null);
 
-      // Listen for track ending/disconnection
+      // Listen for video track ending
       stream.getVideoTracks().forEach(track => {
         track.onended = () => {
           setIsStreaming(false);
           setDetectionState('ERROR');
           setError('Camera track disconnected.');
           if (DEBUG_PROCTOR) console.log('[PROCTOR] Camera video track ended abruptly');
-          if (onEvent) {
-            onEvent({
-              event_type: 'CAMERA_DISCONNECTED',
-              severity: 'critical',
-              metadata: { reason: 'Video track ended abruptly' }
-            });
-          }
+          notifyViolation('CAMERA_DISCONNECTED', { reason: 'Video track ended abruptly' });
         };
       });
 
@@ -388,20 +392,14 @@ export function useWebcamProctor({
               setIsStreaming(false);
               setDetectionState('ERROR');
               setError('Camera disconnected.');
-              if (onEvent) {
-                onEvent({
-                  event_type: 'CAMERA_DISCONNECTED',
-                  severity: 'critical',
-                  metadata: { reason: 'No videoinput devices found on system' }
-                });
-              }
+              notifyViolation('CAMERA_DISCONNECTED', { reason: 'No videoinput devices found on system' });
             }
           }).catch(() => {});
         };
         navigator.mediaDevices.addEventListener('devicechange', deviceChangeListenerRef.current);
       }
     } catch (err) {
-      console.error('[WebcamProctor] Camera permission or device failure:', err);
+      console.error('[WebcamProctor] Camera failure:', err);
       const isDenied = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
       const msg = isDenied
         ? 'Camera permission is required for this test. Please enable camera access in your browser settings.'
@@ -411,15 +409,12 @@ export function useWebcamProctor({
       setIsStreaming(false);
       setDetectionState('ERROR');
 
-      if (onEvent) {
-        onEvent({
-          event_type: isDenied ? 'CAMERA_PERMISSION_REVOKED' : 'CAMERA_DISCONNECTED',
-          severity: 'critical',
-          metadata: { message: err.message, name: err.name }
-        });
-      }
+      notifyViolation(
+        isDenied ? 'CAMERA_PERMISSION_REVOKED' : 'CAMERA_DISCONNECTED',
+        { message: err.message, name: err.name }
+      );
     }
-  }, [enabled, onEvent]);
+  }, [notifyViolation]);
 
   /**
    * Safely stop camera stream and release hardware
@@ -452,10 +447,25 @@ export function useWebcamProctor({
 
     absenceSecondsRef.current = 0;
     multiFaceSecondsRef.current = 0;
-    hasEmittedAbsenceWarningRef.current = false;
-    hasEmittedMultiFaceWarningRef.current = false;
+    faceAbsentWarnedRef.current = false;
+    multiFaceWarnedRef.current = false;
     setIsStreaming(false);
   }, []);
+
+  // Ensure video element receives the stream as soon as videoRef mounts in the DOM
+  useEffect(() => {
+    if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(e => console.warn('Autoplay prevented:', e));
+    }
+  });
+
+  // Automatically start camera if enabled and not already streaming
+  useEffect(() => {
+    if (enabled && !isStreaming && !streamRef.current) {
+      startCamera();
+    }
+  }, [enabled, isStreaming, startCamera]);
 
   // Frame processing timer loop (~ 1.0 second intervals for precise timing)
   useEffect(() => {
