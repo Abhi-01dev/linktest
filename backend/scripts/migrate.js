@@ -37,6 +37,25 @@ export function sanitizeMigrationSql(rawSql) {
   return safeSql;
 }
 
+export function isCloudSslRequired(connectionUrl) {
+  if (!connectionUrl || typeof connectionUrl !== 'string') return false;
+  const lower = connectionUrl.toLowerCase();
+  return lower.includes('neon.tech') ||
+         lower.includes('render.com') ||
+         lower.includes('supabase.co') ||
+         lower.includes('sslmode=require') ||
+         lower.includes('ssl=true');
+}
+
+export function getMigrationDbConfig(connectionUrl) {
+  const url = (connectionUrl || '').trim();
+  const requiresSsl = isCloudSslRequired(url);
+  return {
+    connectionString: url,
+    ssl: requiresSsl ? { rejectUnauthorized: false } : false
+  };
+}
+
 /**
  * Executes database migration safely:
  * - Requires DATABASE_URL
@@ -64,13 +83,8 @@ export async function runMigration({ dbUrl = null, dbPool = null, customSchemaPa
   let shouldClosePool = false;
 
   if (!pool) {
-    const isNeonOrCloud = connectionUrl.includes('neon.tech') ||
-                          connectionUrl.includes('render.com') ||
-                          connectionUrl.includes('sslmode=require');
-    pool = new Pool({
-      connectionString: connectionUrl,
-      ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false
-    });
+    const config = getMigrationDbConfig(connectionUrl);
+    pool = new Pool(config);
     shouldClosePool = true;
   }
 
@@ -101,7 +115,9 @@ export async function runMigration({ dbUrl = null, dbPool = null, customSchemaPa
 async function runCli() {
   try {
     await runMigration();
+    process.exit(0);
   } catch (err) {
+    console.error('[Migration Error] Database migration failed:', err.message);
     process.exit(1);
   }
 }
