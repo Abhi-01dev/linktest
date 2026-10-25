@@ -9,19 +9,60 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const RUNNER_PATH = path.resolve(__dirname, './sandboxRunner.js');
+const RUNNER_PY_PATH = path.resolve(__dirname, './sandboxRunnerPy.py');
+
+/**
+ * Checks for hazardous calls to prevent host filesystem and network access
+ */
+export function checkHazardousCalls(code, language = 'javascript') {
+  if (typeof code !== 'string') return null;
+  const lang = (language || 'javascript').toLowerCase();
+
+  if (lang === 'python' || lang === 'py') {
+    const blockedPy = [
+      /\bimport\s+(?:os|sys|subprocess|socket|http|urllib|shutil|pathlib)\b/i,
+      /\bfrom\s+(?:os|sys|subprocess|socket|http|urllib|shutil|pathlib)\s+import\b/i,
+      /\b__import__\s*\(\s*['"](?:os|sys|subprocess|socket|http|urllib|shutil|pathlib)['"]\s*\)/i,
+      /\bopen\s*\(/i
+    ];
+    for (const pattern of blockedPy) {
+      if (pattern.test(code)) {
+        return 'Host file system and network calls are blocked.';
+      }
+    }
+    return null;
+  }
+
+  // JavaScript
+  const blockedJs = [
+    /\bchild_process\b/i,
+    /\brequire\s*\(\s*['"`](?:fs|child_process|net|http|https|dgram|dns|cluster|tls)['"`]\s*\)/i,
+    /\bimport\s*\(?['"`](?:fs|child_process|net|http|https|dgram|dns|cluster|tls)['"`]\)?/i,
+    /\bprocess\.binding\b/i,
+    /\bprocess\.env\b/i,
+    /\bprocess\.exit\b/i
+  ];
+  for (const pattern of blockedJs) {
+    if (pattern.test(code)) {
+      return 'Host file system and network calls are blocked.';
+    }
+  }
+  return null;
+}
 
 export const codeExecutionService = {
   /**
-   * Securely runs JavaScript code against provided test cases in an isolated sandbox.
+   * Securely runs JavaScript or Python code against provided test cases in an isolated sandbox.
    *
    * @param {Object} params
-   * @param {string} params.code - Student-submitted JavaScript code
+   * @param {string} params.code - Student-submitted code
+   * @param {string} [params.language='javascript'] - Language ('javascript' | 'python')
    * @param {Array<Object>} params.testCases - [{ id, input, expected_output, is_hidden }]
-   * @param {number} [params.timeLimitSeconds=2.0] - Time limit in seconds
+   * @param {number} [params.timeLimitSeconds=5.0] - Time limit in seconds
    * @param {number} [params.memoryLimitMb=128] - Memory limit in megabytes
    * @returns {Promise<Object>} Execution result summary
    */
-  async executeCode({ code, testCases = [], timeLimitSeconds = 2.0, memoryLimitMb = 128 }) {
+  async executeCode({ code, language = 'javascript', testCases = [], timeLimitSeconds = 5.0, memoryLimitMb = 128 }) {
     if (!code || typeof code !== 'string') {
       return {
         status: 'compilation_error',
@@ -36,26 +77,53 @@ export const codeExecutionService = {
       };
     }
 
-    const timeLimit = Math.max(0.5, Math.min(10.0, parseFloat(timeLimitSeconds) || 2.0));
+    // Security check: Block hazardous system, filesystem, and network calls
+    const hazardError = checkHazardousCalls(code, language);
+    if (hazardError) {
+      return {
+        status: 'SECURITY_VIOLATION',
+        passed: false,
+        score_percentage: 0,
+        test_cases_passed: 0,
+        total_test_cases: testCases.length,
+        execution_time_ms: 0,
+        memory_usage_mb: 0,
+        error: hazardError,
+        results: testCases.map((tc, idx) => ({
+          test_case_id: tc.id || `tc-${idx + 1}`,
+          is_hidden: Boolean(tc.is_hidden),
+          passed: false,
+          execution_time_ms: 0,
+          error: hazardError
+        }))
+      };
+    }
+
+    const timeLimit = Math.max(0.5, Math.min(10.0, parseFloat(timeLimitSeconds) || 5.0));
     const memoryLimit = Math.max(32, Math.min(512, parseInt(memoryLimitMb, 10) || 128));
 
     // Watchdog timeout is total time limit for all test cases + 1000ms buffer
-    const totalMaxMs = Math.max(1500, (testCases.length || 1) * (timeLimit * 1000) + 1000);
+    const totalMaxMs = Math.max(2000, (testCases.length || 1) * (timeLimit * 1000) + 1000);
 
     return new Promise((resolve) => {
       let isSettled = false;
 
-      // Spawn child process with EMPTY environment and memory limit
+      const isPython = (language || '').toLowerCase() === 'python' || (language || '').toLowerCase() === 'py';
+      const executable = isPython ? 'python' : process.execPath;
+      const spawnArgs = isPython
+        ? [RUNNER_PY_PATH]
+        : [
+            `--max-old-space-size=${memoryLimit}`,
+            '--no-warnings',
+            RUNNER_PATH
+          ];
+
+      // Spawn child process with EMPTY environment
       const child = spawn(
-        process.execPath,
-        [
-          `--max-old-space-size=${memoryLimit}`,
-          '--no-warnings',
-          RUNNER_PATH
-        ],
+        executable,
+        spawnArgs,
         {
-          // Pass empty environment object: NO process.env secrets, NO DB credentials, NO keys
-          env: {},
+          env: isPython ? { PYTHONUNBUFFERED: '1', SYSTEMROOT: process.env.SYSTEMROOT || 'C:\\Windows' } : {},
           stdio: ['pipe', 'pipe', 'pipe']
         }
       );
@@ -72,20 +140,20 @@ export const codeExecutionService = {
           } catch (e) {}
 
           resolve({
-            status: 'timeout',
+            status: 'TIME_LIMIT_EXCEEDED',
             passed: false,
             score_percentage: 0,
             test_cases_passed: 0,
             total_test_cases: testCases.length,
             execution_time_ms: Math.round(totalMaxMs),
             memory_usage_mb: 0,
-            error: `Execution timed out: Exceeded sandbox CPU ceiling (> ${timeLimit}s per test case).`,
+            error: 'TIME_LIMIT_EXCEEDED',
             results: testCases.map((tc, idx) => ({
               test_case_id: tc.id || `tc-${idx + 1}`,
               is_hidden: Boolean(tc.is_hidden),
               passed: false,
               execution_time_ms: Math.round(timeLimit * 1000),
-              error: 'Time Limit Exceeded'
+              error: 'TIME_LIMIT_EXCEEDED'
             }))
           });
         }
@@ -125,6 +193,31 @@ export const codeExecutionService = {
         if (!isSettled) {
           isSettled = true;
           clearTimeout(watchdog);
+
+          const isOOM = stderrData.includes('heap out of memory') ||
+                        stderrData.includes('allocation failed') ||
+                        codeExit === 134 ||
+                        codeExit === 137;
+
+          if (isOOM) {
+            return resolve({
+              status: 'MEMORY_LIMIT_EXCEEDED',
+              passed: false,
+              score_percentage: 0,
+              test_cases_passed: 0,
+              total_test_cases: testCases.length,
+              execution_time_ms: 0,
+              memory_usage_mb: memoryLimit,
+              error: 'MEMORY_LIMIT_EXCEEDED',
+              results: testCases.map((tc, idx) => ({
+                test_case_id: tc.id || `tc-${idx + 1}`,
+                is_hidden: Boolean(tc.is_hidden),
+                passed: false,
+                execution_time_ms: 0,
+                error: 'MEMORY_LIMIT_EXCEEDED'
+              }))
+            });
+          }
 
           if (codeExit !== 0 && !stdoutData.trim()) {
             return resolve({

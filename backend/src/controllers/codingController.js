@@ -7,6 +7,38 @@ import { codingRepository } from '../repositories/codingRepository.js';
 
 export const codingController = {
   /**
+   * POST /api/coding/execute
+   * Standalone sandbox runner endpoint with timeout, memory safeguards, and language support
+   */
+  async execute(req, res, next) {
+    try {
+      const { code, language = 'javascript', testCases = [], timeLimitSeconds = 5.0, memoryLimitMb = 128 } = req.body;
+
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_INPUT', message: 'Submitted code string is required.' }
+        });
+      }
+
+      const executionSummary = await codeExecutionService.executeCode({
+        code,
+        language,
+        testCases,
+        timeLimitSeconds,
+        memoryLimitMb
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: executionSummary
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /**
    * Run code against public test cases (Candidate [Run Code] during test)
    * Hidden test cases are strictly excluded!
    */
