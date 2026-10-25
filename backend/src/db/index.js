@@ -106,9 +106,10 @@ class InMemoryStore {
     this.leave_requests = [...SEED_LEAVE_REQUESTS];
     this.feedback_tickets = [...SEED_FEEDBACK_TICKETS];
 
-    // AI & Audit
+    // AI, Audit & Security Logs
     this.ai_chat_messages = [];
     this.audit_logs = [...SEED_AUDIT_LOGS];
+    this.security_logs = [];
 
     // Secure Mock Tests & AI Examination System
     this.mock_tests = JSON.parse(JSON.stringify(SEED_MOCK_TESTS));
@@ -122,6 +123,14 @@ class InMemoryStore {
     this.question_bank = [];
     this.coding_test_cases = [];
     this.coding_submissions = [];
+  }
+
+  get security_audit_logs() {
+    return this.security_logs;
+  }
+
+  set security_audit_logs(val) {
+    this.security_logs = val;
   }
 }
 
@@ -142,7 +151,7 @@ export async function initDb() {
     pool = new Pool({
       connectionString: config.databaseUrl,
       ssl: isNeonOrCloud ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 3500
+      connectionTimeoutMillis: 10000
     });
 
     // Test connection with a fast heartbeat query

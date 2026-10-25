@@ -230,7 +230,8 @@ export const aiService = {
         body: JSON.stringify({
           model,
           prompt: 'Ping',
-          stream: false
+          stream: false,
+          keep_alive: '24h'
         })
       });
       if (testRes.ok) {
@@ -355,6 +356,7 @@ To enable AI tutoring:
           model: config.ollama.model,
           messages: ollamaMessages,
           stream: false,
+          keep_alive: '24h',
           options: {
             temperature: 0.7,
             top_p: 0.9
@@ -616,7 +618,8 @@ Output ONLY valid JSON adhering strictly to this schema, with no preamble or mar
           model: config.ollama.model,
           prompt,
           format: 'json',
-          stream: false
+          stream: false,
+          keep_alive: '24h'
         })
       });
 

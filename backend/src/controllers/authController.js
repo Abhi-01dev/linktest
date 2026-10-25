@@ -35,7 +35,7 @@ export const authController = {
       const ipAddress = req.ip || req.headers['x-forwarded-for'];
       const userAgent = req.headers['user-agent'];
       const result = await authService.register({ ...validatedData, ipAddress, userAgent });
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'REGISTER_SUCCESS',
         severity: 'INFO',
         userId: result.user?.id,
@@ -61,7 +61,7 @@ export const authController = {
       const ipAddress = req.ip || req.headers['x-forwarded-for'];
       const userAgent = req.headers['user-agent'];
       const result = await authService.verifyEmail({ ...validatedData, ipAddress, userAgent });
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'EMAIL_VERIFIED',
         severity: 'INFO',
         userId: result.user?.id,
@@ -106,7 +106,7 @@ export const authController = {
       attemptedEmail = validatedData.email;
       const result = await authService.login(validatedData);
 
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'LOGIN_SUCCESS',
         severity: 'INFO',
         userId: result.user?.id,
@@ -123,7 +123,7 @@ export const authController = {
       });
     } catch (err) {
       if (attemptedEmail) {
-        securityLogRepository.logEvent({
+        await securityLogRepository.logEvent({
           eventType: 'LOGIN_FAILED',
           severity: 'WARNING',
           userEmail: attemptedEmail,
@@ -177,7 +177,7 @@ export const authController = {
     try {
       const { token, new_password } = resetPasswordSchema.parse(req.body);
       const result = await authService.resetPassword({ token, newPassword: new_password });
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'PASSWORD_RESET_SUCCESS',
         severity: 'INFO',
         ipAddress: req.ip || req.headers['x-forwarded-for'],
@@ -203,7 +203,7 @@ export const authController = {
         currentPassword: current_password,
         newPassword: new_password
       });
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'PASSWORD_CHANGED',
         severity: 'INFO',
         userId: req.user.id,
@@ -219,7 +219,7 @@ export const authController = {
         message: result.message
       });
     } catch (err) {
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'PASSWORD_CHANGE_FAILED',
         severity: 'WARNING',
         userId: req.user?.id,
@@ -240,7 +240,7 @@ export const authController = {
 
       const result = await authService.loginWithGoogle({ credential });
 
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: result.is_new_user ? 'OAUTH_REGISTER_SUCCESS' : 'OAUTH_LOGIN_SUCCESS',
         severity: 'INFO',
         userId: result.user?.id,
@@ -268,7 +268,7 @@ export const authController = {
               : 'Google sign-in successful.')
       });
     } catch (err) {
-      securityLogRepository.logEvent({
+      await securityLogRepository.logEvent({
         eventType: 'OAUTH_LOGIN_FAILED',
         severity: 'WARNING',
         ipAddress,
@@ -304,7 +304,7 @@ export const authController = {
   async logout(req, res, next) {
     try {
       if (req.user) {
-        securityLogRepository.logEvent({
+        await securityLogRepository.logEvent({
           eventType: 'LOGOUT',
           severity: 'INFO',
           userId: req.user.id,

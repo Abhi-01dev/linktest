@@ -458,7 +458,7 @@ CREATE TABLE password_reset_tokens (
 CREATE INDEX idx_pwd_reset_token ON password_reset_tokens(token_hash);
 CREATE INDEX idx_pwd_reset_user ON password_reset_tokens(user_id);
 
--- 24. AUDIT LOGS
+-- 24. AUDIT LOGS (Immutable & Tamper-Evident)
 CREATE TABLE audit_logs (
     id VARCHAR(64) PRIMARY KEY,
     actor_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
@@ -466,14 +466,45 @@ CREATE TABLE audit_logs (
     action VARCHAR(100) NOT NULL,
     resource_type VARCHAR(50),
     resource_id VARCHAR(64),
+    target_resource VARCHAR(255),
     summary TEXT,
     ip_address VARCHAR(50),
+    user_agent TEXT,
+    previous_hash VARCHAR(64),
+    integrity_hash VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_audit_logs_actor ON audit_logs(actor_id);
 CREATE INDEX idx_audit_logs_action ON audit_logs(action);
-CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
+CREATE INDEX idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX idx_audit_logs_target ON audit_logs(target_resource);
+
+-- 24B. SECURITY LOGS (Immutable & Tamper-Evident)
+CREATE TABLE IF NOT EXISTS security_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    event_type VARCHAR(60) NOT NULL,
+    severity VARCHAR(20) NOT NULL DEFAULT 'INFO',
+    user_id VARCHAR(255),
+    user_email VARCHAR(255),
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    details TEXT,
+    metadata JSONB,
+    target_resource VARCHAR(255),
+    previous_hash VARCHAR(64),
+    integrity_hash VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_logs_created_at ON security_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_security_logs_event_type ON security_logs (event_type);
+CREATE INDEX IF NOT EXISTS idx_security_logs_severity ON security_logs (severity);
+CREATE INDEX IF NOT EXISTS idx_security_logs_user_id ON security_logs (user_id);
+CREATE INDEX IF NOT EXISTS idx_security_logs_target ON security_logs (target_resource);
+
+CREATE OR REPLACE VIEW security_audit_logs AS SELECT * FROM security_logs;
+
 
 -- 25. COURSES
 CREATE TABLE courses (

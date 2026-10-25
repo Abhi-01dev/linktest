@@ -3,6 +3,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { securityLogRepository } from '../repositories/securityLogRepository.js';
 import { quizService } from '../services/quizService.js';
 import { submitQuizAttemptSchema } from '../validators/index.js';
+import { recordAuditLog } from '../repositories/auditRepository.js';
 
 export const quizController = {
   async getQuizzesByCourse(req, res, next) {
@@ -137,6 +138,19 @@ export const quizController = {
         questions: questions || [],
         teacherId: req.user.id
       });
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'QUIZ_CREATED',
+          resourceType: 'quiz',
+          resourceId: quiz.id,
+          targetResource: `quiz:${quiz.id}`,
+          summary: `Quiz '${quiz.title}' created in course ${courseId}`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
+        });
+      }
       return res.status(201).json({
         success: true,
         data: { quiz },

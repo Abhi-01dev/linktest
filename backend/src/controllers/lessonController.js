@@ -1,6 +1,7 @@
 import { lessonRepository } from '../repositories/lessonRepository.js';
 import { progressRepository } from '../repositories/progressRepository.js';
 import { createLessonSchema, updateLessonSchema, setProgressSchema } from '../validators/index.js';
+import { recordAuditLog } from '../repositories/auditRepository.js';
 
 export const lessonController = {
   async getLessonsByCourse(req, res, next) {
@@ -66,6 +67,19 @@ export const lessonController = {
         videoUrl: validated.video_url,
         position: validated.position
       });
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'LESSON_CREATED',
+          resourceType: 'lesson',
+          resourceId: lesson.id,
+          targetResource: `lesson:${lesson.id}`,
+          summary: `Lesson '${lesson.title}' created in course ${courseId}`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
+        });
+      }
       return res.status(201).json({
         success: true,
         data: { lesson },
@@ -87,6 +101,19 @@ export const lessonController = {
           error: { code: 'NOT_FOUND', message: 'Lesson not found.' }
         });
       }
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'LESSON_UPDATED',
+          resourceType: 'lesson',
+          resourceId: id,
+          targetResource: `lesson:${id}`,
+          summary: `Lesson '${updated.title}' updated`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
+        });
+      }
       return res.status(200).json({
         success: true,
         data: { lesson: updated },
@@ -105,6 +132,19 @@ export const lessonController = {
         return res.status(404).json({
           success: false,
           error: { code: 'NOT_FOUND', message: 'Lesson not found.' }
+        });
+      }
+      if (req.user) {
+        await recordAuditLog({
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          action: 'LESSON_DELETED',
+          resourceType: 'lesson',
+          resourceId: id,
+          targetResource: `lesson:${id}`,
+          summary: `Lesson ${id} deleted`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent']
         });
       }
       return res.status(200).json({

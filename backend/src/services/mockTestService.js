@@ -1265,6 +1265,7 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
               model: activeModel,
               prompt,
               stream: false,
+              keep_alive: '24h',
               options: {
                 num_predict: Math.min(2500, Math.max(400, count * 350)),
                 temperature: 0.3
