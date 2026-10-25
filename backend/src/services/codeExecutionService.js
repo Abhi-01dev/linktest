@@ -1,18 +1,15 @@
 // Secure Code Execution Service
-// LinkTest Enterprise Isolated Sandbox Engine
-// Spawns isolated child process with zero environment secrets, memory caps, and hard watchdog timeout.
+// LinkTest Enterprise Isolated Container Sandbox Engine
+// Issue #23: Isolated Node/Python container execution runner with timeout safeguards,
+// zero host execution, strict cgroups, and fail-closed security.
 
-import { spawn } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { dockerSandboxService, SANDBOX_CONFIG } from './dockerSandboxService.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const RUNNER_PATH = path.resolve(__dirname, './sandboxRunner.js');
-const RUNNER_PY_PATH = path.resolve(__dirname, './sandboxRunnerPy.py');
+const SUPPORTED_LANGUAGES = new Set(['javascript', 'js', 'node', 'nodejs', 'python', 'py']);
 
 /**
- * Checks for hazardous calls to prevent host filesystem and network access
+ * Defense-in-depth static hazard analysis to reject overt host system, filesystem,
+ * and network probes prior to container execution.
  */
 export function checkHazardousCalls(code, language = 'javascript') {
   if (typeof code !== 'string') return null;
@@ -37,6 +34,7 @@ export function checkHazardousCalls(code, language = 'javascript') {
   const blockedJs = [
     /\bchild_process\b/i,
     /\brequire\s*\(\s*['"`](?:fs|child_process|net|http|https|dgram|dns|cluster|tls)['"`]\s*\)/i,
+    /\bimport\s+(?:[\w*\s{},]+from\s+)?['"`](?:fs|child_process|net|http|https|dgram|dns|cluster|tls)['"`]/i,
     /\bimport\s*\(?['"`](?:fs|child_process|net|http|https|dgram|dns|cluster|tls)['"`]\)?/i,
     /\bprocess\.binding\b/i,
     /\bprocess\.env\b/i,
@@ -52,18 +50,25 @@ export function checkHazardousCalls(code, language = 'javascript') {
 
 export const codeExecutionService = {
   /**
-   * Securely runs JavaScript or Python code against provided test cases in an isolated sandbox.
+   * Securely runs JavaScript or Python code against test cases in an isolated Docker container sandbox.
    *
    * @param {Object} params
    * @param {string} params.code - Student-submitted code
    * @param {string} [params.language='javascript'] - Language ('javascript' | 'python')
    * @param {Array<Object>} params.testCases - [{ id, input, expected_output, is_hidden }]
-   * @param {number} [params.timeLimitSeconds=5.0] - Time limit in seconds
+   * @param {number} [params.timeLimitSeconds=2.0] - Time limit in seconds
    * @param {number} [params.memoryLimitMb=128] - Memory limit in megabytes
    * @returns {Promise<Object>} Execution result summary
    */
-  async executeCode({ code, language = 'javascript', testCases = [], timeLimitSeconds = 5.0, memoryLimitMb = 128 }) {
-    if (!code || typeof code !== 'string') {
+  async executeCode({
+    code,
+    language = 'javascript',
+    testCases = [],
+    timeLimitSeconds = 2.0,
+    memoryLimitMb = 128
+  }) {
+    // 1. Validate presence of submitted code
+    if (!code || typeof code !== 'string' || !code.trim()) {
       return {
         status: 'compilation_error',
         passed: false,
@@ -77,8 +82,39 @@ export const codeExecutionService = {
       };
     }
 
-    // Security check: Block hazardous system, filesystem, and network calls
-    const hazardError = checkHazardousCalls(code, language);
+    // 2. Validate source code size limit (64KB max)
+    if (code.length > SANDBOX_CONFIG.MAX_CODE_CHARS) {
+      return {
+        status: 'compilation_error',
+        passed: false,
+        score_percentage: 0,
+        test_cases_passed: 0,
+        total_test_cases: testCases.length,
+        execution_time_ms: 0,
+        memory_usage_mb: 0,
+        error: `Code length (${code.length} chars) exceeds maximum allowed limit of ${SANDBOX_CONFIG.MAX_CODE_CHARS} characters.`,
+        results: []
+      };
+    }
+
+    // 3. Validate supported programming language
+    const normalizedLang = (language || '').trim().toLowerCase();
+    if (!SUPPORTED_LANGUAGES.has(normalizedLang)) {
+      return {
+        status: 'compilation_error',
+        passed: false,
+        score_percentage: 0,
+        test_cases_passed: 0,
+        total_test_cases: testCases.length,
+        execution_time_ms: 0,
+        memory_usage_mb: 0,
+        error: `INVALID_LANGUAGE: Unsupported programming language '${language}'. Only JavaScript and Python are permitted.`,
+        results: []
+      };
+    }
+
+    // 4. Defense-in-depth static hazard check
+    const hazardError = checkHazardousCalls(code, normalizedLang);
     if (hazardError) {
       return {
         status: 'SECURITY_VIOLATION',
@@ -99,186 +135,16 @@ export const codeExecutionService = {
       };
     }
 
-    const timeLimit = Math.max(0.5, Math.min(10.0, parseFloat(timeLimitSeconds) || 5.0));
-    const memoryLimit = Math.max(32, Math.min(512, parseInt(memoryLimitMb, 10) || 128));
+    // 5. Execute exclusively within isolated disposable Docker container
+    // If container runtime is unavailable, fails closed with SANDBOX_UNAVAILABLE.
+    const canonicalLanguage = (normalizedLang === 'python' || normalizedLang === 'py') ? 'python' : 'javascript';
 
-    // Watchdog timeout is total time limit for all test cases + 1000ms buffer
-    const totalMaxMs = Math.max(2000, (testCases.length || 1) * (timeLimit * 1000) + 1000);
-
-    return new Promise((resolve) => {
-      let isSettled = false;
-
-      const isPython = (language || '').toLowerCase() === 'python' || (language || '').toLowerCase() === 'py';
-      const executable = isPython ? 'python' : process.execPath;
-      const spawnArgs = isPython
-        ? [RUNNER_PY_PATH]
-        : [
-            `--max-old-space-size=${memoryLimit}`,
-            '--no-warnings',
-            RUNNER_PATH
-          ];
-
-      // Spawn child process with EMPTY environment
-      const child = spawn(
-        executable,
-        spawnArgs,
-        {
-          env: isPython ? { PYTHONUNBUFFERED: '1', SYSTEMROOT: process.env.SYSTEMROOT || 'C:\\Windows' } : {},
-          stdio: ['pipe', 'pipe', 'pipe']
-        }
-      );
-
-      let stdoutData = '';
-      let stderrData = '';
-
-      // Hard watchdog timer to force kill runaway child processes
-      const watchdog = setTimeout(() => {
-        if (!isSettled) {
-          isSettled = true;
-          try {
-            child.kill('SIGKILL');
-          } catch (e) {}
-
-          resolve({
-            status: 'TIME_LIMIT_EXCEEDED',
-            passed: false,
-            score_percentage: 0,
-            test_cases_passed: 0,
-            total_test_cases: testCases.length,
-            execution_time_ms: Math.round(totalMaxMs),
-            memory_usage_mb: 0,
-            error: 'TIME_LIMIT_EXCEEDED',
-            results: testCases.map((tc, idx) => ({
-              test_case_id: tc.id || `tc-${idx + 1}`,
-              is_hidden: Boolean(tc.is_hidden),
-              passed: false,
-              execution_time_ms: Math.round(timeLimit * 1000),
-              error: 'TIME_LIMIT_EXCEEDED'
-            }))
-          });
-        }
-      }, totalMaxMs);
-
-      child.stdout.on('data', chunk => {
-        if (stdoutData.length < 200000) {
-          stdoutData += chunk.toString();
-        }
-      });
-
-      child.stderr.on('data', chunk => {
-        if (stderrData.length < 50000) {
-          stderrData += chunk.toString();
-        }
-      });
-
-      child.on('error', err => {
-        if (!isSettled) {
-          isSettled = true;
-          clearTimeout(watchdog);
-          resolve({
-            status: 'runtime_error',
-            passed: false,
-            score_percentage: 0,
-            test_cases_passed: 0,
-            total_test_cases: testCases.length,
-            execution_time_ms: 0,
-            memory_usage_mb: 0,
-            error: `Failed to initialize isolated execution worker: ${err.message}`,
-            results: []
-          });
-        }
-      });
-
-      child.on('close', codeExit => {
-        if (!isSettled) {
-          isSettled = true;
-          clearTimeout(watchdog);
-
-          const isOOM = stderrData.includes('heap out of memory') ||
-                        stderrData.includes('allocation failed') ||
-                        codeExit === 134 ||
-                        codeExit === 137;
-
-          if (isOOM) {
-            return resolve({
-              status: 'MEMORY_LIMIT_EXCEEDED',
-              passed: false,
-              score_percentage: 0,
-              test_cases_passed: 0,
-              total_test_cases: testCases.length,
-              execution_time_ms: 0,
-              memory_usage_mb: memoryLimit,
-              error: 'MEMORY_LIMIT_EXCEEDED',
-              results: testCases.map((tc, idx) => ({
-                test_case_id: tc.id || `tc-${idx + 1}`,
-                is_hidden: Boolean(tc.is_hidden),
-                passed: false,
-                execution_time_ms: 0,
-                error: 'MEMORY_LIMIT_EXCEEDED'
-              }))
-            });
-          }
-
-          if (codeExit !== 0 && !stdoutData.trim()) {
-            return resolve({
-              status: 'runtime_error',
-              passed: false,
-              score_percentage: 0,
-              test_cases_passed: 0,
-              total_test_cases: testCases.length,
-              execution_time_ms: 0,
-              memory_usage_mb: 0,
-              error: stderrData.trim() || `Process exited with error code ${codeExit}`,
-              results: []
-            });
-          }
-
-          try {
-            const parsed = JSON.parse(stdoutData.trim());
-            resolve(parsed);
-          } catch (parseErr) {
-            resolve({
-              status: 'runtime_error',
-              passed: false,
-              score_percentage: 0,
-              test_cases_passed: 0,
-              total_test_cases: testCases.length,
-              execution_time_ms: 0,
-              memory_usage_mb: 0,
-              error: stderrData.trim() || 'Invalid response from execution sandbox.',
-              results: []
-            });
-          }
-        }
-      });
-
-      // Send payload via stdin and close stream
-      const payload = JSON.stringify({
-        code,
-        testCases,
-        timeLimitSeconds: timeLimit
-      });
-
-      try {
-        child.stdin.write(payload);
-        child.stdin.end();
-      } catch (err) {
-        if (!isSettled) {
-          isSettled = true;
-          clearTimeout(watchdog);
-          resolve({
-            status: 'runtime_error',
-            passed: false,
-            score_percentage: 0,
-            test_cases_passed: 0,
-            total_test_cases: testCases.length,
-            execution_time_ms: 0,
-            memory_usage_mb: 0,
-            error: `Failed to write code payload to sandbox: ${err.message}`,
-            results: []
-          });
-        }
-      }
+    return await dockerSandboxService.runInContainer({
+      code,
+      language: canonicalLanguage,
+      testCases,
+      timeLimitSeconds,
+      memoryLimitMb
     });
   },
 

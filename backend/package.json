@@ -12,7 +12,7 @@
     "ollama:init": "node scripts/init-ollama.js",
     "create-admin": "node scripts/create-admin.js",
     "test:smtp": "node scripts/test-smtp.js",
-    "test": "node --test tests/**/*.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
