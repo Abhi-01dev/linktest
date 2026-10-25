@@ -200,8 +200,8 @@ export function MockTestPreCheckPage() {
     );
   }
 
-  // If user is a student and approval is not granted, block pre-check screen
-  if (user?.role === 'STUDENT' && joinStatus !== 'APPROVED') {
+  // If user is a student and test is batch-restricted and approval is not granted, block pre-check screen
+  if (user?.role === 'STUDENT' && test?.batch_id && joinStatus !== 'APPROVED') {
     return (
       <div className="container" style={{ padding: '4rem 1rem', maxWidth: '620px' }}>
         <div style={{

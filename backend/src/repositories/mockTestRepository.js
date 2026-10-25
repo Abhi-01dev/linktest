@@ -198,7 +198,8 @@ export const mockTestRepository = {
 
           const rawQType = String(q.question_type || 'mcq_single').toLowerCase().trim();
           const cleanQType = rawQType === 'mcq_multi' ? 'mcq_multiple' : rawQType;
-          const cleanAnswerKey = q.answer_key || q.correct_answer || {};
+          const cleanAnswerKey = q.answer_key
+            || (typeof q.correct_answer === 'object' && q.correct_answer !== null ? q.correct_answer : (q.correct_answer !== undefined ? { correct_answer: q.correct_answer, selected: q.correct_answer } : (q.correct_option_index !== undefined ? { correct_index: q.correct_option_index } : {})));
           const cleanNegMarks = parseFloat(q.negative_marks !== undefined ? q.negative_marks : (q.penalty_marks !== undefined ? q.penalty_marks : 0));
 
           const qExpected = q.expected_answer || q.expectedAnswer || null;
@@ -261,7 +262,8 @@ export const mockTestRepository = {
       const qId = q.id || `q-${crypto.randomUUID().slice(0, 12)}`;
       const rawQType = String(q.question_type || 'mcq_single').toLowerCase().trim();
       const cleanQType = rawQType === 'mcq_multi' ? 'mcq_multiple' : rawQType;
-      const cleanAnswerKey = q.answer_key || q.correct_answer || {};
+      const cleanAnswerKey = q.answer_key
+        || (typeof q.correct_answer === 'object' && q.correct_answer !== null ? q.correct_answer : (q.correct_answer !== undefined ? { correct_answer: q.correct_answer, selected: q.correct_answer } : (q.correct_option_index !== undefined ? { correct_index: q.correct_option_index } : {})));
       const cleanNegMarks = parseFloat(q.negative_marks !== undefined ? q.negative_marks : (q.penalty_marks !== undefined ? q.penalty_marks : 0));
       const qTestCases = Array.isArray(q.test_cases || q.testCases) ? (q.test_cases || q.testCases) : [];
 
@@ -398,19 +400,40 @@ export const mockTestRepository = {
   // ---------------------------------------------------------------------------
 
   async getQuestionsByTestId(testId, options = { sanitize: false }) {
-    let questions = [];
+    let rawQuestions = [];
 
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         'SELECT * FROM mock_test_questions WHERE test_id = $1 ORDER BY order_index ASC',
         [testId]
       );
-      questions = res.rows;
+      rawQuestions = res.rows;
     } else {
-      questions = (memoryStore.mock_test_questions || [])
+      rawQuestions = (memoryStore.mock_test_questions || [])
         .filter(q => q.test_id === testId)
         .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
     }
+
+    const questions = rawQuestions.map(q => {
+      let opts = q.options;
+      if (typeof opts === 'string') {
+        try { opts = JSON.parse(opts); } catch {}
+      }
+      let ansKey = q.answer_key;
+      if (typeof ansKey === 'string') {
+        try { ansKey = JSON.parse(ansKey); } catch {}
+      }
+      let testCases = q.test_cases;
+      if (typeof testCases === 'string') {
+        try { testCases = JSON.parse(testCases); } catch {}
+      }
+      return {
+        ...q,
+        options: opts,
+        answer_key: ansKey,
+        test_cases: testCases
+      };
+    });
 
     if (options.sanitize) {
       return mockTestScoringService.sanitizeQuestionsForTaker(questions);
@@ -432,7 +455,8 @@ export const mockTestRepository = {
       const qStarter = q.starter_code || q.starterCode || null;
       const qTimeLimit = parseFloat(q.time_limit || q.timeLimit || 2.0);
       const qMemLimit = parseInt(q.memory_limit || q.memoryLimit || 128, 10);
-      const qTestCases = Array.isArray(q.test_cases || q.testCases) ? (q.test_cases || q.testCases) : [];
+      const cleanAnswerKey = q.answer_key
+        || (typeof q.correct_answer === 'object' && q.correct_answer !== null ? q.correct_answer : (q.correct_answer !== undefined ? { correct_answer: q.correct_answer, selected: q.correct_answer } : (q.correct_option_index !== undefined ? { correct_index: q.correct_option_index } : {})));
 
       if (isPostgresConnected && pool) {
         const res = await pool.query(
@@ -446,7 +470,7 @@ export const mockTestRepository = {
           RETURNING *`,
           [
             qId, testId, q.section_id || null, q.question_text, qType,
-            JSON.stringify(q.options || []), JSON.stringify(q.answer_key || {}),
+            JSON.stringify(q.options || []), JSON.stringify(cleanAnswerKey),
             parseFloat(q.marks || 4.0), parseFloat(q.negative_marks || 1.0),
             q.explanation || '', q.topic || '', q.difficulty || 'medium',
             q.order_index || (i + 1), q.case_passage || null, q.image_url || null,
@@ -474,6 +498,7 @@ export const mockTestRepository = {
           id: qId,
           test_id: testId,
           question_type: qType,
+          answer_key: cleanAnswerKey,
           order_index: q.order_index || (i + 1),
           expected_answer: qExpected,
           evaluation_criteria: qCriteria,

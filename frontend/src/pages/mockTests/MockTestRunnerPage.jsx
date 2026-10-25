@@ -33,6 +33,65 @@ import {
   FileText
 } from 'lucide-react';
 
+function getNormalizedOptions(options) {
+  if (!options) return [];
+  let parsed = options;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.map((opt, idx) => {
+      if (opt === null || opt === undefined) {
+        return { id: idx, key: String.fromCharCode(65 + idx), text: '' };
+      }
+      if (typeof opt === 'object') {
+        const text = opt.text ?? opt.label ?? opt.value ?? opt.title ?? (typeof opt.toString === 'function' ? opt.toString() : '');
+        const key = opt.key ?? opt.id ?? String.fromCharCode(65 + idx);
+        return { id: opt.id ?? idx, key: String(key), text: String(text) };
+      }
+      return { id: idx, key: String.fromCharCode(65 + idx), text: String(opt) };
+    });
+  }
+  if (typeof parsed === 'object') {
+    return Object.entries(parsed).map(([k, val], idx) => {
+      const text = typeof val === 'object' && val !== null ? (val.text ?? val.label ?? JSON.stringify(val)) : String(val);
+      return { id: idx, key: k, text: String(text) };
+    });
+  }
+  return [];
+}
+
+function getMatchingData(options) {
+  if (!options) return { leftItems: [], targets: [] };
+  let parsed = options;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { return { leftItems: [], targets: [] }; }
+  }
+  let leftItems = [];
+  let targets = [];
+  if (parsed && typeof parsed === 'object') {
+    if (Array.isArray(parsed.left_items)) {
+      leftItems = parsed.left_items;
+    } else if (Array.isArray(parsed)) {
+      leftItems = parsed;
+    }
+    if (Array.isArray(parsed.available_targets)) {
+      targets = parsed.available_targets;
+    }
+  }
+  const normalizedLeft = leftItems.map((item, idx) => {
+    if (item && typeof item === 'object') {
+      return { id: item.id ?? String(idx), text: String(item.text ?? item.label ?? idx) };
+    }
+    return { id: String(idx), text: String(item) };
+  });
+  return { leftItems: normalizedLeft, targets };
+}
+
 export function MockTestRunnerPage() {
   const { id, attemptId } = useParams();
   const navigate = useNavigate();
@@ -212,6 +271,15 @@ export function MockTestRunnerPage() {
 
     // 3. Increment the correct local counter & 4. Update the visible UI immediately
     if (eventType === 'FULLSCREEN_EXIT') {
+      const isFsReq = Boolean(
+        examDataRef.current?.proctoring_config?.fullscreen_required ??
+        examDataRef.current?.test?.proctoring_config?.fullscreen_required
+      );
+      if (!isFsReq) {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] FULLSCREEN_EXIT ignored because exam does not require fullscreen.');
+        return;
+      }
+
       const nextExitCount = fullscreenExitCountRef.current + 1;
       fullscreenExitCountRef.current = nextExitCount;
       setFullscreenExitCount(nextExitCount);
@@ -611,8 +679,13 @@ export function MockTestRunnerPage() {
     }
   }, [attemptId]);
 
+  const isExamFullscreenRequired = Boolean(
+    examData?.proctoring_config?.fullscreen_required ??
+    examData?.test?.proctoring_config?.fullscreen_required
+  );
+
   const handleUpdateAnswer = (responseData) => {
-    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -634,7 +707,7 @@ export function MockTestRunnerPage() {
   };
 
   const handleRunCode = async (question) => {
-    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
     const qId = question.id;
     const currentCode = responses[qId]?.response_data?.code !== undefined
       ? responses[qId].response_data.code
@@ -666,7 +739,7 @@ export function MockTestRunnerPage() {
   };
 
   const handleToggleMarkForReview = () => {
-    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -689,7 +762,7 @@ export function MockTestRunnerPage() {
   };
 
   const handleClearAnswer = () => {
-    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
     const activeQuestion = examData?.questions[currentIndex];
     if (!activeQuestion) return;
 
@@ -714,7 +787,7 @@ export function MockTestRunnerPage() {
   // ---------------------------------------------------------------------------
 
   const handleNavigate = (index) => {
-    if (!isFullscreenActive || autoSubmittedState?.submitted) return;
+    if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
     if (index >= 0 && index < (examData?.questions?.length || 0)) {
       const targetQuestion = examData.questions[index];
       // Mark target as visited if not already
@@ -964,7 +1037,7 @@ export function MockTestRunnerPage() {
       {/* ---------------------------------------------------------------------
           BLOCKING FULL-SCREEN OVERLAY (REQUIREMENTS 2, 3, 10, 11)
       --------------------------------------------------------------------- */}
-      {!isFullscreenActive && !isCompleted && (
+      {isExamFullscreenRequired && !isFullscreenActive && !isCompleted && (
         <div
           id="fullscreen-blocking-overlay"
           style={{
@@ -1145,26 +1218,28 @@ export function MockTestRunnerPage() {
               <span>Security warnings: {securityWarningCount} / 3</span>
             </div>
 
-            {/* Fullscreen Exits */}
-            <div
-              id="fullscreen-exits-indicator"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                background: fullscreenExitCount > 0 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(30, 41, 59, 0.8)',
-                color: fullscreenExitCount > 0 ? '#FBBF24' : '#94A3B8',
-                border: `1px solid ${fullscreenExitCount > 0 ? '#F59E0B' : '#334155'}`,
-                padding: '0.35rem 0.75rem',
-                borderRadius: '999px',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                letterSpacing: '0.02em'
-              }}
-            >
-              <Maximize2 size={14} />
-              <span>Fullscreen exits: {fullscreenExitCount} / 2</span>
-            </div>
+            {/* Fullscreen Exits (only if required by test) */}
+            {isExamFullscreenRequired && (
+              <div
+                id="fullscreen-exits-indicator"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  background: fullscreenExitCount > 0 ? 'rgba(245, 158, 11, 0.2)' : 'rgba(30, 41, 59, 0.8)',
+                  color: fullscreenExitCount > 0 ? '#FBBF24' : '#94A3B8',
+                  border: `1px solid ${fullscreenExitCount > 0 ? '#F59E0B' : '#334155'}`,
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '999px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.02em'
+                }}
+              >
+                <Maximize2 size={14} />
+                <span>Fullscreen exits: {fullscreenExitCount} / 2</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1191,7 +1266,7 @@ export function MockTestRunnerPage() {
           {/* Submit Action */}
           <button
             onClick={() => setSubmitConfirmOpen(true)}
-            disabled={!isFullscreenActive || isCompleted}
+            disabled={(isExamFullscreenRequired && !isFullscreenActive) || isCompleted}
             className="btn btn-primary"
             style={{
               padding: '0.4rem 1rem',
@@ -1199,8 +1274,8 @@ export function MockTestRunnerPage() {
               fontWeight: 800,
               background: '#10B981',
               borderColor: '#10B981',
-              opacity: !isFullscreenActive || isCompleted ? 0.6 : 1,
-              cursor: !isFullscreenActive || isCompleted ? 'not-allowed' : 'pointer'
+              opacity: (isExamFullscreenRequired && !isFullscreenActive) || isCompleted ? 0.6 : 1,
+              cursor: (isExamFullscreenRequired && !isFullscreenActive) || isCompleted ? 'not-allowed' : 'pointer'
             }}
           >
             Submit Test
@@ -1216,9 +1291,9 @@ export function MockTestRunnerPage() {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        pointerEvents: (!isFullscreenActive || isCompleted) ? 'none' : 'auto',
-        filter: (!isFullscreenActive && !isCompleted) ? 'blur(1px)' : 'none',
-        userSelect: (!isFullscreenActive || isCompleted) ? 'none' : 'auto'
+        pointerEvents: ((isExamFullscreenRequired && !isFullscreenActive) || isCompleted) ? 'none' : 'auto',
+        filter: (isExamFullscreenRequired && !isFullscreenActive && !isCompleted) ? 'blur(1px)' : 'none',
+        userSelect: ((isExamFullscreenRequired && !isFullscreenActive) || isCompleted) ? 'none' : 'auto'
       }}>
         {/* Left / Center: Question Paper Pane */}
         <main style={{
@@ -1338,12 +1413,24 @@ export function MockTestRunnerPage() {
                 {/* 1. Single Choice MCQ / Case Study */}
                 {['mcq_single', 'case_study'].includes(activeQuestion.question_type) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {(activeQuestion.options || []).map((opt, optIdx) => {
-                      const isSelected = activeResponse?.selected_index === optIdx;
+                    {getNormalizedOptions(activeQuestion.options).map((opt, optIdx) => {
+                      const isSelected =
+                        activeResponse?.selected_index === optIdx ||
+                        activeResponse?.selected_key === opt.key ||
+                        activeResponse?.selected_option_index === optIdx ||
+                        activeResponse?.selected === opt.key ||
+                        activeResponse?.text === opt.text;
+
                       return (
                         <div
                           key={optIdx}
-                          onClick={() => handleUpdateAnswer({ selected_index: optIdx })}
+                          id={`mcq-option-${optIdx}`}
+                          onClick={() => handleUpdateAnswer({
+                            selected_index: optIdx,
+                            selected_key: opt.key,
+                            selected_option_index: optIdx,
+                            text: opt.text
+                          })}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -1357,21 +1444,27 @@ export function MockTestRunnerPage() {
                           }}
                         >
                           <div style={{
-                            width: '20px',
-                            height: '20px',
+                            width: '24px',
+                            height: '24px',
                             borderRadius: '50%',
                             border: `2px solid ${isSelected ? 'var(--color-orange)' : '#94A3B8'}`,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            background: '#FFFFFF'
+                            background: '#FFFFFF',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            color: isSelected ? 'var(--color-orange)' : '#64748B',
+                            flexShrink: 0
                           }}>
-                            {isSelected && (
+                            {isSelected ? (
                               <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--color-orange)' }} />
+                            ) : (
+                              opt.key
                             )}
                           </div>
-                          <span style={{ fontSize: '0.92rem', color: 'var(--color-text-primary)', fontWeight: isSelected ? 600 : 400 }}>
-                            {opt}
+                          <span style={{ fontSize: '0.92rem', color: 'var(--color-text-primary)', fontWeight: isSelected ? 600 : 400, flex: 1, wordBreak: 'break-word' }}>
+                            {opt.text}
                           </span>
                         </div>
                       );
@@ -1382,20 +1475,25 @@ export function MockTestRunnerPage() {
                 {/* 2. Multiple-Select MCQ */}
                 {activeQuestion.question_type === 'mcq_multiple' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {(activeQuestion.options || []).map((opt, optIdx) => {
-                      const selectedList = activeResponse?.selected_indices || [];
-                      const isSelected = selectedList.includes(optIdx);
+                    {getNormalizedOptions(activeQuestion.options).map((opt, optIdx) => {
+                      const selectedIndices = activeResponse?.selected_indices || [];
+                      const selectedKeys = activeResponse?.selected_keys || [];
+                      const isSelected = selectedIndices.includes(optIdx) || selectedKeys.includes(opt.key);
 
                       const toggleOption = () => {
-                        const nextList = isSelected
-                          ? selectedList.filter(i => i !== optIdx)
-                          : [...selectedList, optIdx];
-                        handleUpdateAnswer({ selected_indices: nextList });
+                        const nextIndices = isSelected
+                          ? selectedIndices.filter(i => i !== optIdx)
+                          : [...selectedIndices, optIdx];
+                        const nextKeys = isSelected
+                          ? selectedKeys.filter(k => k !== opt.key)
+                          : [...selectedKeys, opt.key];
+                        handleUpdateAnswer({ selected_indices: nextIndices, selected_keys: nextKeys });
                       };
 
                       return (
                         <div
                           key={optIdx}
+                          id={`mcq-multi-option-${optIdx}`}
                           onClick={toggleOption}
                           style={{
                             display: 'flex',
@@ -1410,20 +1508,23 @@ export function MockTestRunnerPage() {
                           }}
                         >
                           <div style={{
-                            width: '20px',
-                            height: '20px',
+                            width: '22px',
+                            height: '22px',
                             borderRadius: '4px',
                             border: `2px solid ${isSelected ? '#2563EB' : '#94A3B8'}`,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             background: isSelected ? '#2563EB' : '#FFFFFF',
-                            color: '#FFFFFF'
+                            color: '#FFFFFF',
+                            flexShrink: 0
                           }}>
-                            {isSelected && <Check size={14} />}
+                            {isSelected ? <Check size={14} /> : (
+                              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748B' }}>{opt.key}</span>
+                            )}
                           </div>
-                          <span style={{ fontSize: '0.92rem', color: 'var(--color-text-primary)', fontWeight: isSelected ? 600 : 400 }}>
-                            {opt}
+                          <span style={{ fontSize: '0.92rem', color: 'var(--color-text-primary)', fontWeight: isSelected ? 600 : 400, flex: 1, wordBreak: 'break-word' }}>
+                            {opt.text}
                           </span>
                         </div>
                       );
@@ -1435,11 +1536,12 @@ export function MockTestRunnerPage() {
                 {activeQuestion.question_type === 'true_false' && (
                   <div style={{ display: 'flex', gap: '1rem' }}>
                     {[true, false].map((val) => {
-                      const isSelected = activeResponse?.selected_value === val;
+                      const isSelected = activeResponse?.selected_value === val || activeResponse?.selected_bool === val;
                       return (
                         <button
                           key={String(val)}
-                          onClick={() => handleUpdateAnswer({ selected_value: val })}
+                          type="button"
+                          onClick={() => handleUpdateAnswer({ selected_value: val, selected_bool: val })}
                           style={{
                             flex: 1,
                             padding: '1rem',
@@ -1504,66 +1606,68 @@ export function MockTestRunnerPage() {
                 )}
 
                 {/* 6. Matching Questions */}
-                {activeQuestion.question_type === 'matching' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
-                      Select the matching value for each item below:
-                    </div>
-                    {((activeQuestion.options?.left_items || activeQuestion.options) || []).map((leftItem) => {
-                      const currentMatch = activeResponse?.pairs?.[leftItem.id] || '';
-                      const targets = activeQuestion.options?.available_targets || [];
+                {activeQuestion.question_type === 'matching' && (() => {
+                  const { leftItems, targets } = getMatchingData(activeQuestion.options);
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
+                        Select the matching value for each item below:
+                      </div>
+                      {leftItems.map((leftItem) => {
+                        const currentMatch = activeResponse?.pairs?.[leftItem.id] || '';
 
-                      const setMatch = (targetVal) => {
-                        const pairs = { ...(activeResponse?.pairs || {}) };
-                        pairs[leftItem.id] = targetVal;
-                        handleUpdateAnswer({ pairs });
-                      };
+                        const setMatch = (targetVal) => {
+                          const pairs = { ...(activeResponse?.pairs || {}) };
+                          pairs[leftItem.id] = targetVal;
+                          handleUpdateAnswer({ pairs });
+                        };
 
-                      return (
-                        <div
-                          key={leftItem.id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            background: '#F8FAFC',
-                            padding: '0.75rem 1rem',
-                            borderRadius: '8px',
-                            border: '1px solid #E2E8F0',
-                            gap: '1rem'
-                          }}
-                        >
-                          <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--color-navy)' }}>
-                            {leftItem.text}
-                          </div>
-                          <select
-                            value={currentMatch}
-                            onChange={(e) => setMatch(e.target.value)}
+                        return (
+                          <div
+                            key={leftItem.id}
                             style={{
-                              padding: '0.5rem 0.8rem',
-                              borderRadius: '6px',
-                              border: '1px solid #CBD5E1',
-                              fontSize: '0.88rem',
-                              background: '#FFFFFF',
-                              minWidth: '220px'
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: '#F8FAFC',
+                              padding: '0.75rem 1rem',
+                              borderRadius: '8px',
+                              border: '1px solid #E2E8F0',
+                              gap: '1rem'
                             }}
                           >
-                            {targets.length === 0 ? (
-                              <option value="" disabled>No options</option>
-                            ) : (
-                              <>
-                                <option value="">-- Select Match --</option>
-                                {targets.map((t, tIdx) => (
-                                  <option key={tIdx} value={t}>{t}</option>
-                                ))}
-                              </>
-                            )}
-                          </select>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                            <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--color-navy)' }}>
+                              {leftItem.text}
+                            </div>
+                            <select
+                              value={currentMatch}
+                              onChange={(e) => setMatch(e.target.value)}
+                              style={{
+                                padding: '0.5rem 0.8rem',
+                                borderRadius: '6px',
+                                border: '1px solid #CBD5E1',
+                                fontSize: '0.88rem',
+                                background: '#FFFFFF',
+                                minWidth: '220px'
+                              }}
+                            >
+                              {targets.length === 0 ? (
+                                <option value="" disabled>No options</option>
+                              ) : (
+                                <>
+                                  <option value="">-- Select Match --</option>
+                                  {targets.map((t, tIdx) => (
+                                    <option key={tIdx} value={t}>{t}</option>
+                                  ))}
+                                </>
+                              )}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
 
                 {/* 7. Long Answer / Subjective */}
                 {['long_answer', 'subjective'].includes(activeQuestion.question_type) && (
@@ -1821,6 +1925,30 @@ export function MockTestRunnerPage() {
                     )}
                   </div>
                 )}
+
+                {/* 9. Fallback for Custom or Unsupported Question Types (Requirement 13) */}
+                {!['mcq_single', 'case_study', 'mcq_multiple', 'true_false', 'fill_blank', 'short_answer', 'numerical', 'matching', 'long_answer', 'subjective', 'coding'].includes(activeQuestion.question_type) && (
+                  <div>
+                    <div style={{ marginBottom: '0.5rem', fontSize: '0.85rem', color: '#64748B' }}>
+                      Provide your response below:
+                    </div>
+                    <textarea
+                      rows={5}
+                      placeholder="Type your response here..."
+                      value={activeResponse?.text || (typeof activeResponse === 'string' ? activeResponse : '')}
+                      onChange={(e) => handleUpdateAnswer({ text: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '0.85rem 1rem',
+                        fontSize: '0.95rem',
+                        border: '2px solid #CBD5E1',
+                        borderRadius: 'var(--radius-md)',
+                        outline: 'none',
+                        fontFamily: 'inherit'
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Bottom Question Controls */}
@@ -1898,7 +2026,43 @@ export function MockTestRunnerPage() {
               </div>
             </div>
           ) : (
-            <div>No questions available.</div>
+            <div style={{
+              background: '#FFFFFF',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--color-border)',
+              boxShadow: 'var(--shadow-sm)',
+              padding: '3rem 2rem',
+              textAlign: 'center',
+              maxWidth: '500px',
+              margin: '2rem auto'
+            }}>
+              <div style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                background: '#F1F5F9',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 1.25rem',
+                color: '#64748B'
+              }}>
+                <FileText size={28} />
+              </div>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '0.5rem' }}>
+                No Questions Available
+              </h3>
+              <p style={{ color: '#64748B', fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>
+                This mock test currently does not contain any questions. Please check back later or contact your instructor.
+              </p>
+              <button
+                onClick={() => navigate('/mock-tests')}
+                className="btn btn-secondary"
+                style={{ fontWeight: 600 }}
+              >
+                Return to Mock Tests
+              </button>
+            </div>
           )}
         </main>
 

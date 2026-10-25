@@ -10,20 +10,34 @@ export const mockTestScoringService = {
     if (!Array.isArray(questions)) return [];
 
     return questions.map(q => {
+      // Safely parse options if string
+      let rawOptions = q.options;
+      if (typeof rawOptions === 'string') {
+        try { rawOptions = JSON.parse(rawOptions); } catch {}
+      }
+
+      // Safely parse answer_key if string
+      let rawAnswerKey = q.answer_key;
+      if (typeof rawAnswerKey === 'string') {
+        try { rawAnswerKey = JSON.parse(rawAnswerKey); } catch {}
+      }
+
+      const qType = String(q.question_type || 'mcq_single').toLowerCase().trim();
+
       // Clone question
       const sanitized = {
         id: q.id,
         test_id: q.test_id,
         section_id: q.section_id,
-        question_text: q.question_text,
-        question_type: q.question_type,
+        question_text: q.question_text || 'Assessment Question',
+        question_type: qType,
         marks: parseFloat(q.marks || 0),
         negative_marks: parseFloat(q.negative_marks || 0),
-        topic: q.topic,
-        difficulty: q.difficulty,
-        order_index: q.order_index,
-        case_passage: q.case_passage,
-        image_url: q.image_url,
+        topic: q.topic || '',
+        difficulty: q.difficulty || 'medium',
+        order_index: q.order_index || 1,
+        case_passage: q.case_passage || null,
+        image_url: q.image_url || null,
         programming_language: q.programming_language || 'javascript',
         starter_code: q.starter_code || null,
         time_limit: parseFloat(q.time_limit || 2.0),
@@ -45,22 +59,44 @@ export const mockTestScoringService = {
       });
 
       // Sanitize options based on type
-      if (q.question_type === 'matching') {
-        const leftItems = (q.options || []).map(opt => ({ id: opt.id, text: opt.text }));
-        const availableTargets = (q.answer_key && q.answer_key.available_targets) || [];
+      if (qType === 'matching') {
+        let leftItems = [];
+        let availableTargets = [];
+
+        if (rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)) {
+          leftItems = Array.isArray(rawOptions.left_items) ? rawOptions.left_items : [];
+          availableTargets = Array.isArray(rawOptions.available_targets) ? rawOptions.available_targets : [];
+        } else if (Array.isArray(rawOptions)) {
+          leftItems = rawOptions.map((opt, oIdx) => ({
+            id: typeof opt === 'object' && opt !== null ? (opt.id || opt.key || `left_${oIdx + 1}`) : `left_${oIdx + 1}`,
+            text: typeof opt === 'object' && opt !== null ? (opt.text || opt.label || opt.value || opt.title) : String(opt)
+          }));
+        }
+
+        if (availableTargets.length === 0 && rawAnswerKey && typeof rawAnswerKey === 'object') {
+          availableTargets = Array.isArray(rawAnswerKey.available_targets)
+            ? rawAnswerKey.available_targets
+            : (rawAnswerKey.pairs ? Object.values(rawAnswerKey.pairs) : []);
+        }
+
         sanitized.options = {
           left_items: leftItems,
           available_targets: availableTargets
         };
       } else {
-        sanitized.options = Array.isArray(q.options) ? [...q.options] : q.options;
+        // For MCQ, True/False, Case Study, etc.
+        sanitized.options = Array.isArray(rawOptions) ? [...rawOptions] : (rawOptions || []);
       }
 
       // Explicitly delete sensitive fields
       delete sanitized.answer_key;
+      delete sanitized.correct_answer;
+      delete sanitized.correct_answers;
+      delete sanitized.correct_option_index;
       delete sanitized.explanation;
       delete sanitized.expected_answer;
       delete sanitized.evaluation_criteria;
+      delete sanitized.rubric;
 
       return sanitized;
     });
@@ -73,7 +109,10 @@ export const mockTestScoringService = {
   evaluateQuestionResponse(question, responseData, negativeMarkingEnabled = true) {
     const marks = parseFloat(question.marks || 0);
     const negativePenalty = negativeMarkingEnabled ? Math.abs(parseFloat(question.negative_marks || 0)) : 0;
-    const answerKey = question.answer_key || {};
+    const rawKey = question.answer_key || {};
+    const answerKey = (rawKey.correct_answer && typeof rawKey.correct_answer === 'object')
+      ? { ...rawKey, ...rawKey.correct_answer }
+      : rawKey;
     const type = question.question_type;
 
     // Check if unanswered
