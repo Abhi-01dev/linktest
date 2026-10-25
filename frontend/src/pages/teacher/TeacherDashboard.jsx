@@ -973,6 +973,7 @@ export function TeacherDashboard() {
                 <select
                   value={selectedPdfTest}
                   onChange={(e) => setSelectedPdfTest(e.target.value)}
+                  disabled={teacherTests.length === 0}
                   style={{
                     width: '100%',
                     padding: '0.65rem 0.85rem',
@@ -984,12 +985,18 @@ export function TeacherDashboard() {
                     outline: 'none'
                   }}
                 >
-                  <option value="">-- Choose Mock Test --</option>
-                  {teacherTests.map(t => (
-                    <option key={t.id} value={t.id}>
-                      {t.title} ({t.subject || 'General'})
-                    </option>
-                  ))}
+                  {teacherTests.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    <>
+                      <option value="">-- Choose Mock Test --</option>
+                      {teacherTests.map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.title} ({t.subject || 'General'})
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -1000,6 +1007,7 @@ export function TeacherDashboard() {
                 <select
                   value={selectedPdfBatch}
                   onChange={(e) => setSelectedPdfBatch(e.target.value)}
+                  disabled={teacherBatches.length === 0}
                   style={{
                     width: '100%',
                     padding: '0.65rem 0.85rem',
@@ -1011,12 +1019,18 @@ export function TeacherDashboard() {
                     outline: 'none'
                   }}
                 >
-                  <option value="">All Enrolled Batches</option>
-                  {teacherBatches.map(b => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.course_title || b.course_id || 'Batch'})
-                    </option>
-                  ))}
+                  {teacherBatches.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    <>
+                      <option value="">All Enrolled Batches</option>
+                      {teacherBatches.map(b => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.course_title || b.course_id || 'Batch'})
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
             </div>

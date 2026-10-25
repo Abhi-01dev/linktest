@@ -178,23 +178,37 @@ export function AdminLiveClassesPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="form-group">
                   <label className="form-label">Class</label>
-                  <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required>
-                    {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required disabled={classes.length === 0}>
+                    {classes.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
+                    )}
                   </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Subject</label>
-                  <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
-                    <option value="">General</option>
-                    {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} disabled={subjects.length === 0}>
+                    {subjects.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">General</option>
+                        {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </>
+                    )}
                   </select>
                 </div>
               </div>
 
               <div className="form-group">
                 <label className="form-label">Teacher Host</label>
-                <select className="form-select" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} required>
-                  {teachers.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+                <select className="form-select" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} required disabled={teachers.length === 0}>
+                  {teachers.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    teachers.map(t => <option key={t.id} value={t.id}>{t.full_name}</option>)
+                  )}
                 </select>
               </div>
 

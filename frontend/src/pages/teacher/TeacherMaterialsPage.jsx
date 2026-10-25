@@ -155,14 +155,22 @@ export function TeacherMaterialsPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="form-group">
                   <label className="form-label">Class</label>
-                  <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required>
-                    {classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
+                  <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required disabled={classes.length === 0}>
+                    {classes.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)
+                    )}
                   </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Subject</label>
-                  <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required>
-                    {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required disabled={subjects.length === 0}>
+                    {subjects.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)
+                    )}
                   </select>
                 </div>
               </div>

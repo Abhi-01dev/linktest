@@ -119,8 +119,12 @@ export function TeacherAnnouncementsPage() {
             <form onSubmit={handleCreate}>
               <div className="form-group">
                 <label className="form-label">Target Class</label>
-                <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required>
-                  {classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)}
+                <select className="form-select" value={classId} onChange={(e) => setClassId(e.target.value)} required disabled={classes.length === 0}>
+                  {classes.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    classes.map(c => <option key={c.class_id} value={c.class_id}>{c.class_name}</option>)
+                  )}
                 </select>
               </div>
 

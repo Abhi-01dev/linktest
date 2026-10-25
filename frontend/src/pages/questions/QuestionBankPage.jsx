@@ -403,6 +403,7 @@ export function QuestionBankPage() {
               setSubjectFilter(e.target.value);
               setPage(0);
             }}
+            disabled={availableSubjects.length === 0}
             style={{
               padding: '0.55rem 0.85rem',
               border: '1px solid #CBD5E1',
@@ -411,10 +412,16 @@ export function QuestionBankPage() {
               background: '#FFFFFF'
             }}
           >
-            <option value="all">All Subjects</option>
-            {availableSubjects.map((sub, idx) => (
-              <option key={idx} value={sub}>{sub}</option>
-            ))}
+            {availableSubjects.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              <>
+                <option value="all">All Subjects</option>
+                {availableSubjects.map((sub, idx) => (
+                  <option key={idx} value={sub}>{sub}</option>
+                ))}
+              </>
+            )}
           </select>
 
           <select
@@ -849,12 +856,19 @@ export function QuestionBankPage() {
                     required
                     value={newQuestion.subject}
                     onChange={(e) => setNewQuestion({ ...newQuestion, subject: e.target.value })}
+                    disabled={availableSubjects.length === 0}
                     style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #CBD5E1' }}
                   >
-                    <option value="">Select a subject</option>
-                    {availableSubjects.map(subject => (
-                      <option key={subject} value={subject}>{subject}</option>
-                    ))}
+                    {availableSubjects.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">Select a subject</option>
+                        {availableSubjects.map(subject => (
+                          <option key={subject} value={subject}>{subject}</option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
 

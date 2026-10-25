@@ -73,12 +73,17 @@ export function AdminAttendancePage() {
           <select
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
+            disabled={classes.length === 0}
             className="form-select"
             style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
           >
-            {classes.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
+            {classes.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              classes.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))
+            )}
           </select>
         </div>
 

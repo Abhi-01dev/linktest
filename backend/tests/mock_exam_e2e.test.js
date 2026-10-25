@@ -407,17 +407,14 @@ describe('Mock Exam Complete System End-to-End Verification Suite', () => {
   });
 
   test('Step 14: Privacy check - Unreleased result hides details from Student A and blocks Student B', async () => {
-    // Student A requests unreleased result
+    // Student A requests unreleased result -> HTTP 403 RESULT_NOT_RELEASED
     const sAResult = await fetch(`${baseUrl}/api/mock-tests/attempts/${studentAAttemptId}/result`, {
       headers: { Authorization: `Bearer ${studentAToken}` }
     });
     const sABody = await sAResult.json();
-    assert.equal(sAResult.status, 200);
-
-    // Because result is unreleased, score and detailed answers must be protected/hidden
-    assert.equal(sABody.data.results_released, false);
-    assert.equal(sABody.data.result_status, 'PENDING_EVALUATION');
-    assert.equal(sABody.data.total_score, null, 'Score must remain hidden until released');
+    assert.equal(sAResult.status, 403);
+    assert.equal(sABody.error?.code, 'RESULT_NOT_RELEASED');
+    assert.equal(sABody.data, undefined, 'Score and evaluation details must be completely withheld');
 
     // Unreleased test must not appear in Student A's My Results
     const myResultsRes = await fetch(`${baseUrl}/api/mock-tests/my-results`, {

@@ -538,6 +538,7 @@ export function AdminBatchesPage() {
           <select
             value={courseFilter}
             onChange={(e) => setCourseFilter(e.target.value)}
+            disabled={courses.length === 0}
             style={{
               padding: '0.5rem 0.85rem',
               borderRadius: '8px',
@@ -549,12 +550,18 @@ export function AdminBatchesPage() {
               cursor: 'pointer'
             }}
           >
-            <option value="ALL">All Curricula</option>
-            {courses.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
+            {courses.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              <>
+                <option value="ALL">All Curricula</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </>
+            )}
           </select>
         </div>
 
@@ -990,13 +997,20 @@ export function AdminBatchesPage() {
                   className="form-input"
                   value={formData.course_id}
                   onChange={(e) => setFormData({ ...formData, course_id: e.target.value })}
+                  disabled={courses.length === 0}
                 >
-                  <option value="">No specific curriculum tied</option>
-                  {courses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.title}
-                    </option>
-                  ))}
+                  {courses.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    <>
+                      <option value="">No specific curriculum tied</option>
+                      {courses.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.title}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
 
@@ -1157,11 +1171,18 @@ export function AdminBatchesPage() {
                     onChange={(e) => setSelectedAssignSubjectId(e.target.value)}
                     style={{ fontSize: '0.85rem' }}
                     required
+                    disabled={allSubjects.length === 0}
                   >
-                    <option value="">Select Subject</option>
-                    {allSubjects.map(s => (
-                      <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
-                    ))}
+                    {allSubjects.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">Select Subject</option>
+                        {allSubjects.map(s => (
+                          <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
                 <div>
@@ -1172,11 +1193,18 @@ export function AdminBatchesPage() {
                     onChange={(e) => setSelectedAssignTeacherId(e.target.value)}
                     style={{ fontSize: '0.85rem' }}
                     required
+                    disabled={allTeachers.length === 0}
                   >
-                    <option value="">Select Teacher</option>
-                    {allTeachers.map(t => (
-                      <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
-                    ))}
+                    {allTeachers.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">Select Teacher</option>
+                        {allTeachers.map(t => (
+                          <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
                 <button type="submit" className="btn btn-primary" style={{ height: '38px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -1395,11 +1423,16 @@ export function AdminBatchesPage() {
                         value={newTeacherId}
                         onChange={(e) => setNewTeacherId(e.target.value)}
                         required
+                        disabled={allTeachers.length === 0}
                         style={{ width: '100%', fontSize: '0.85rem' }}
                       >
-                        {allTeachers.map(t => (
-                          <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
-                        ))}
+                        {allTeachers.length === 0 ? (
+                          <option value="" disabled>No options</option>
+                        ) : (
+                          allTeachers.map(t => (
+                            <option key={t.id} value={t.id}>{t.full_name} ({t.email})</option>
+                          ))
+                        )}
                       </select>
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>

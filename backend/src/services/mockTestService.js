@@ -742,8 +742,24 @@ export const mockTestService = {
       throw err;
     }
 
-    // Idempotency: If already evaluated or submitted or AUTO_SUBMITTED, return existing result
+    const isFacultyOrAdmin = ['TEACHER', 'ADMIN'].includes(student.role);
+
+    // Idempotency: If already evaluated or submitted or AUTO_SUBMITTED, return existing result summary
     if (['submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.status)) {
+      if (!isFacultyOrAdmin && attempt.result_status !== 'RELEASED') {
+        return {
+          id: attempt.id,
+          attempt_id: attempt.id,
+          test_id: attempt.test_id,
+          status: attempt.status,
+          submission_status: attempt.submission_status || 'SUBMITTED',
+          submission_reason: attempt.submission_reason || null,
+          result_status: attempt.result_status || 'PENDING_EVALUATION',
+          results_released: false,
+          total_score: null,
+          submitted_at: attempt.submitted_at
+        };
+      }
       return this.getAttemptResult(attemptId, student);
     }
 
@@ -855,6 +871,21 @@ export const mockTestService = {
       }
     });
 
+    if (!isFacultyOrAdmin && resultStatus !== 'RELEASED') {
+      return {
+        id: attempt.id,
+        attempt_id: attempt.id,
+        test_id: test.id,
+        status: finalStatus,
+        submission_status: submissionStatus,
+        submission_reason: submissionReason,
+        result_status: resultStatus,
+        results_released: false,
+        total_score: null,
+        submitted_at: updatedAttempt.submitted_at
+      };
+    }
+
     return this.getAttemptResult(attemptId, student);
   },
 
@@ -926,6 +957,17 @@ export const mockTestService = {
 
     const isTeacherOrAdmin = ['TEACHER', 'ADMIN'].includes(student.role);
     const isReleased = attempt.result_status === 'RELEASED';
+
+    // Requirement 20: When a student requests a result that has not been released,
+    // fail securely with HTTP 403 and RESULT_NOT_RELEASED error code.
+    if (!isTeacherOrAdmin && !isReleased) {
+      const err = new Error('Result has not been released yet.');
+      err.status = 403;
+      err.statusCode = 403;
+      err.code = 'RESULT_NOT_RELEASED';
+      throw err;
+    }
+
     const resultsReleased = Boolean(isTeacherOrAdmin || isReleased);
 
     // Build question reviews with safe handling for every field

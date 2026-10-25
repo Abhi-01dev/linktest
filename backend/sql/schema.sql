@@ -4,6 +4,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Drop tables in reverse dependency order
+DROP TABLE IF EXISTS mock_test_join_requests CASCADE;
 DROP TABLE IF EXISTS mock_test_audit_logs CASCADE;
 DROP TABLE IF EXISTS mock_test_proctoring_events CASCADE;
 DROP TABLE IF EXISTS mock_test_responses CASCADE;
@@ -816,6 +817,9 @@ CREATE TABLE mock_test_attempts (
 CREATE INDEX idx_mock_attempts_test ON mock_test_attempts(test_id);
 CREATE INDEX idx_mock_attempts_student ON mock_test_attempts(student_id);
 CREATE INDEX idx_mock_attempts_status ON mock_test_attempts(status);
+CREATE INDEX idx_mock_attempts_student_result ON mock_test_attempts(student_id, result_status);
+CREATE INDEX idx_mock_attempts_test_result ON mock_test_attempts(test_id, result_status);
+CREATE INDEX idx_mock_attempts_released_at ON mock_test_attempts(released_at);
 
 -- 39. MOCK TEST RESPONSES
 CREATE TABLE mock_test_responses (
@@ -827,6 +831,8 @@ CREATE TABLE mock_test_responses (
     is_visited BOOLEAN NOT NULL DEFAULT true,
     score_awarded NUMERIC(6,2) DEFAULT 0.00,
     is_correct BOOLEAN NULL,
+    is_pending_review BOOLEAN DEFAULT false,
+    execution_results JSONB DEFAULT NULL,
     evaluation_comment TEXT NULL,
     evaluated_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     evaluated_at TIMESTAMP WITH TIME ZONE NULL,
@@ -835,12 +841,13 @@ CREATE TABLE mock_test_responses (
 );
 
 CREATE INDEX idx_mock_responses_attempt ON mock_test_responses(attempt_id);
+CREATE INDEX idx_mock_responses_pending ON mock_test_responses(attempt_id, is_pending_review);
 
 -- 40. MOCK TEST PROCTORING EVENTS
 CREATE TABLE mock_test_proctoring_events (
     id VARCHAR(64) PRIMARY KEY,
     attempt_id VARCHAR(64) NOT NULL REFERENCES mock_test_attempts(id) ON DELETE CASCADE,
-    event_type VARCHAR(50) NOT NULL CHECK (event_type IN (
+    event_type VARCHAR(64) NOT NULL CHECK (event_type IN (
         'FACE_NOT_DETECTED',
         'MULTIPLE_FACES',
         'CAMERA_DISCONNECTED',
@@ -851,7 +858,9 @@ CREATE TABLE mock_test_proctoring_events (
         'NETWORK_INTERRUPTION',
         'AUDIO_ANOMALY',
         'EXAM_TIME_EXPIRED',
-        'SUSPICIOUS_KEY_COMBINATION'
+        'SUSPICIOUS_KEY_COMBINATION',
+        'SECURITY_WARNING',
+        'AUTO_SUBMISSION'
     )),
     severity VARCHAR(20) NOT NULL DEFAULT 'warning' CHECK (severity IN ('info', 'warning', 'critical')),
     client_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -883,3 +892,24 @@ CREATE TABLE mock_test_audit_logs (
 
 CREATE INDEX idx_mock_audit_test ON mock_test_audit_logs(test_id);
 CREATE INDEX idx_mock_audit_attempt ON mock_test_audit_logs(attempt_id);
+
+-- 42. MOCK TEST JOIN REQUESTS
+CREATE TABLE mock_test_join_requests (
+    id VARCHAR(64) PRIMARY KEY,
+    mock_test_id VARCHAR(64) NOT NULL REFERENCES mock_tests(id) ON DELETE CASCADE,
+    student_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    teacher_id VARCHAR(64) NULL REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED')),
+    requested_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TIMESTAMP WITH TIME ZONE NULL,
+    reviewed_by VARCHAR(64) NULL REFERENCES users(id) ON DELETE SET NULL,
+    rejection_reason TEXT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_join_requests_test ON mock_test_join_requests(mock_test_id);
+CREATE INDEX idx_join_requests_student ON mock_test_join_requests(student_id);
+CREATE INDEX idx_join_requests_teacher ON mock_test_join_requests(teacher_id);
+CREATE INDEX idx_join_requests_status ON mock_test_join_requests(status);
+CREATE UNIQUE INDEX uq_active_mock_test_join_request ON mock_test_join_requests(mock_test_id, student_id) WHERE status IN ('PENDING', 'APPROVED');

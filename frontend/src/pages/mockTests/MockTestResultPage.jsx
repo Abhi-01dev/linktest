@@ -133,19 +133,23 @@ function MockTestResultView() {
     } catch (err) {
       console.error('Failed to load result:', err);
       const status = err.status || err.response?.status || 500;
-      let message = 'Something went wrong while loading the result.';
+      const code = err.code || err.response?.data?.error?.code || 'UNKNOWN_ERROR';
+      let message = err.message || 'Something went wrong while loading the result.';
 
-      if (status === 401) {
+      if (code === 'RESULT_NOT_RELEASED' || (status === 403 && err.message?.toLowerCase().includes('not been released'))) {
+        setErrorInfo({ status: 403, code: 'RESULT_NOT_RELEASED', message: 'Result has not been released yet.' });
+      } else if (status === 401) {
         message = 'Please log in again.';
+        setErrorInfo({ status, code, message });
       } else if (status === 403) {
         message = 'You are not authorized to view this result.';
+        setErrorInfo({ status, code, message });
       } else if (status === 404) {
         message = 'Result not found.';
-      } else if (err.message) {
-        message = err.message;
+        setErrorInfo({ status, code, message });
+      } else {
+        setErrorInfo({ status, code, message });
       }
-
-      setErrorInfo({ status, message });
     } finally {
       setLoading(false);
     }
@@ -167,6 +171,67 @@ function MockTestResultView() {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // STATE B: Result Not Released Yet (Prompt Requirement 20 & 21)
+  // Dedicated clean screen communicating ONLY that the result is pending release.
+  // Zero empty cards, 0%, or placeholder zeroes rendered.
+  // ---------------------------------------------------------------------------
+  if (errorInfo?.code === 'RESULT_NOT_RELEASED') {
+    return (
+      <div style={{ padding: '4rem 1rem', background: 'var(--color-bg-main, #F8FAFC)', minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{
+          background: '#FFFFFF',
+          border: '1px solid #E2E8F0',
+          borderRadius: '16px',
+          padding: '3rem 2rem',
+          maxWidth: '520px',
+          width: '100%',
+          textAlign: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.06)'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: '#EFF6FF',
+            color: '#2563EB',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.5rem'
+          }}>
+            <Clock size={32} />
+          </div>
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', margin: '0 0 0.75rem' }}>
+            Result Not Released Yet
+          </h2>
+          <p style={{ color: '#334155', fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.4rem' }}>
+            Your result will be released soon.
+          </p>
+          <p style={{ color: '#64748B', fontSize: '0.92rem', margin: '0 0 1.75rem' }}>
+            Please check back later.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+            <button
+              onClick={loadResult}
+              className="btn btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
+            >
+              <RefreshCw size={15} />
+              <span>Refresh Status</span>
+            </button>
+            <Link to="/mock-tests" className="btn btn-secondary" style={{ fontWeight: 600 }}>
+              Back to Mock Tests
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATE D: Invalid / Unauthorized Attempt or Error State
+  // ---------------------------------------------------------------------------
   if (errorInfo || !result) {
     const isAuthErr = errorInfo?.status === 401;
     const isForbidden = errorInfo?.status === 403;
@@ -213,6 +278,121 @@ function MockTestResultView() {
                 <span>Retry</span>
               </button>
             )}
+            <Link to="/mock-tests" className="btn btn-secondary" style={{ fontWeight: 600 }}>
+              Back to Mock Tests
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATE C: Attempt Still Being Evaluated (Prompt Requirement 21)
+  // Appropriate processing state without exposing score data.
+  // ---------------------------------------------------------------------------
+  const isEvaluating = result?.status === 'evaluating' || result?.result_status === 'EVALUATING';
+  if (isEvaluating && user?.role === 'STUDENT') {
+    return (
+      <div style={{ padding: '4rem 1rem', background: 'var(--color-bg-main, #F8FAFC)', minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{
+          background: '#FFFFFF',
+          border: '1px solid #E2E8F0',
+          borderRadius: '16px',
+          padding: '3rem 2rem',
+          maxWidth: '520px',
+          width: '100%',
+          textAlign: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.06)'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: '#FEF3C7',
+            color: '#D97706',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.5rem'
+          }}>
+            <RefreshCw size={32} className="spin" />
+          </div>
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', margin: '0 0 0.75rem' }}>
+            Attempt Being Evaluated
+          </h2>
+          <p style={{ color: '#334155', fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.4rem' }}>
+            Your submission is currently being evaluated.
+          </p>
+          <p style={{ color: '#64748B', fontSize: '0.92rem', margin: '0 0 1.75rem' }}>
+            Automated and subjective checks are in progress. Please check back shortly.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+            <button
+              onClick={loadResult}
+              className="btn btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
+            >
+              <RefreshCw size={15} />
+              <span>Refresh Status</span>
+            </button>
+            <Link to="/mock-tests" className="btn btn-secondary" style={{ fontWeight: 600 }}>
+              Back to Mock Tests
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATE B: Result unreleased fallback guard (e.g. if loaded attempt object is unreleased)
+  // ---------------------------------------------------------------------------
+  const isReleasedCheck = Boolean(result.results_released || result.result_status === 'RELEASED');
+  if (!isReleasedCheck && user?.role === 'STUDENT') {
+    return (
+      <div style={{ padding: '4rem 1rem', background: 'var(--color-bg-main, #F8FAFC)', minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{
+          background: '#FFFFFF',
+          border: '1px solid #E2E8F0',
+          borderRadius: '16px',
+          padding: '3rem 2rem',
+          maxWidth: '520px',
+          width: '100%',
+          textAlign: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.06)'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: '#EFF6FF',
+            color: '#2563EB',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.5rem'
+          }}>
+            <Clock size={32} />
+          </div>
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', margin: '0 0 0.75rem' }}>
+            Result Not Released Yet
+          </h2>
+          <p style={{ color: '#334155', fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.4rem' }}>
+            Your result will be released soon.
+          </p>
+          <p style={{ color: '#64748B', fontSize: '0.92rem', margin: '0 0 1.75rem' }}>
+            Please check back later.
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+            <button
+              onClick={loadResult}
+              className="btn btn-primary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700 }}
+            >
+              <RefreshCw size={15} />
+              <span>Refresh Status</span>
+            </button>
             <Link to="/mock-tests" className="btn btn-secondary" style={{ fontWeight: 600 }}>
               Back to Mock Tests
             </Link>
@@ -356,10 +536,12 @@ function MockTestResultView() {
               <p style={{ color: '#7F1D1D', fontSize: '0.92rem', margin: '0.35rem 0 0.5rem', lineHeight: 1.5 }}>
                 {(result.submission_reason === 'SECOND_FULLSCREEN_EXIT' || result.attempt?.submission_reason === 'SECOND_FULLSCREEN_EXIT')
                   ? 'Your test was automatically submitted because full-screen mode was exited twice.'
+                  : (result.submission_reason === 'MAX_TAB_SWITCHES' || result.attempt?.submission_reason === 'MAX_TAB_SWITCHES')
+                  ? 'Your test was automatically submitted because maximum tab switches were reached.'
                   : 'Your test was automatically submitted because the maximum number of security warnings was reached.'}
               </p>
               <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.8rem', color: '#991B1B', fontWeight: 600 }}>
-                <span>Security Warnings: {result.security_warning_count ?? result.attempt?.security_warning_count ?? 0} / 5</span>
+                <span>Security Warnings: {result.security_warning_count ?? result.attempt?.security_warning_count ?? result.warning_count ?? 0}</span>
                 <span>Fullscreen Exits: {result.fullscreen_exit_count ?? result.attempt?.fullscreen_exit_count ?? 0} / 2</span>
                 <span>Reason: {result.submission_reason || result.attempt?.submission_reason || 'MAX_SECURITY_WARNINGS'}</span>
               </div>

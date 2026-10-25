@@ -176,13 +176,18 @@ export function AdminLessonsPage() {
             className="form-select"
             value={selectedCourseId}
             onChange={(e) => setSelectedCourseId(e.target.value)}
+            disabled={courses.length === 0}
             style={{ maxWidth: '480px' }}
           >
-            {courses.map(c => (
-              <option key={c.id} value={c.id}>
-                {c.title} ({c.category})
-              </option>
-            ))}
+            {courses.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              courses.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.title} ({c.category})
+                </option>
+              ))
+            )}
           </select>
         </div>
 

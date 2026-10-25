@@ -329,7 +329,7 @@ export function TeacherProctoringReviewPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginTop: '0.75rem', fontSize: '0.88rem', color: '#7F1D1D' }}>
               <div><strong>Student:</strong> {attempt.student_name || 'Candidate'}</div>
               <div><strong>Reason:</strong> <code style={{ background: '#FEE2E2', padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 700 }}>{attempt.submission_reason || 'MAX_SECURITY_WARNINGS'}</code></div>
-              <div><strong>Security Warnings:</strong> {attempt.security_warning_count ?? attempt.warning_count ?? 0} / 5</div>
+              <div><strong>Security Warnings:</strong> {attempt.security_warning_count ?? attempt.warning_count ?? 0}</div>
               <div><strong>Fullscreen Exits:</strong> {attempt.fullscreen_exit_count || 0} / 2</div>
               <div><strong>Finalized At:</strong> {attempt.submitted_at ? new Date(attempt.submitted_at).toLocaleString() : 'N/A'}</div>
             </div>

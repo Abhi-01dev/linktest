@@ -215,6 +215,7 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
             <select
               value={subjectFilter}
               onChange={(e) => setSubjectFilter(e.target.value)}
+              disabled={availableSubjects.length === 0}
               style={{
                 padding: '0.45rem 0.75rem',
                 fontSize: '0.82rem',
@@ -223,10 +224,16 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
                 background: '#FFFFFF'
               }}
             >
-              <option value="all">All Subjects</option>
-              {availableSubjects.map((sub, idx) => (
-                <option key={idx} value={sub}>{sub}</option>
-              ))}
+              {availableSubjects.length === 0 ? (
+                <option value="" disabled>No options</option>
+              ) : (
+                <>
+                  <option value="all">All Subjects</option>
+                  {availableSubjects.map((sub, idx) => (
+                    <option key={idx} value={sub}>{sub}</option>
+                  ))}
+                </>
+              )}
             </select>
 
             {questions.length > 0 && (
@@ -250,7 +257,16 @@ export function QuestionBankSelectorModal({ isOpen, onClose, onSelectQuestions }
             ) : questions.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '3rem', color: '#64748B' }}>
                 <Layers size={32} style={{ color: '#CBD5E1', margin: '0 auto 0.75rem' }} />
-                <p style={{ margin: 0 }}>No questions found matching criteria.</p>
+                <p style={{ margin: 0, fontWeight: 600 }}>
+                  {search || subjectFilter !== 'all' || typeFilter !== 'all'
+                    ? 'No options found'
+                    : 'No options'}
+                </p>
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.85rem', color: '#94A3B8' }}>
+                  {search || subjectFilter !== 'all' || typeFilter !== 'all'
+                    ? 'No questions matched your search criteria.'
+                    : 'The question bank has no questions available yet.'}
+                </p>
                 <button
                   onClick={() => setBulkImportOpen(true)}
                   className="btn btn-primary"

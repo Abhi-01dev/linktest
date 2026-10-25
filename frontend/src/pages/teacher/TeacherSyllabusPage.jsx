@@ -90,12 +90,17 @@ export function TeacherSyllabusPage() {
               const found = assignments.find(a => a.id === e.target.value);
               if (found) setSelectedAssignment(found);
             }}
+            disabled={assignments.length === 0}
             className="form-select"
             style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
           >
-            {assignments.map(a => (
-              <option key={a.id} value={a.id}>{a.class_name} • {a.subject_name}</option>
-            ))}
+            {assignments.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              assignments.map(a => (
+                <option key={a.id} value={a.id}>{a.class_name} • {a.subject_name}</option>
+              ))
+            )}
           </select>
         </div>
 

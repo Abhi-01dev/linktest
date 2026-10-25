@@ -141,8 +141,12 @@ export function AdminAnnouncementsPage() {
               {targetType === 'class' && (
                 <div className="form-group">
                   <label className="form-label">Select Class</label>
-                  <select className="form-select" value={targetId} onChange={(e) => setTargetId(e.target.value)} required>
-                    {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <select className="form-select" value={targetId} onChange={(e) => setTargetId(e.target.value)} required disabled={classes.length === 0}>
+                    {classes.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
+                    )}
                   </select>
                 </div>
               )}

@@ -161,12 +161,19 @@ export function AdminReportsPage() {
             <select
               value={selectedCourse}
               onChange={(e) => setSelectedCourse(e.target.value)}
+              disabled={availableCourses.length === 0}
               style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.85rem', background: '#FFFFFF' }}
             >
-              <option value="ALL">All Courses ({availableCourses.length})</option>
-              {availableCourses.map((c) => (
-                <option key={c.id} value={c.id}>{c.title}</option>
-              ))}
+              {availableCourses.length === 0 ? (
+                <option value="" disabled>No options</option>
+              ) : (
+                <>
+                  <option value="ALL">All Courses ({availableCourses.length})</option>
+                  {availableCourses.map((c) => (
+                    <option key={c.id} value={c.id}>{c.title}</option>
+                  ))}
+                </>
+              )}
             </select>
           </div>
 
@@ -177,12 +184,19 @@ export function AdminReportsPage() {
             <select
               value={selectedBatch}
               onChange={(e) => setSelectedBatch(e.target.value)}
+              disabled={availableBatches.length === 0}
               style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.85rem', background: '#FFFFFF' }}
             >
-              <option value="ALL">All Batches ({availableBatches.length})</option>
-              {availableBatches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name} ({b.code || b.id})</option>
-              ))}
+              {availableBatches.length === 0 ? (
+                <option value="" disabled>No options</option>
+              ) : (
+                <>
+                  <option value="ALL">All Batches ({availableBatches.length})</option>
+                  {availableBatches.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name} ({b.code || b.id})</option>
+                  ))}
+                </>
+              )}
             </select>
           </div>
 

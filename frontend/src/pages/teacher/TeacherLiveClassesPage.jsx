@@ -364,13 +364,20 @@ export function TeacherLiveClassesPage() {
                     className="form-select"
                     value={batchId}
                     onChange={(e) => setBatchId(e.target.value)}
+                    disabled={batches.length === 0}
                   >
-                    <option value="">Select Batch (Optional)</option>
-                    {batches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name} ({b.code || 'Active'})
-                      </option>
-                    ))}
+                    {batches.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">Select Batch (Optional)</option>
+                        {batches.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name} ({b.code || 'Active'})
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
 
@@ -380,13 +387,20 @@ export function TeacherLiveClassesPage() {
                     className="form-select"
                     value={classId}
                     onChange={(e) => setClassId(e.target.value)}
+                    disabled={classes.length === 0}
                   >
-                    <option value="">Select Class (Optional)</option>
-                    {classes.map((c) => (
-                      <option key={c.class_id || c.id} value={c.class_id || c.id}>
-                        {c.class_name || c.name}
-                      </option>
-                    ))}
+                    {classes.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">Select Class (Optional)</option>
+                        {classes.map((c) => (
+                          <option key={c.class_id || c.id} value={c.class_id || c.id}>
+                            {c.class_name || c.name}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
               </div>
@@ -398,13 +412,20 @@ export function TeacherLiveClassesPage() {
                     className="form-select"
                     value={subjectId}
                     onChange={(e) => setSubjectId(e.target.value)}
+                    disabled={subjects.length === 0}
                   >
-                    <option value="">General Subject</option>
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
+                    {subjects.length === 0 ? (
+                      <option value="" disabled>No options</option>
+                    ) : (
+                      <>
+                        <option value="">General Subject</option>
+                        {subjects.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
 

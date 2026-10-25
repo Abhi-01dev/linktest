@@ -540,12 +540,18 @@ export function TeacherTestBuilderPage() {
                   background: '#FFFFFF'
                 }}
               >
-                <option value="">-- Select Target Batch --</option>
-                {batches.map(b => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} ({b.code || b.department || 'Active'})
-                  </option>
-                ))}
+                {batches.length === 0 ? (
+                  <option value="" disabled>No options</option>
+                ) : (
+                  <>
+                    <option value="">-- Select Target Batch --</option>
+                    {batches.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.code || b.department || 'Active'})
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
 

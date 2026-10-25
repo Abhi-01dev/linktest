@@ -647,7 +647,7 @@ export function MockTestRunnerPage() {
   if (isCompleted) {
     const subReason = autoSubmittedState?.reason || examData?.submission_reason || examData?.attempt?.submission_reason;
     const isFullscreenExitAuto = subReason === 'SECOND_FULLSCREEN_EXIT' || autoSubmittedState?.reason === 'SECOND_FULLSCREEN_EXIT';
-    const isMaxWarningsAuto = subReason === 'MAX_SECURITY_WARNINGS' || autoSubmittedState?.reason === 'MAX_SECURITY_WARNINGS';
+    const isMaxWarningsAuto = subReason === 'MAX_SECURITY_WARNINGS' || autoSubmittedState?.reason === 'MAX_SECURITY_WARNINGS' || subReason === 'MAX_TAB_SWITCHES' || autoSubmittedState?.reason === 'MAX_TAB_SWITCHES';
 
     let autoSubmitReasonTitle = 'Examination Automatically Submitted';
     let autoSubmitReasonDesc = 'Your test has been automatically submitted due to security policy violations.';
@@ -656,7 +656,9 @@ export function MockTestRunnerPage() {
       autoSubmitReasonDesc = 'Your test has been automatically submitted because you exited full-screen mode twice.';
     } else if (isMaxWarningsAuto) {
       autoSubmitReasonTitle = 'Examination Disqualified';
-      autoSubmitReasonDesc = 'Your examination was automatically submitted after you reached three security strikes.';
+      autoSubmitReasonDesc = subReason === 'MAX_TAB_SWITCHES' || autoSubmittedState?.reason === 'MAX_TAB_SWITCHES'
+        ? 'Your examination was automatically submitted after maximum tab switches were detected.'
+        : 'Your examination was automatically submitted after security warning limits were exceeded.';
     }
 
     return (
@@ -751,7 +753,9 @@ export function MockTestRunnerPage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      height: '100vh',
+      maxHeight: '100vh',
+      overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
       background: '#F1F5F9',
@@ -870,6 +874,7 @@ export function MockTestRunnerPage() {
         alignItems: 'center',
         justifyContent: 'space-between',
         borderBottom: '1px solid #1E293B',
+        flexShrink: 0,
         position: 'sticky',
         top: 0,
         zIndex: 40

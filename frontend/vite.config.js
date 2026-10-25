@@ -14,13 +14,14 @@ export default defineConfig({
     }
   },
   build: {
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 750,
     rollupOptions: {
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-charts': ['recharts'],
-          'vendor-icons': ['lucide-react']
+          'vendor-icons': ['lucide-react'],
+          'vendor-livekit': ['@livekit/components-react', 'livekit-client']
         }
       }
     }
