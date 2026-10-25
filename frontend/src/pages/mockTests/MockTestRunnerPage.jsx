@@ -73,9 +73,25 @@ export function MockTestRunnerPage() {
   const lastSyncTimeRef = useRef(Date.now());
   const pendingSyncRef = useRef({});
   const lastFullscreenExitRef = useRef(0);
-  const lastFocusLossEventRef = useRef(0);
+  const wasFullscreenRef = useRef(Boolean(
+    typeof document !== 'undefined' && (
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement
+    )
+  ));
+  const lastTabHiddenTimeRef = useRef(0);
+  const lastBlurTimeRef = useRef(0);
+  const blurTimeoutRef = useRef(null);
   const responsesRef = useRef({});
   const preventClipboardAction = (event) => event.preventDefault();
+
+  const DEBUG_PROCTOR = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    Boolean(window.DEBUG_PROCTOR)
+  );
 
   // Sync ref with state
   useEffect(() => {
@@ -90,10 +106,14 @@ export function MockTestRunnerPage() {
         await docEl.requestFullscreen();
       } else if (docEl.webkitRequestFullscreen) {
         await docEl.webkitRequestFullscreen();
+      } else if (docEl.mozRequestFullScreen) {
+        await docEl.mozRequestFullScreen();
       } else if (docEl.msRequestFullscreen) {
         await docEl.msRequestFullscreen();
       }
       setIsFullscreenActive(true);
+      wasFullscreenRef.current = true;
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Fullscreen mode successfully entered');
     } catch (err) {
       console.warn('[Runner] Fullscreen request error:', err.message);
     }
@@ -110,12 +130,20 @@ export function MockTestRunnerPage() {
       // Fullscreen exit is strictly handled by dedicated handleFullscreenChange
       if (payloadType === 'FULLSCREEN_EXIT') return;
 
+      if (DEBUG_PROCTOR) {
+        console.log('[PROCTOR] Sending proctoring event:', payloadType, eventPayload);
+      }
+
       const res = await api.logMockTestSecurityEvent(attemptId, {
         ...eventPayload,
         eventType: payloadType,
         event_type: payloadType,
         answers: responsesRef.current
       });
+
+      if (DEBUG_PROCTOR) {
+        console.log('[PROCTOR] Proctoring event response:', res);
+      }
 
       if (res) {
         if (res.security_warning_count !== undefined) {
@@ -130,24 +158,32 @@ export function MockTestRunnerPage() {
 
         if (res.auto_submitted) {
           const reasonCode = res.submission_reason || 'MAX_SECURITY_WARNINGS';
-          const msg = reasonCode === 'SECOND_FULLSCREEN_EXIT'
-            ? 'Your test has been automatically submitted because you exited full-screen mode twice.'
-            : 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+          let msg = 'Your test has been automatically submitted because the maximum number of security warnings was reached.';
+          if (reasonCode === 'SECOND_FULLSCREEN_EXIT') {
+            msg = 'Your test was automatically submitted because fullscreen mode was exited twice.';
+          } else if (reasonCode === 'MAX_TAB_SWITCHES') {
+            msg = 'Your test was automatically submitted because maximum tab switches were detected.';
+          }
           setAutoSubmittedState({
             submitted: true,
             reason: reasonCode,
             message: msg
           });
+          stopCamera();
           return;
         }
 
         if (!res.debounced) {
           const currentCount = res.security_warning_count ?? (securityWarningCount + 1);
           let warningMsg = 'Please follow the test rules and remain on the exam screen.';
-          if (payloadType === 'TAB_HIDDEN' || payloadType === 'WINDOW_BLURRED') {
-            warningMsg = 'You navigated away from the examination window. Please stay on this tab to maintain exam session integrity.';
+          if (payloadType === 'TAB_HIDDEN') {
+            warningMsg = 'You navigated away from the examination tab. Please stay on this tab to maintain exam session integrity.';
+          } else if (payloadType === 'WINDOW_BLURRED') {
+            warningMsg = 'Focus shifted away from the examination window. Please keep the test active and focused.';
           } else if (payloadType === 'MULTIPLE_FACES') {
             warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
+          } else if (payloadType === 'FACE_NOT_DETECTED') {
+            warningMsg = 'Your face was not detected in the camera view for over 5 seconds. Please adjust your camera or lighting.';
           }
 
           setActiveWarningModal({
@@ -302,48 +338,119 @@ export function MockTestRunnerPage() {
     if (!examData) return;
 
     const handleVisibilityChange = () => {
-      if (document.hidden) {
+      const isHidden = Boolean(document.hidden || document.visibilityState === 'hidden');
+      if (isHidden) {
         const now = Date.now();
-        if (now - lastFocusLossEventRef.current < 1000) return;
-        lastFocusLossEventRef.current = now;
+        // Clear any pending blur timeout since tab visibility transition is authoritative
+        if (blurTimeoutRef.current) {
+          clearTimeout(blurTimeoutRef.current);
+          blurTimeoutRef.current = null;
+        }
+
+        // Debounce duplicate visibility events (3500ms matching backend limit)
+        if (now - lastTabHiddenTimeRef.current < 3500) {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate TAB_HIDDEN debounced');
+          return;
+        }
+        lastTabHiddenTimeRef.current = now;
+
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] visibility: hidden -> emitting TAB_HIDDEN');
         handleProctorEvent({
           event_type: 'TAB_HIDDEN',
           severity: 'warning',
           client_timestamp: new Date().toISOString()
         });
+      } else {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] visibility: visible (no strike recorded)');
       }
     };
 
     const handleWindowBlur = () => {
-      const now = Date.now();
-      if (now - lastFocusLossEventRef.current < 1000) return;
-      lastFocusLossEventRef.current = now;
-      handleProctorEvent({
-        event_type: 'WINDOW_BLURRED',
-        severity: 'warning',
-        client_timestamp: new Date().toISOString()
-      });
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] window blur event triggered');
+
+      // If a tab switch was already recorded within 3500ms, suppress blur
+      if (Date.now() - lastTabHiddenTimeRef.current < 3500) {
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] blur suppressed (correlated with recent TAB_HIDDEN)');
+        return;
+      }
+
+      // Defer blur evaluation by 120ms to allow visibilitychange to fire first if tab switched
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
+      blurTimeoutRef.current = setTimeout(() => {
+        blurTimeoutRef.current = null;
+
+        // If the document became hidden in the meantime, visibilitychange handled it
+        if (document.hidden || document.visibilityState === 'hidden') {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] blur ignored because tab is hidden');
+          return;
+        }
+
+        const now = Date.now();
+        if (now - lastTabHiddenTimeRef.current < 3500) {
+          return;
+        }
+        if (now - lastBlurTimeRef.current < 3500) {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate WINDOW_BLURRED debounced');
+          return;
+        }
+        lastBlurTimeRef.current = now;
+
+        if (DEBUG_PROCTOR) console.log('[PROCTOR] emitting WINDOW_BLURRED');
+        handleProctorEvent({
+          event_type: 'WINDOW_BLURRED',
+          severity: 'warning',
+          client_timestamp: new Date().toISOString()
+        });
+      }, 120);
+    };
+
+    const handleWindowFocus = () => {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] window focus (no strike recorded)');
     };
 
     const handleFullscreenChange = async () => {
-      const isNowFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      const isNowFullscreen = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
       setIsFullscreenActive(isNowFullscreen);
 
-      if (!isNowFullscreen) {
-        // Debounce rapid duplicate events (e.g. 2.5s) to prevent 1 exit counting as multiple (Requirement 9)
+      if (DEBUG_PROCTOR) {
+        console.log(`[PROCTOR] fullscreenchange | active: ${isNowFullscreen}`);
+      }
+
+      // Remember when fullscreen is successfully active
+      if (isNowFullscreen) {
+        wasFullscreenRef.current = true;
+        return;
+      }
+
+      // Only count an actual transition: fullscreen active -> fullscreenElement becomes null
+      if (wasFullscreenRef.current && !isNowFullscreen) {
+        wasFullscreenRef.current = false;
+
+        // Debounce rapid duplicate fullscreenchange events (2000ms)
         const now = Date.now();
-        if (now - lastFullscreenExitRef.current < 2500) {
+        if (now - lastFullscreenExitRef.current < 2000) {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate fullscreen exit event debounced');
           return;
         }
         lastFullscreenExitRef.current = now;
 
         try {
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] Emitting FULLSCREEN_EXIT to server');
           const res = await api.logMockTestSecurityEvent(attemptId, {
             eventType: 'FULLSCREEN_EXIT',
             event_type: 'FULLSCREEN_EXIT',
             client_timestamp: new Date().toISOString(),
             answers: responsesRef.current
           });
+
+          if (DEBUG_PROCTOR) console.log('[PROCTOR] FULLSCREEN_EXIT response:', res);
 
           if (res) {
             if (res.fullscreen_exit_count !== undefined) {
@@ -359,8 +466,8 @@ export function MockTestRunnerPage() {
             if (res.auto_submitted || (res.fullscreen_exit_count && res.fullscreen_exit_count >= 2)) {
               setAutoSubmittedState({
                 submitted: true,
-                reason: 'SECOND_FULLSCREEN_EXIT',
-                message: 'Your test has been automatically submitted because you exited full-screen mode twice.'
+                reason: res.submission_reason || 'SECOND_FULLSCREEN_EXIT',
+                message: 'Your test was automatically submitted because fullscreen mode was exited twice.'
               });
               stopCamera();
               return;
@@ -377,20 +484,30 @@ export function MockTestRunnerPage() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
     return () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+        blurTimeoutRef.current = null;
+      }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [examData, attemptId, handleProctorEvent, stopCamera]);
+  }, [examData, attemptId, handleProctorEvent, stopCamera, DEBUG_PROCTOR]);
 
   // ---------------------------------------------------------------------------
   // 5. ANSWER STATE PERSISTENCE
