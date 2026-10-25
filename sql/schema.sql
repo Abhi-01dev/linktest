@@ -28,6 +28,8 @@ DROP TABLE IF EXISTS timetable_entries CASCADE;
 DROP TABLE IF EXISTS student_class_enrollments CASCADE;
 DROP TABLE IF EXISTS teacher_assignments CASCADE;
 DROP TABLE IF EXISTS class_subjects CASCADE;
+DROP TABLE IF EXISTS batch_enrollments CASCADE;
+DROP TABLE IF EXISTS batch_teachers CASCADE;
 DROP TABLE IF EXISTS batches CASCADE;
 DROP TABLE IF EXISTS classes CASCADE;
 DROP TABLE IF EXISTS subjects CASCADE;
@@ -103,6 +105,8 @@ CREATE TABLE student_profiles (
 );
 
 CREATE INDEX idx_student_profiles_user ON student_profiles(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_profiles_enrollment_number
+    ON student_profiles(enrollment_number);
 
 -- 4. ACADEMIC SESSIONS
 CREATE TABLE academic_sessions (
@@ -123,7 +127,11 @@ CREATE TABLE subjects (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS department VARCHAR(150);
+ALTER TABLE subjects ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+
 CREATE INDEX idx_subjects_code ON subjects(code);
+CREATE INDEX IF NOT EXISTS idx_subjects_department_status ON subjects(department, status);
 
 -- 6. CLASSES
 CREATE TABLE classes (
@@ -133,6 +141,24 @@ CREATE TABLE classes (
     academic_session_id VARCHAR(64) REFERENCES academic_sessions(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 25. COURSES
+CREATE TABLE courses (
+    id VARCHAR(64) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    thumbnail_url TEXT,
+    instructor_name VARCHAR(150) NOT NULL,
+    instructor_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'published',
+    published BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_courses_category ON courses(category);
+CREATE INDEX idx_courses_published ON courses(published);
 
 -- 7. BATCHES / SECTIONS
 CREATE TABLE batches (
@@ -368,13 +394,21 @@ CREATE TABLE notifications (
     user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
-    type VARCHAR(30) NOT NULL DEFAULT 'info',
+    type VARCHAR(30) NOT NULL DEFAULT 'INFO',
     link TEXT,
     read BOOLEAN NOT NULL DEFAULT false,
+    priority VARCHAR(20) DEFAULT 'NORMAL',
+    related_entity_type VARCHAR(50),
+    related_entity_id VARCHAR(64),
+    action_url TEXT,
+    action_label VARCHAR(100),
+    event_key VARCHAR(128),
+    dismissed BOOLEAN DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_notifications_user_read ON notifications(user_id, read);
+CREATE UNIQUE INDEX idx_notifications_event_key ON notifications(event_key);
 
 -- 19. LEAVE REQUESTS
 CREATE TABLE leave_requests (
@@ -436,12 +470,15 @@ CREATE TABLE teacher_invitations (
     id VARCHAR(64) PRIMARY KEY,
     email VARCHAR(255) NOT NULL,
     full_name VARCHAR(150) NOT NULL,
+    department VARCHAR(150),
     invited_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
     token_hash VARCHAR(255) NOT NULL UNIQUE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     accepted_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE teacher_invitations ADD COLUMN IF NOT EXISTS department VARCHAR(150);
 
 CREATE INDEX idx_teacher_invitations_token ON teacher_invitations(token_hash);
 CREATE INDEX idx_teacher_invitations_email ON teacher_invitations(email);
@@ -481,7 +518,7 @@ CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX idx_audit_logs_target ON audit_logs(target_resource);
 
--- 24B. SECURITY LOGS (Immutable & Tamper-Evident)
+-- 25. SECURITY LOGS (Immutable & Tamper-Evident)
 CREATE TABLE IF NOT EXISTS security_logs (
     id VARCHAR(64) PRIMARY KEY,
     event_type VARCHAR(60) NOT NULL,
@@ -507,23 +544,7 @@ CREATE INDEX IF NOT EXISTS idx_security_logs_target ON security_logs (target_res
 CREATE OR REPLACE VIEW security_audit_logs AS SELECT * FROM security_logs;
 
 
--- 25. COURSES
-CREATE TABLE courses (
-    id VARCHAR(64) PRIMARY KEY,
-    title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
-    category VARCHAR(100) NOT NULL,
-    thumbnail_url TEXT,
-    instructor_name VARCHAR(150) NOT NULL,
-    instructor_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'published',
-    published BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
 
-CREATE INDEX idx_courses_category ON courses(category);
-CREATE INDEX idx_courses_published ON courses(published);
 
 -- 26. LESSONS
 CREATE TABLE lessons (
