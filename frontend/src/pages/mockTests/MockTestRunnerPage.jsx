@@ -92,6 +92,259 @@ function getMatchingData(options) {
   return { leftItems: normalizedLeft, targets };
 }
 
+// ---------------------------------------------------------------------------
+// MODULE-LEVEL SECURITY VIOLATION HANDLER
+// Extracted from the component to give the esbuild minifier its own isolated
+// scope. When this lived inside a useCallback inside the 2500-line component,
+// esbuild reused the component function's minified identifier for a local var
+// inside the callback — causing "Cannot access 'R' before initialization" TDZ.
+// ---------------------------------------------------------------------------
+async function handleSecurityViolationImpl(eventTypeOrPayload, metadata, refs, setters, api, attemptId, DEBUG_PROCTOR) {
+  const {
+    isFinalizedRef,
+    autoSubmittedStateRef,
+    examDataRef,
+    lastFullscreenExitRef,
+    lastTabOrBlurTimeRef,
+    lastFaceMissingTimeRef,
+    lastMultiFaceTimeRef,
+    lastCameraFailureTimeRef,
+    securityWarningCountRef,
+    fullscreenExitCountRef,
+    responsesRef,
+    stopCameraRef,
+  } = refs;
+
+  const {
+    setSecurityWarningCount,
+    setFullscreenExitCount,
+    setWarningCount,
+    setAutoSubmittedState,
+    setActiveWarningModal,
+  } = setters;
+
+  let eventType = '';
+  let meta = {};
+  if (typeof eventTypeOrPayload === 'string') {
+    eventType = eventTypeOrPayload.toUpperCase();
+    meta = metadata || {};
+  } else if (eventTypeOrPayload && typeof eventTypeOrPayload === 'object') {
+    eventType = (eventTypeOrPayload.eventType || eventTypeOrPayload.event_type || '').toUpperCase();
+    meta = { ...eventTypeOrPayload, ...metadata };
+  }
+  if (!eventType) return;
+
+  // 1. Ignore violations after the attempt is finalized
+  const attemptStatus = examDataRef.current?.status || examDataRef.current?.attempt?.status;
+  if (
+    isFinalizedRef.current ||
+    autoSubmittedStateRef.current?.submitted ||
+    ['submitted', 'evaluated', 'completed', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attemptStatus)
+  ) {
+    if (DEBUG_PROCTOR) console.log(`[PROCTOR] Violation ${eventType} ignored because attempt is finalized.`);
+    return;
+  }
+
+  const now = Date.now();
+
+  // 2. Debounce duplicate events
+  if (eventType === 'FULLSCREEN_EXIT') {
+    if (now - lastFullscreenExitRef.current < 2000) {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FULLSCREEN_EXIT debounced');
+      return;
+    }
+    lastFullscreenExitRef.current = now;
+  } else if (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED') {
+    if (now - lastTabOrBlurTimeRef.current < 2500) {
+      if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
+      return;
+    }
+    lastTabOrBlurTimeRef.current = now;
+  } else if (eventType === 'FACE_NOT_DETECTED') {
+    if (now - lastFaceMissingTimeRef.current < 4000) {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FACE_NOT_DETECTED debounced');
+      return;
+    }
+    lastFaceMissingTimeRef.current = now;
+  } else if (eventType === 'MULTIPLE_FACES') {
+    if (now - lastMultiFaceTimeRef.current < 4000) {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate MULTIPLE_FACES debounced');
+      return;
+    }
+    lastMultiFaceTimeRef.current = now;
+  } else if (eventType === 'CAMERA_DISCONNECTED' || eventType === 'CAMERA_PERMISSION_REVOKED') {
+    if (now - lastCameraFailureTimeRef.current < 4000) {
+      if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
+      return;
+    }
+    lastCameraFailureTimeRef.current = now;
+  }
+
+  // 3. Increment the correct local counter & 4. Update visible UI
+  if (eventType === 'FULLSCREEN_EXIT') {
+    const isFsReq = Boolean(
+      examDataRef.current?.proctoring_config?.fullscreen_required ??
+      examDataRef.current?.test?.proctoring_config?.fullscreen_required
+    );
+    if (!isFsReq) {
+      if (DEBUG_PROCTOR) console.log('[PROCTOR] FULLSCREEN_EXIT ignored because exam does not require fullscreen.');
+      return;
+    }
+
+    const maxFullscreenExits =
+      examDataRef.current?.max_fullscreen_exits ||
+      examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
+      examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
+
+    const nextExitCount = fullscreenExitCountRef.current + 1;
+    fullscreenExitCountRef.current = nextExitCount;
+    setFullscreenExitCount(nextExitCount);
+
+    if (nextExitCount >= maxFullscreenExits) {
+      isFinalizedRef.current = true;
+      setAutoSubmittedState({
+        submitted: true,
+        reason: 'SECOND_FULLSCREEN_EXIT',
+        message: 'Your test was automatically submitted because fullscreen mode was exited twice.',
+      });
+      stopCameraRef.current?.();
+      setActiveWarningModal(null);
+    } else {
+      setActiveWarningModal({
+        title: `Fullscreen exits: ${nextExitCount} / ${maxFullscreenExits}`,
+        message:
+          'You have exited full-screen mode. Please return to full screen immediately. A second exit will automatically submit your exam.',
+        count: nextExitCount,
+        type: 'warning',
+      });
+    }
+  } else {
+    const maxSecurityWarnings =
+      examDataRef.current?.max_security_warnings ||
+      examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
+      examDataRef.current?.proctoring_config?.max_security_warnings ||
+      examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
+      examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
+
+    const nextStrikeCount = securityWarningCountRef.current + 1;
+    securityWarningCountRef.current = nextStrikeCount;
+    setSecurityWarningCount(nextStrikeCount);
+    setWarningCount(prev => prev + 1);
+
+    if (nextStrikeCount >= maxSecurityWarnings) {
+      isFinalizedRef.current = true;
+      const finalReason =
+        eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED'
+          ? 'MAX_TAB_SWITCHES'
+          : 'MAX_SECURITY_WARNINGS';
+      setAutoSubmittedState({
+        submitted: true,
+        reason: finalReason,
+        message:
+          finalReason === 'MAX_TAB_SWITCHES'
+            ? 'Your test was automatically submitted because maximum tab switches were detected.'
+            : 'Your test was automatically submitted because the maximum number of security warnings was reached.',
+      });
+      stopCameraRef.current?.();
+      setActiveWarningModal(null);
+    } else {
+      let warningMsg = 'Please follow the test rules and remain on the exam screen.';
+      if (eventType === 'TAB_HIDDEN') {
+        warningMsg = 'You navigated away from the examination tab. Please stay on this tab to maintain exam session integrity.';
+      } else if (eventType === 'WINDOW_BLURRED') {
+        warningMsg = 'Focus shifted away from the examination window. Please keep the test active and focused.';
+      } else if (eventType === 'MULTIPLE_FACES') {
+        warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
+      } else if (eventType === 'FACE_NOT_DETECTED') {
+        warningMsg = 'Your face was not detected in the camera view for over 5 seconds. Please adjust your camera or lighting.';
+      } else if (eventType === 'CAMERA_DISCONNECTED') {
+        warningMsg = 'Webcam disconnected. A functioning camera is required for this examination.';
+      } else if (eventType === 'CAMERA_PERMISSION_REVOKED') {
+        warningMsg = 'Camera permission was revoked. Please enable camera access in browser settings.';
+      } else if (eventType === 'SUSPICIOUS_KEY_COMBINATION') {
+        warningMsg = 'Prohibited keyboard shortcut or key combination was pressed.';
+      }
+
+      setActiveWarningModal({
+        title: `Security warnings: ${nextStrikeCount} / ${maxSecurityWarnings}`,
+        message: warningMsg,
+        count: nextStrikeCount,
+        type: 'warning',
+      });
+    }
+  }
+
+  // 5. Persist the event to backend
+  try {
+    if (DEBUG_PROCTOR) console.log('[PROCTOR] Persisting violation to server:', eventType, meta);
+    const res = await api.logMockTestSecurityEvent(attemptId, {
+      ...meta,
+      eventType,
+      event_type: eventType,
+      client_timestamp: new Date().toISOString(),
+      answers: responsesRef.current,
+    });
+
+    if (DEBUG_PROCTOR) console.log('[PROCTOR] Server authoritative response:', res);
+
+    if (res) {
+      if (res.security_warning_count !== undefined) {
+        const sVal = Math.max(res.security_warning_count, securityWarningCountRef.current);
+        setSecurityWarningCount(sVal);
+        securityWarningCountRef.current = sVal;
+      }
+      if (res.fullscreen_exit_count !== undefined) {
+        const fVal = Math.max(res.fullscreen_exit_count, fullscreenExitCountRef.current);
+        setFullscreenExitCount(fVal);
+        fullscreenExitCountRef.current = fVal;
+      }
+      if (res.warning_count !== undefined) {
+        setWarningCount(prev => Math.max(prev, res.warning_count));
+      }
+
+      const maxFullscreenExits =
+        examDataRef.current?.max_fullscreen_exits ||
+        examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
+        examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
+
+      const maxSecurityWarnings =
+        examDataRef.current?.max_security_warnings ||
+        examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
+        examDataRef.current?.proctoring_config?.max_security_warnings ||
+        examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
+        examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
+
+      const isServerAutoSubmitted = Boolean(
+        res.auto_submitted ||
+        res.autoSubmitted ||
+        res.status === 'AUTO_SUBMITTED' ||
+        (res.fullscreen_exit_count && res.fullscreen_exit_count >= maxFullscreenExits) ||
+        (res.security_warning_count && res.security_warning_count >= maxSecurityWarnings)
+      );
+
+      if (isServerAutoSubmitted) {
+        isFinalizedRef.current = true;
+        const reasonCode =
+          res.submission_reason ||
+          res.submissionReason ||
+          (eventType === 'FULLSCREEN_EXIT' ? 'SECOND_FULLSCREEN_EXIT' : 'MAX_SECURITY_WARNINGS');
+        let msg =
+          'Your test was automatically submitted because the maximum number of security violations was reached.';
+        if (reasonCode === 'SECOND_FULLSCREEN_EXIT') {
+          msg = 'Your test was automatically submitted because fullscreen mode was exited twice.';
+        } else if (reasonCode === 'MAX_TAB_SWITCHES') {
+          msg = 'Your test was automatically submitted because maximum tab switches were detected.';
+        }
+        setAutoSubmittedState({ submitted: true, reason: reasonCode, message: msg });
+        stopCameraRef.current?.();
+        setActiveWarningModal(null);
+      }
+    }
+  } catch (err) {
+    console.warn('[Runner] Failed to persist security violation to server:', err);
+  }
+}
+
 /**
  * Robust Examination Error Boundary to guarantee the runner NEVER crashes into a white screen
  */
@@ -347,223 +600,38 @@ function MockTestRunnerView() {
   // - SUSPICIOUS_KEY_COMBINATION
   // ---------------------------------------------------------------------------
 
+  // Thin wrapper — all logic lives in module-level handleSecurityViolationImpl
+  // to give esbuild a separate minification scope and prevent the TDZ name
+  // collision that produced "Cannot access 'R' before initialization".
   const handleSecurityViolation = useCallback(async (eventTypeOrPayload, metadata = {}) => {
-    let eventType = '';
-    let meta = {};
-    if (typeof eventTypeOrPayload === 'string') {
-      eventType = eventTypeOrPayload.toUpperCase();
-      meta = metadata || {};
-    } else if (eventTypeOrPayload && typeof eventTypeOrPayload === 'object') {
-      eventType = (eventTypeOrPayload.eventType || eventTypeOrPayload.event_type || '').toUpperCase();
-      meta = { ...eventTypeOrPayload, ...metadata };
-    }
-    if (!eventType) return;
-
-    // 1. Ignore violations after the attempt is submitted or finalized
-    const attemptStatus = examDataRef.current?.status || examDataRef.current?.attempt?.status;
-    if (
-      isFinalizedRef.current ||
-      autoSubmittedStateRef.current?.submitted ||
-      ['submitted', 'evaluated', 'completed', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attemptStatus)
-    ) {
-      if (DEBUG_PROCTOR) console.log(`[PROCTOR] Violation ${eventType} ignored because attempt is finalized.`);
-      return;
-    }
-
-    const now = Date.now();
-
-    // 2. Apply the appropriate debounce/cooldown
-    if (eventType === 'FULLSCREEN_EXIT') {
-      if (now - lastFullscreenExitRef.current < 2000) {
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FULLSCREEN_EXIT debounced');
-        return;
-      }
-      lastFullscreenExitRef.current = now;
-    } else if (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED') {
-      if (now - lastTabOrBlurTimeRef.current < 2500) {
-        if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
-        return;
-      }
-      lastTabOrBlurTimeRef.current = now;
-    } else if (eventType === 'FACE_NOT_DETECTED') {
-      if (now - lastFaceMissingTimeRef.current < 4000) {
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate FACE_NOT_DETECTED debounced');
-        return;
-      }
-      lastFaceMissingTimeRef.current = now;
-    } else if (eventType === 'MULTIPLE_FACES') {
-      if (now - lastMultiFaceTimeRef.current < 4000) {
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] Duplicate MULTIPLE_FACES debounced');
-        return;
-      }
-      lastMultiFaceTimeRef.current = now;
-    } else if (eventType === 'CAMERA_DISCONNECTED' || eventType === 'CAMERA_PERMISSION_REVOKED') {
-      if (now - lastCameraFailureTimeRef.current < 4000) {
-        if (DEBUG_PROCTOR) console.log(`[PROCTOR] Duplicate ${eventType} debounced`);
-        return;
-      }
-      lastCameraFailureTimeRef.current = now;
-    }
-
-    // 3. Increment the correct local counter & 4. Update the visible UI immediately
-    if (eventType === 'FULLSCREEN_EXIT') {
-      const isFsReq = Boolean(
-        examDataRef.current?.proctoring_config?.fullscreen_required ??
-        examDataRef.current?.test?.proctoring_config?.fullscreen_required
-      );
-      if (!isFsReq) {
-        if (DEBUG_PROCTOR) console.log('[PROCTOR] FULLSCREEN_EXIT ignored because exam does not require fullscreen.');
-        return;
-      }
-
-      const maxFullscreenExits = examDataRef.current?.max_fullscreen_exits ||
-        examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
-        examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
-
-      const nextExitCount = fullscreenExitCountRef.current + 1;
-      fullscreenExitCountRef.current = nextExitCount;
-      setFullscreenExitCount(nextExitCount);
-
-      if (nextExitCount >= maxFullscreenExits) {
-        isFinalizedRef.current = true;
-        setAutoSubmittedState({
-          submitted: true,
-          reason: 'SECOND_FULLSCREEN_EXIT',
-          message: 'Your test was automatically submitted because fullscreen mode was exited twice.'
-        });
-        stopCameraRef.current?.();
-        setActiveWarningModal(null);
-      } else {
-        setActiveWarningModal({
-          title: `Fullscreen exits: ${nextExitCount} / ${maxFullscreenExits}`,
-          message: 'You have exited full-screen mode. Please return to full screen immediately. A second exit will automatically submit your exam.',
-          count: nextExitCount,
-          type: 'warning'
-        });
-      }
-    } else {
-      // Security warning
-      const maxSecurityWarnings = examDataRef.current?.max_security_warnings ||
-        examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
-        examDataRef.current?.proctoring_config?.max_security_warnings ||
-        examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
-        examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
-
-      const nextStrikeCount = securityWarningCountRef.current + 1;
-      securityWarningCountRef.current = nextStrikeCount;
-      setSecurityWarningCount(nextStrikeCount);
-      setWarningCount(prev => prev + 1);
-
-      if (nextStrikeCount >= maxSecurityWarnings) {
-        isFinalizedRef.current = true;
-        const finalReason = (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED')
-          ? 'MAX_TAB_SWITCHES'
-          : 'MAX_SECURITY_WARNINGS';
-        setAutoSubmittedState({
-          submitted: true,
-          reason: finalReason,
-          message: finalReason === 'MAX_TAB_SWITCHES'
-            ? 'Your test was automatically submitted because maximum tab switches were detected.'
-            : 'Your test was automatically submitted because the maximum number of security warnings was reached.'
-        });
-        stopCameraRef.current?.();
-        setActiveWarningModal(null);
-      } else {
-        let warningMsg = 'Please follow the test rules and remain on the exam screen.';
-        if (eventType === 'TAB_HIDDEN') {
-          warningMsg = 'You navigated away from the examination tab. Please stay on this tab to maintain exam session integrity.';
-        } else if (eventType === 'WINDOW_BLURRED') {
-          warningMsg = 'Focus shifted away from the examination window. Please keep the test active and focused.';
-        } else if (eventType === 'MULTIPLE_FACES') {
-          warningMsg = 'Multiple faces were observed in your webcam preview. Ensure you are taking this examination alone.';
-        } else if (eventType === 'FACE_NOT_DETECTED') {
-          warningMsg = 'Your face was not detected in the camera view for over 5 seconds. Please adjust your camera or lighting.';
-        } else if (eventType === 'CAMERA_DISCONNECTED') {
-          warningMsg = 'Webcam disconnected. A functioning camera is required for this examination.';
-        } else if (eventType === 'CAMERA_PERMISSION_REVOKED') {
-          warningMsg = 'Camera permission was revoked. Please enable camera access in browser settings.';
-        } else if (eventType === 'SUSPICIOUS_KEY_COMBINATION') {
-          warningMsg = 'Prohibited keyboard shortcut or key combination was pressed.';
-        }
-
-        setActiveWarningModal({
-          title: `Security warnings: ${nextStrikeCount} / ${maxSecurityWarnings}`,
-          message: warningMsg,
-          count: nextStrikeCount,
-          type: 'warning'
-        });
-      }
-    }
-
-    // 5. Persist the event to backend
-    try {
-      if (DEBUG_PROCTOR) console.log('[PROCTOR] Persisting violation to server:', eventType, meta);
-      const res = await api.logMockTestSecurityEvent(attemptId, {
-        ...meta,
-        eventType,
-        event_type: eventType,
-        client_timestamp: new Date().toISOString(),
-        answers: responsesRef.current
-      });
-
-      if (DEBUG_PROCTOR) console.log('[PROCTOR] Server authoritative response:', res);
-
-      // 6. Receive authoritative server response & 7. Synchronize frontend counter
-      if (res) {
-        if (res.security_warning_count !== undefined) {
-          const sVal = Math.max(res.security_warning_count, securityWarningCountRef.current);
-          setSecurityWarningCount(sVal);
-          securityWarningCountRef.current = sVal;
-        }
-        if (res.fullscreen_exit_count !== undefined) {
-          const fVal = Math.max(res.fullscreen_exit_count, fullscreenExitCountRef.current);
-          setFullscreenExitCount(fVal);
-          fullscreenExitCountRef.current = fVal;
-        }
-        if (res.warning_count !== undefined) {
-          setWarningCount(prev => Math.max(prev, res.warning_count));
-        }
-
-        const maxFullscreenExits = examDataRef.current?.max_fullscreen_exits ||
-          examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
-          examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
-
-        const maxSecurityWarnings = examDataRef.current?.max_security_warnings ||
-          examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
-          examDataRef.current?.proctoring_config?.max_security_warnings ||
-          examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
-          examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
-
-        // 8. Determine whether configured threshold reached & 9. Auto-submit & 10. Display correct reason
-        const isServerAutoSubmitted = Boolean(
-          res.auto_submitted ||
-          res.autoSubmitted ||
-          res.status === 'AUTO_SUBMITTED' ||
-          (res.fullscreen_exit_count && res.fullscreen_exit_count >= maxFullscreenExits) ||
-          (res.security_warning_count && res.security_warning_count >= maxSecurityWarnings)
-        );
-
-        if (isServerAutoSubmitted) {
-          isFinalizedRef.current = true;
-          const reasonCode = res.submission_reason || res.submissionReason || (eventType === 'FULLSCREEN_EXIT' ? 'SECOND_FULLSCREEN_EXIT' : 'MAX_SECURITY_WARNINGS');
-          let msg = 'Your test was automatically submitted because the maximum number of security violations was reached.';
-          if (reasonCode === 'SECOND_FULLSCREEN_EXIT') {
-            msg = 'Your test was automatically submitted because fullscreen mode was exited twice.';
-          } else if (reasonCode === 'MAX_TAB_SWITCHES') {
-            msg = 'Your test was automatically submitted because maximum tab switches were detected.';
-          }
-          setAutoSubmittedState({
-            submitted: true,
-            reason: reasonCode,
-            message: msg
-          });
-          stopCameraRef.current?.();
-          setActiveWarningModal(null);
-        }
-      }
-    } catch (err) {
-      console.warn('[Runner] Failed to persist security violation to server:', err);
-    }
+    return handleSecurityViolationImpl(
+      eventTypeOrPayload,
+      metadata,
+      {
+        isFinalizedRef,
+        autoSubmittedStateRef,
+        examDataRef,
+        lastFullscreenExitRef,
+        lastTabOrBlurTimeRef,
+        lastFaceMissingTimeRef,
+        lastMultiFaceTimeRef,
+        lastCameraFailureTimeRef,
+        securityWarningCountRef,
+        fullscreenExitCountRef,
+        responsesRef,
+        stopCameraRef,
+      },
+      {
+        setSecurityWarningCount,
+        setFullscreenExitCount,
+        setWarningCount,
+        setAutoSubmittedState,
+        setActiveWarningModal,
+      },
+      api,
+      attemptId,
+      DEBUG_PROCTOR
+    );
   }, [attemptId, DEBUG_PROCTOR]);
 
   const {
