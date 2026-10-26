@@ -417,15 +417,15 @@ export const mockTestRepository = {
     const questions = rawQuestions.map(q => {
       let opts = q.options;
       if (typeof opts === 'string') {
-        try { opts = JSON.parse(opts); } catch {}
+        try { opts = JSON.parse(opts); } catch { }
       }
       let ansKey = q.answer_key;
       if (typeof ansKey === 'string') {
-        try { ansKey = JSON.parse(ansKey); } catch {}
+        try { ansKey = JSON.parse(ansKey); } catch { }
       }
       let testCases = q.test_cases;
       if (typeof testCases === 'string') {
-        try { testCases = JSON.parse(testCases); } catch {}
+        try { testCases = JSON.parse(testCases); } catch { }
       }
       return {
         ...q,

@@ -40,6 +40,15 @@ async function startServer() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[LinkTest Server] Unhandled Promise Rejection at:', promise, 'reason:', reason);
+  });
+
+  process.on('uncaughtException', (err) => {
+    console.error('[LinkTest Server] Uncaught Exception:', err);
+    shutdown('UNCAUGHT_EXCEPTION');
+  });
 }
 
 startServer().catch(err => {

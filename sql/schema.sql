@@ -4,6 +4,9 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Drop tables in reverse dependency order
+DROP TABLE IF EXISTS coding_submissions CASCADE;
+DROP TABLE IF EXISTS coding_test_cases CASCADE;
+DROP TABLE IF EXISTS question_bank CASCADE;
 DROP TABLE IF EXISTS mock_test_join_requests CASCADE;
 DROP TABLE IF EXISTS mock_test_audit_logs CASCADE;
 DROP TABLE IF EXISTS mock_test_proctoring_events CASCADE;
@@ -606,13 +609,23 @@ CREATE TABLE questions (
     id VARCHAR(64) PRIMARY KEY,
     quiz_id VARCHAR(64) NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
     question_text TEXT NOT NULL,
-    options JSONB NOT NULL,
-    correct_option_index INTEGER NOT NULL,
-    explanation TEXT NOT NULL,
+    question_type VARCHAR(30) NOT NULL DEFAULT 'mcq_single',
+    options JSONB NOT NULL DEFAULT '[]'::jsonb,
+    correct_option_index INTEGER NULL,
+    explanation TEXT NULL,
+    marks NUMERIC(6,2) NOT NULL DEFAULT 1.00,
+    expected_answer TEXT NULL,
+    evaluation_criteria TEXT NULL,
+    programming_language VARCHAR(30) DEFAULT 'javascript',
+    starter_code TEXT NULL,
+    time_limit NUMERIC(6,2) DEFAULT 2.0,
+    memory_limit INTEGER DEFAULT 128,
+    test_cases JSONB DEFAULT '[]'::jsonb,
     position INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX idx_questions_quiz_id ON questions(quiz_id);
+CREATE INDEX idx_questions_type ON questions(question_type);
 
 -- 31. QUIZ ATTEMPTS
 CREATE TABLE quiz_attempts (
@@ -632,8 +645,15 @@ CREATE TABLE quiz_attempt_answers (
     id VARCHAR(64) PRIMARY KEY,
     attempt_id VARCHAR(64) NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
     question_id VARCHAR(64) NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
-    selected_option_index INTEGER NOT NULL,
-    is_correct BOOLEAN NOT NULL
+    selected_option_index INTEGER NULL,
+    is_correct BOOLEAN NULL,
+    response_text TEXT NULL,
+    score_awarded NUMERIC(6,2) DEFAULT 0.00,
+    evaluation_comment TEXT NULL,
+    evaluated_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    evaluated_at TIMESTAMP WITH TIME ZONE NULL,
+    is_pending_review BOOLEAN DEFAULT false,
+    execution_results JSONB DEFAULT NULL
 );
 
 CREATE INDEX idx_attempt_answers_attempt ON quiz_attempt_answers(attempt_id);
@@ -742,13 +762,22 @@ CREATE TABLE mock_test_questions (
         'numerical',
         'matching',
         'subjective',
-        'case_study'
+        'case_study',
+        'long_answer',
+        'coding'
     )),
     options JSONB DEFAULT '[]'::jsonb,
     answer_key JSONB NOT NULL,
     marks NUMERIC(6,2) NOT NULL DEFAULT 4.00,
     negative_marks NUMERIC(6,2) NOT NULL DEFAULT 1.00,
     explanation TEXT,
+    expected_answer TEXT,
+    evaluation_criteria TEXT,
+    programming_language VARCHAR(30) DEFAULT 'javascript',
+    starter_code TEXT,
+    time_limit NUMERIC(6,2) DEFAULT 2.0,
+    memory_limit INTEGER DEFAULT 128,
+    test_cases JSONB DEFAULT '[]'::jsonb,
     topic VARCHAR(100),
     difficulty VARCHAR(20) DEFAULT 'medium',
     order_index INTEGER NOT NULL DEFAULT 1,
@@ -913,3 +942,76 @@ CREATE INDEX idx_join_requests_student ON mock_test_join_requests(student_id);
 CREATE INDEX idx_join_requests_teacher ON mock_test_join_requests(teacher_id);
 CREATE INDEX idx_join_requests_status ON mock_test_join_requests(status);
 CREATE UNIQUE INDEX uq_active_mock_test_join_request ON mock_test_join_requests(mock_test_id, student_id) WHERE status IN ('PENDING', 'APPROVED');
+
+-- 43. QUESTION BANK
+CREATE TABLE IF NOT EXISTS question_bank (
+    id VARCHAR(64) PRIMARY KEY,
+    question_text TEXT NOT NULL,
+    question_type VARCHAR(30) NOT NULL DEFAULT 'mcq_single',
+    options JSONB NOT NULL DEFAULT '[]'::jsonb,
+    correct_option_index INTEGER NOT NULL DEFAULT 0,
+    correct_answer VARCHAR(10) NOT NULL DEFAULT 'A',
+    subject VARCHAR(100) NOT NULL,
+    topic VARCHAR(100) NOT NULL,
+    difficulty VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
+    explanation TEXT,
+    marks NUMERIC(6,2) NOT NULL DEFAULT 4.00,
+    negative_marks NUMERIC(6,2) NOT NULL DEFAULT 1.00,
+    expected_answer TEXT,
+    evaluation_criteria TEXT,
+    programming_language VARCHAR(30) DEFAULT 'javascript',
+    starter_code TEXT,
+    time_limit NUMERIC(6,2) DEFAULT 2.0,
+    memory_limit INTEGER DEFAULT 128,
+    test_cases JSONB DEFAULT '[]'::jsonb,
+    created_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+    subject_id VARCHAR(64) REFERENCES subjects(id) ON DELETE SET NULL,
+    course_id VARCHAR(64) REFERENCES courses(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_question_bank_subject ON question_bank(subject);
+CREATE INDEX IF NOT EXISTS idx_question_bank_topic ON question_bank(topic);
+CREATE INDEX IF NOT EXISTS idx_question_bank_difficulty ON question_bank(difficulty);
+CREATE INDEX IF NOT EXISTS idx_question_bank_type ON question_bank(question_type);
+CREATE INDEX IF NOT EXISTS idx_question_bank_created_by ON question_bank(created_by);
+CREATE INDEX IF NOT EXISTS idx_question_bank_created_at ON question_bank(created_at);
+
+-- 44. CODING TEST CASES
+CREATE TABLE IF NOT EXISTS coding_test_cases (
+    id VARCHAR(64) PRIMARY KEY,
+    question_id VARCHAR(64) NOT NULL,
+    input TEXT NOT NULL,
+    expected_output TEXT NOT NULL,
+    is_hidden BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_test_cases_q ON coding_test_cases(question_id);
+CREATE INDEX IF NOT EXISTS idx_coding_test_cases_hidden ON coding_test_cases(question_id, is_hidden);
+
+-- 45. CODING SUBMISSIONS
+CREATE TABLE IF NOT EXISTS coding_submissions (
+    id VARCHAR(64) PRIMARY KEY,
+    student_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    question_id VARCHAR(64) NOT NULL,
+    attempt_id VARCHAR(64),
+    programming_language VARCHAR(30) NOT NULL DEFAULT 'javascript',
+    submitted_code TEXT NOT NULL,
+    execution_status VARCHAR(30) NOT NULL DEFAULT 'pending',
+    score NUMERIC(6,2) DEFAULT 0.00,
+    test_cases_passed INTEGER DEFAULT 0,
+    total_test_cases INTEGER DEFAULT 0,
+    execution_time_ms INTEGER DEFAULT 0,
+    memory_usage_mb NUMERIC(6,2) DEFAULT 0.00,
+    error_message TEXT,
+    test_results JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_coding_submissions_student ON coding_submissions(student_id);
+CREATE INDEX IF NOT EXISTS idx_coding_submissions_question ON coding_submissions(question_id);
+CREATE INDEX IF NOT EXISTS idx_coding_submissions_attempt ON coding_submissions(attempt_id);
+

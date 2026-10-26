@@ -911,6 +911,10 @@ function MockTestRunnerView() {
   // 5. QUESTION RESPONSE & INTERACTION HANDLERS
   // ---------------------------------------------------------------------------
 
+  const questions = Array.isArray(examData?.questions)
+    ? examData.questions
+    : (Array.isArray(examData?.test?.questions) ? examData.test.questions : []);
+
   const isExamFullscreenRequired = Boolean(
     examData?.proctoring_config?.fullscreen_required ??
     examData?.test?.proctoring_config?.fullscreen_required
@@ -918,7 +922,7 @@ function MockTestRunnerView() {
 
   const handleUpdateAnswer = (responseData) => {
     if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
-    const activeQuestion = examData?.questions[currentIndex];
+    const activeQuestion = questions[currentIndex];
     if (!activeQuestion) return;
 
     const currentResp = responses[activeQuestion.id] || {};
@@ -972,7 +976,7 @@ function MockTestRunnerView() {
 
   const handleToggleMarkForReview = () => {
     if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
-    const activeQuestion = examData?.questions[currentIndex];
+    const activeQuestion = questions[currentIndex];
     if (!activeQuestion) return;
 
     const currentResp = responses[activeQuestion.id] || {};
@@ -995,7 +999,7 @@ function MockTestRunnerView() {
 
   const handleClearAnswer = () => {
     if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
-    const activeQuestion = examData?.questions[currentIndex];
+    const activeQuestion = questions[currentIndex];
     if (!activeQuestion) return;
 
     const currentResp = responses[activeQuestion.id] || {};
@@ -1020,8 +1024,8 @@ function MockTestRunnerView() {
 
   const handleNavigate = (index) => {
     if ((isExamFullscreenRequired && !isFullscreenActive) || autoSubmittedState?.submitted) return;
-    if (index >= 0 && index < (examData?.questions?.length || 0)) {
-      const targetQuestion = examData.questions[index];
+    if (index >= 0 && index < questions.length) {
+      const targetQuestion = questions[index];
       // Mark target as visited if not already
       if (!responses[targetQuestion.id]?.is_visited) {
         setResponses(prev => ({
@@ -1070,13 +1074,13 @@ function MockTestRunnerView() {
   };
 
   // Summary counts
-  const totalQuestions = examData?.questions?.length || 0;
+  const totalQuestions = questions.length;
   let answeredCount = 0;
   let markedCount = 0;
   let unansweredCount = 0;
   let notVisitedCount = 0;
 
-  (examData?.questions || []).forEach(q => {
+  questions.forEach(q => {
     const status = getQuestionPaletteStatus(q.id);
     if (status === 'answered' || status === 'answered_marked') answeredCount++;
     if (status === 'marked' || status === 'answered_marked') markedCount++;
@@ -1144,7 +1148,7 @@ function MockTestRunnerView() {
     );
   }
 
-  if (examData && !examData.questions) {
+  if (examData && !Array.isArray(examData.questions) && !Array.isArray(examData.test?.questions)) {
     return (
       <div style={{ textAlign: 'center', padding: '6rem 1rem' }}>
         <div className="spinner" style={{ margin: '0 auto 1rem' }}></div>
@@ -1322,7 +1326,7 @@ function MockTestRunnerView() {
     );
   }
 
-  const activeQuestion = (examData.questions || [])[currentIndex] || null;
+  const activeQuestion = questions[currentIndex] || null;
   const activeResponse = activeQuestion ? (responses[activeQuestion.id]?.response_data || null) : null;
   const isMarked = activeQuestion ? Boolean(responses[activeQuestion.id]?.is_marked_for_review) : false;
 
@@ -2514,7 +2518,7 @@ function MockTestRunnerView() {
               gridTemplateColumns: 'repeat(5, 1fr)',
               gap: '0.6rem'
             }}>
-              {(examData.questions || []).map((q, idx) => {
+              {questions.map((q, idx) => {
                 const status = getQuestionPaletteStatus(q.id);
                 const isCurrent = currentIndex === idx;
 
