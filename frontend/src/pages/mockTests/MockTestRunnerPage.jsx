@@ -156,6 +156,11 @@ export function MockTestRunnerPage() {
   const lastMultiFaceTimeRef = useRef(0);
   const lastCameraFailureTimeRef = useRef(0);
 
+  // Camera & Submission Refs to eliminate closure and TDZ cycles
+  const stopCameraRef = useRef(() => {});
+  const startCameraRef = useRef(async () => {});
+  const autoSubmittedStateRef = useRef(null);
+
   const DEBUG_PROCTOR = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -172,6 +177,7 @@ export function MockTestRunnerPage() {
   }, [examData]);
 
   useEffect(() => {
+    autoSubmittedStateRef.current = autoSubmittedState;
     if (autoSubmittedState?.submitted) {
       isFinalizedRef.current = true;
     }
@@ -227,7 +233,7 @@ export function MockTestRunnerPage() {
     const attemptStatus = examDataRef.current?.status || examDataRef.current?.attempt?.status;
     if (
       isFinalizedRef.current ||
-      autoSubmittedState?.submitted ||
+      autoSubmittedStateRef.current?.submitted ||
       ['submitted', 'evaluated', 'completed', 'AUTO_SUBMITTED', 'auto_submitted'].includes(attemptStatus)
     ) {
       if (DEBUG_PROCTOR) console.log(`[PROCTOR] Violation ${eventType} ignored because attempt is finalized.`);
@@ -280,35 +286,45 @@ export function MockTestRunnerPage() {
         return;
       }
 
+      const maxFullscreenExits = examDataRef.current?.max_fullscreen_exits ||
+        examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
+        examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
+
       const nextExitCount = fullscreenExitCountRef.current + 1;
       fullscreenExitCountRef.current = nextExitCount;
       setFullscreenExitCount(nextExitCount);
 
-      if (nextExitCount >= 2) {
+      if (nextExitCount >= maxFullscreenExits) {
         isFinalizedRef.current = true;
         setAutoSubmittedState({
           submitted: true,
           reason: 'SECOND_FULLSCREEN_EXIT',
           message: 'Your test was automatically submitted because fullscreen mode was exited twice.'
         });
-        stopCamera();
+        stopCameraRef.current?.();
         setActiveWarningModal(null);
       } else {
         setActiveWarningModal({
-          title: 'Fullscreen exits: 1 / 2',
+          title: `Fullscreen exits: ${nextExitCount} / ${maxFullscreenExits}`,
           message: 'You have exited full-screen mode. Please return to full screen immediately. A second exit will automatically submit your exam.',
-          count: 1,
+          count: nextExitCount,
           type: 'warning'
         });
       }
     } else {
       // Security warning
+      const maxSecurityWarnings = examDataRef.current?.max_security_warnings ||
+        examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
+        examDataRef.current?.proctoring_config?.max_security_warnings ||
+        examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
+        examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
+
       const nextStrikeCount = securityWarningCountRef.current + 1;
       securityWarningCountRef.current = nextStrikeCount;
       setSecurityWarningCount(nextStrikeCount);
       setWarningCount(prev => prev + 1);
 
-      if (nextStrikeCount >= 3) {
+      if (nextStrikeCount >= maxSecurityWarnings) {
         isFinalizedRef.current = true;
         const finalReason = (eventType === 'TAB_HIDDEN' || eventType === 'WINDOW_BLURRED')
           ? 'MAX_TAB_SWITCHES'
@@ -320,7 +336,7 @@ export function MockTestRunnerPage() {
             ? 'Your test was automatically submitted because maximum tab switches were detected.'
             : 'Your test was automatically submitted because the maximum number of security warnings was reached.'
         });
-        stopCamera();
+        stopCameraRef.current?.();
         setActiveWarningModal(null);
       } else {
         let warningMsg = 'Please follow the test rules and remain on the exam screen.';
@@ -341,7 +357,7 @@ export function MockTestRunnerPage() {
         }
 
         setActiveWarningModal({
-          title: `Security warnings: ${nextStrikeCount} / 3`,
+          title: `Security warnings: ${nextStrikeCount} / ${maxSecurityWarnings}`,
           message: warningMsg,
           count: nextStrikeCount,
           type: 'warning'
@@ -365,24 +381,36 @@ export function MockTestRunnerPage() {
       // 6. Receive authoritative server response & 7. Synchronize frontend counter
       if (res) {
         if (res.security_warning_count !== undefined) {
-          setSecurityWarningCount(res.security_warning_count);
-          securityWarningCountRef.current = res.security_warning_count;
+          const sVal = Math.max(res.security_warning_count, securityWarningCountRef.current);
+          setSecurityWarningCount(sVal);
+          securityWarningCountRef.current = sVal;
         }
         if (res.fullscreen_exit_count !== undefined) {
-          setFullscreenExitCount(res.fullscreen_exit_count);
-          fullscreenExitCountRef.current = res.fullscreen_exit_count;
+          const fVal = Math.max(res.fullscreen_exit_count, fullscreenExitCountRef.current);
+          setFullscreenExitCount(fVal);
+          fullscreenExitCountRef.current = fVal;
         }
         if (res.warning_count !== undefined) {
-          setWarningCount(res.warning_count);
+          setWarningCount(prev => Math.max(prev, res.warning_count));
         }
+
+        const maxFullscreenExits = examDataRef.current?.max_fullscreen_exits ||
+          examDataRef.current?.test?.proctoring_config?.max_fullscreen_exits ||
+          examDataRef.current?.proctoring_config?.max_fullscreen_exits || 2;
+
+        const maxSecurityWarnings = examDataRef.current?.max_security_warnings ||
+          examDataRef.current?.test?.proctoring_config?.max_security_warnings ||
+          examDataRef.current?.proctoring_config?.max_security_warnings ||
+          examDataRef.current?.test?.proctoring_config?.tab_switch_limit ||
+          examDataRef.current?.proctoring_config?.tab_switch_limit || 3;
 
         // 8. Determine whether configured threshold reached & 9. Auto-submit & 10. Display correct reason
         const isServerAutoSubmitted = Boolean(
           res.auto_submitted ||
           res.autoSubmitted ||
           res.status === 'AUTO_SUBMITTED' ||
-          (res.fullscreen_exit_count && res.fullscreen_exit_count >= 2) ||
-          (res.security_warning_count && res.security_warning_count >= 3)
+          (res.fullscreen_exit_count && res.fullscreen_exit_count >= maxFullscreenExits) ||
+          (res.security_warning_count && res.security_warning_count >= maxSecurityWarnings)
         );
 
         if (isServerAutoSubmitted) {
@@ -399,14 +427,14 @@ export function MockTestRunnerPage() {
             reason: reasonCode,
             message: msg
           });
-          stopCamera();
+          stopCameraRef.current?.();
           setActiveWarningModal(null);
         }
       }
     } catch (err) {
       console.warn('[Runner] Failed to persist security violation to server:', err);
     }
-  }, [attemptId, stopCamera, autoSubmittedState, DEBUG_PROCTOR]);
+  }, [attemptId, DEBUG_PROCTOR]);
 
   const {
     videoRef,
@@ -423,6 +451,12 @@ export function MockTestRunnerPage() {
     onViolation: handleSecurityViolation,
     onEvent: handleSecurityViolation
   });
+
+  // Synchronize camera controls to stable ref container to eliminate TDZ
+  useEffect(() => {
+    stopCameraRef.current = stopCamera;
+    startCameraRef.current = startCamera;
+  }, [stopCamera, startCamera]);
 
   // ---------------------------------------------------------------------------
   // 2. LOAD EXAM DATA & ATTEMPT
@@ -495,7 +529,7 @@ export function MockTestRunnerPage() {
         const proctorConfig = data.proctoring_config || data.proctoringConfig || data.test?.proctoring_config;
         // Start webcam if test requires proctoring
         if (proctorConfig?.webcam_required) {
-          startCamera();
+          startCameraRef.current?.();
         }
 
         // Check initial fullscreen state
@@ -511,9 +545,9 @@ export function MockTestRunnerPage() {
     loadAttempt();
 
     return () => {
-      stopCamera();
+      stopCameraRef.current?.();
     };
-  }, [attemptId, startCamera, stopCamera]);
+  }, [attemptId]);
 
   // ---------------------------------------------------------------------------
   // 3. SERVER-AUTHORITATIVE COUNTDOWN TIMER
@@ -813,7 +847,7 @@ export function MockTestRunnerPage() {
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      stopCamera();
+      stopCameraRef.current?.();
       await api.submitMockTestAttempt(attemptId, {
         auto_submitted: true,
         reason: reason || 'Time expired'
@@ -828,7 +862,7 @@ export function MockTestRunnerPage() {
   const handleManualSubmit = async () => {
     setIsSubmitting(true);
     try {
-      stopCamera();
+      stopCameraRef.current?.();
       await api.submitMockTestAttempt(attemptId, {
         auto_submitted: false
       });
@@ -912,6 +946,16 @@ export function MockTestRunnerPage() {
     );
   }
 
+  const maxFullscreenExits = examData?.max_fullscreen_exits ||
+    examData?.test?.proctoring_config?.max_fullscreen_exits ||
+    examData?.proctoring_config?.max_fullscreen_exits || 2;
+
+  const maxSecurityWarnings = examData?.max_security_warnings ||
+    examData?.test?.proctoring_config?.max_security_warnings ||
+    examData?.proctoring_config?.max_security_warnings ||
+    examData?.test?.proctoring_config?.tab_switch_limit ||
+    examData?.proctoring_config?.tab_switch_limit || 3;
+
   const attemptStatus = examData?.status || examData?.attempt?.status;
   const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
   const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
@@ -925,7 +969,7 @@ export function MockTestRunnerPage() {
     let autoSubmitReasonDesc = 'Your test has been automatically submitted due to security policy violations.';
     if (isFullscreenExitAuto) {
       autoSubmitReasonTitle = 'Test Automatically Submitted';
-      autoSubmitReasonDesc = 'Your test has been automatically submitted because you exited full-screen mode twice.';
+      autoSubmitReasonDesc = `Your test has been automatically submitted because you exited full-screen mode ${maxFullscreenExits} times.`;
     } else if (isMaxWarningsAuto) {
       autoSubmitReasonTitle = 'Examination Disqualified';
       autoSubmitReasonDesc = subReason === 'MAX_TAB_SWITCHES' || autoSubmittedState?.reason === 'MAX_TAB_SWITCHES'
@@ -993,7 +1037,7 @@ export function MockTestRunnerPage() {
                 Reason: <strong>{subReason || 'SECURITY_POLICY_VIOLATION'}</strong>
               </div>
               <div style={{ fontSize: '0.82rem', color: '#64748B', marginTop: '0.25rem' }}>
-                Security Strikes: {securityWarningCount}/3 • Fullscreen Exits: {fullscreenExitCount}/2
+                Security Strikes: {securityWarningCount}/{maxSecurityWarnings} • Fullscreen Exits: {fullscreenExitCount}/{maxFullscreenExits}
               </div>
             </div>
           )}
@@ -1034,6 +1078,53 @@ export function MockTestRunnerPage() {
       fontFamily: 'var(--font-body)',
       position: 'relative'
     }}>
+      <style>{`
+        .mock-runner-workspace {
+          display: flex;
+          flex-direction: row;
+          flex: 1;
+          position: relative;
+          overflow: hidden;
+        }
+        .mock-runner-main {
+          flex: 1;
+          padding: 1.75rem 2rem 4rem;
+          overflow-y: auto;
+          min-width: 0;
+          width: 100%;
+          -webkit-overflow-scrolling: touch;
+        }
+        .mock-runner-aside {
+          width: 320px;
+          flex-shrink: 0;
+          background: #FFFFFF;
+          border-left: 1px solid var(--color-border);
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        @media (max-width: 900px) {
+          .mock-runner-workspace {
+            flex-direction: column !important;
+            overflow-y: auto !important;
+          }
+          .mock-runner-main {
+            padding: 1rem 1rem 2rem !important;
+            overflow-y: visible !important;
+            flex: none !important;
+          }
+          .mock-runner-aside {
+            width: 100% !important;
+            height: auto !important;
+            border-left: none !important;
+            border-top: 2px solid var(--color-border) !important;
+            overflow-y: visible !important;
+            flex: none !important;
+          }
+        }
+      `}</style>
       {/* ---------------------------------------------------------------------
           BLOCKING FULL-SCREEN OVERLAY (REQUIREMENTS 2, 3, 10, 11)
       --------------------------------------------------------------------- */}
@@ -1100,9 +1191,9 @@ export function MockTestRunnerPage() {
                 fontSize: '0.88rem',
                 marginBottom: '1.75rem'
               }}>
-                Fullscreen exited: {fullscreenExitCount} / 2
+                Fullscreen exited: {fullscreenExitCount} / {maxFullscreenExits}
                 <div style={{ fontSize: '0.78rem', fontWeight: 500, marginTop: '0.25rem', color: '#FECACA' }}>
-                  A second exit will automatically submit the test.
+                  A subsequent exit reaching {maxFullscreenExits} will automatically submit the test.
                 </div>
               </div>
             )}
@@ -1215,7 +1306,7 @@ export function MockTestRunnerPage() {
               }}
             >
               <ShieldAlert size={14} />
-              <span>Security warnings: {securityWarningCount} / 3</span>
+              <span>Security warnings: {securityWarningCount} / {maxSecurityWarnings}</span>
             </div>
 
             {/* Fullscreen Exits (only if required by test) */}
@@ -1237,7 +1328,7 @@ export function MockTestRunnerPage() {
                 }}
               >
                 <Maximize2 size={14} />
-                <span>Fullscreen exits: {fullscreenExitCount} / 2</span>
+                <span>Fullscreen exits: {fullscreenExitCount} / {maxFullscreenExits}</span>
               </div>
             )}
           </div>
@@ -1286,7 +1377,7 @@ export function MockTestRunnerPage() {
       {/* ---------------------------------------------------------------------
           MAIN EXAMINATION WORKSPACE
       --------------------------------------------------------------------- */}
-      <div style={{
+      <div className="mock-runner-workspace" style={{
         display: 'flex',
         flex: 1,
         position: 'relative',
@@ -1296,7 +1387,7 @@ export function MockTestRunnerPage() {
         userSelect: ((isExamFullscreenRequired && !isFullscreenActive) || isCompleted) ? 'none' : 'auto'
       }}>
         {/* Left / Center: Question Paper Pane */}
-        <main style={{
+        <main className="mock-runner-main" style={{
           flex: 1,
           padding: '1.75rem 2rem 4rem',
           overflowY: 'auto',
@@ -2069,7 +2160,7 @@ export function MockTestRunnerPage() {
         {/* -------------------------------------------------------------------
             RIGHT PALETTE SIDEBAR
         ------------------------------------------------------------------- */}
-        <aside style={{
+        <aside className="mock-runner-aside" style={{
           width: '320px',
           flexShrink: 0,
           background: '#FFFFFF',
