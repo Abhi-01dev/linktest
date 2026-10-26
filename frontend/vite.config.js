@@ -13,6 +13,16 @@ export default defineConfig({
       }
     }
   },
+  preview: {
+    port: 4173,
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8081',
+        changeOrigin: true
+      }
+    }
+  },
   build: {
     chunkSizeWarningLimit: 750,
     rollupOptions: {
