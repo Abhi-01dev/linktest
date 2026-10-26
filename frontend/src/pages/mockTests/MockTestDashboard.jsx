@@ -554,7 +554,7 @@ export function MockTestDashboard() {
                           <span>Resume Exam</span>
                         </Link>
                       ) : canAttempt ? (
-                        (!test.batch_id || test.join_request_status === 'APPROVED') ? (
+                        (test.batch_id || test.join_request_status === 'APPROVED' || test.can_start_directly) ? (
                           <Link
                             to={`/mock-tests/${test.id}/check`}
                             className="btn btn-primary"

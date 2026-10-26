@@ -1,7 +1,7 @@
 // Secure Mock Test & Examination Runner Interface
 // LinkTest Enterprise LMS
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Component } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -92,7 +92,107 @@ function getMatchingData(options) {
   return { leftItems: normalizedLeft, targets };
 }
 
-export function MockTestRunnerPage() {
+/**
+ * Robust Examination Error Boundary to guarantee the runner NEVER crashes into a white screen
+ */
+export class RunnerErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('[RunnerErrorBoundary] Caught rendering error in MockTestRunnerPage:', error, errorInfo);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          padding: '4rem 1rem',
+          background: 'var(--color-bg-main, #F8FAFC)',
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            border: '1px solid #EF4444',
+            borderRadius: '16px',
+            padding: '2.5rem',
+            maxWidth: '560px',
+            width: '100%',
+            textAlign: 'center',
+            boxShadow: '0 10px 30px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '50%',
+              background: '#FEF2F2',
+              color: '#DC2626',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 1.25rem'
+            }}>
+              <AlertCircle size={32} />
+            </div>
+            <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', marginBottom: '0.5rem' }}>
+              Unable to load the mock test.
+            </h2>
+            <p style={{ color: '#64748B', fontSize: '0.94rem', lineHeight: 1.5, marginBottom: '1.25rem' }}>
+              We encountered an unexpected display issue while loading the examination. Please try again. Your answers and progress remain preserved.
+            </p>
+            {this.state.error?.message && (
+              <div style={{
+                background: '#F1F5F9',
+                padding: '0.65rem 0.9rem',
+                borderRadius: '8px',
+                fontSize: '0.8rem',
+                color: '#475569',
+                fontFamily: 'monospace',
+                marginBottom: '1.5rem',
+                wordBreak: 'break-word'
+              }}>
+                {this.state.error.message}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={this.handleRetry}
+                className="btn btn-primary"
+                style={{ padding: '0.65rem 1.75rem', fontWeight: 700 }}
+              >
+                Retry
+              </button>
+              <a
+                href="/mock-tests"
+                className="btn btn-secondary"
+                style={{ padding: '0.65rem 1.5rem', fontWeight: 600, textDecoration: 'none' }}
+              >
+                Return to Mock Tests
+              </a>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function MockTestRunnerView() {
   const { id, attemptId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -167,24 +267,8 @@ export function MockTestRunnerPage() {
     Boolean(window.DEBUG_PROCTOR)
   );
 
-  // Sync refs with state
-  useEffect(() => {
-    responsesRef.current = responses;
-  }, [responses]);
-
-  useEffect(() => {
-    examDataRef.current = examData;
-  }, [examData]);
-
-  useEffect(() => {
-    autoSubmittedStateRef.current = autoSubmittedState;
-    if (autoSubmittedState?.submitted) {
-      isFinalizedRef.current = true;
-    }
-  }, [autoSubmittedState]);
-
   // Request browser Fullscreen via user gesture
-  const requestBrowserFullscreen = async () => {
+  const requestBrowserFullscreen = useCallback(async () => {
     try {
       const docEl = document.documentElement;
       if (docEl.requestFullscreen) {
@@ -202,7 +286,53 @@ export function MockTestRunnerPage() {
     } catch (err) {
       console.warn('[Runner] Fullscreen request error:', err.message);
     }
-  };
+  }, [DEBUG_PROCTOR]);
+
+  const saveAnswerToServer = useCallback(async (questionId, responseData, isMarkedForReview, isVisited = true) => {
+    setSaveStatus('saving');
+    try {
+      await api.saveMockTestAnswer(attemptId, {
+        question_id: questionId,
+        response_data: responseData,
+        is_marked_for_review: isMarkedForReview,
+        is_visited: isVisited
+      });
+      setSaveStatus('saved');
+    } catch (err) {
+      console.warn('[Runner] Answer save failed:', err.message);
+      setSaveStatus('error');
+    }
+  }, [attemptId]);
+
+  const handleAutoSubmit = useCallback(async (reason) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      stopCameraRef.current?.();
+      await api.submitMockTestAttempt(attemptId, {
+        auto_submitted: true,
+        reason: reason || 'Time expired'
+      });
+      navigate(`/mock-tests/attempts/${attemptId}/result`);
+    } catch (err) {
+      console.error('Auto-submission error:', err);
+      navigate(`/mock-tests/attempts/${attemptId}/result`);
+    }
+  }, [attemptId, isSubmitting, navigate]);
+
+  const handleManualSubmit = useCallback(async () => {
+    setIsSubmitting(true);
+    try {
+      stopCameraRef.current?.();
+      await api.submitMockTestAttempt(attemptId, {
+        auto_submitted: false
+      });
+      navigate(`/mock-tests/attempts/${attemptId}/result`);
+    } catch (err) {
+      alert(err.message || 'Submission failed. Please verify connection.');
+      setIsSubmitting(false);
+    }
+  }, [attemptId, navigate]);
 
   // ---------------------------------------------------------------------------
   // 1. CENTRALIZED SECURITY VIOLATION PIPELINE (Requirement 2)
@@ -452,7 +582,22 @@ export function MockTestRunnerPage() {
     onEvent: handleSecurityViolation
   });
 
-  // Synchronize camera controls to stable ref container to eliminate TDZ
+  // Synchronize state and camera controls to stable ref container
+  useEffect(() => {
+    responsesRef.current = responses;
+  }, [responses]);
+
+  useEffect(() => {
+    examDataRef.current = examData;
+  }, [examData]);
+
+  useEffect(() => {
+    autoSubmittedStateRef.current = autoSubmittedState;
+    if (autoSubmittedState?.submitted) {
+      isFinalizedRef.current = true;
+    }
+  }, [autoSubmittedState]);
+
   useEffect(() => {
     stopCameraRef.current = stopCamera;
     startCameraRef.current = startCamera;
@@ -462,92 +607,93 @@ export function MockTestRunnerPage() {
   // 2. LOAD EXAM DATA & ATTEMPT
   // ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    async function loadAttempt() {
-      if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
-        setInitError('Invalid examination attempt ID specified. Please return to the mock test catalog.');
+  const loadAttempt = useCallback(async () => {
+    if (!attemptId || attemptId === 'undefined' || attemptId === 'null' || !String(attemptId).trim()) {
+      setInitError('Invalid examination attempt ID specified. Please return to the mock test catalog.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setInitError(null);
+      const data = await api.getMockTestAttempt(attemptId);
+      setExamData(data);
+
+      const attemptStatus = data?.status || data?.attempt?.status;
+      const subReason = data?.submission_reason || data?.attempt?.submission_reason;
+
+      // Auto-submitted restore check (Requirement 16)
+      if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') {
+        setAutoSubmittedState({
+          submitted: true,
+          reason: subReason || 'AUTO_SUBMITTED',
+          message: subReason === 'SECOND_FULLSCREEN_EXIT'
+            ? 'Your test has been automatically submitted because you exited full-screen mode twice.'
+            : 'Your test has been automatically submitted because the maximum number of security warnings was reached.'
+        });
+        setRemainingSeconds(0);
         setLoading(false);
         return;
       }
 
-      try {
-        setLoading(true);
-        const data = await api.getMockTestAttempt(attemptId);
-        setExamData(data);
-
-        const attemptStatus = data?.status || data?.attempt?.status;
-        const subReason = data?.submission_reason || data?.attempt?.submission_reason;
-
-        // Auto-submitted restore check (Requirement 16)
-        if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') {
-          setAutoSubmittedState({
-            submitted: true,
-            reason: subReason || 'AUTO_SUBMITTED',
-            message: subReason === 'SECOND_FULLSCREEN_EXIT'
-              ? 'Your test has been automatically submitted because you exited full-screen mode twice.'
-              : 'Your test has been automatically submitted because the maximum number of security warnings was reached.'
-          });
-          setRemainingSeconds(0);
-          setLoading(false);
-          return;
-        }
-
-        if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed') {
-          setRemainingSeconds(0);
-          setLoading(false);
-          return;
-        }
-
-        // Calculate remaining seconds reliably
-        let remaining = data.remaining_seconds ?? data.remainingSeconds;
-        if (remaining === undefined || remaining === null) {
-          const expiresAt = data.attempt?.expires_at || data.attempt?.expiresAt || data.expires_at || data.expiresAt;
-          if (expiresAt) {
-            remaining = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
-          } else {
-            const dur = data.test?.duration_minutes ?? data.duration_minutes ?? 60;
-            remaining = dur * 60;
-          }
-        }
-        setRemainingSeconds(remaining);
-
-        // Restore authoritative counters from backend
-        const initialWarn = data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0;
-        const initialSec = data.security_warning_count ?? data.attempt?.security_warning_count ?? 0;
-        const initialFs = data.fullscreen_exit_count ?? data.attempt?.fullscreen_exit_count ?? 0;
-        setWarningCount(initialWarn);
-        setSecurityWarningCount(initialSec);
-        securityWarningCountRef.current = initialSec;
-        setFullscreenExitCount(initialFs);
-        fullscreenExitCountRef.current = initialFs;
-
-        // Preload saved answers
-        if (data.responses) {
-          setResponses(data.responses);
-        }
-
-        const proctorConfig = data.proctoring_config || data.proctoringConfig || data.test?.proctoring_config;
-        // Start webcam if test requires proctoring
-        if (proctorConfig?.webcam_required) {
-          startCameraRef.current?.();
-        }
-
-        // Check initial fullscreen state
-        const isCurrentlyFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-        setIsFullscreenActive(isCurrentlyFullscreen);
-      } catch (err) {
-        console.error('Failed to load examination:', err);
-        setInitError(err.message || 'Unable to load examination attempt.');
-      } finally {
+      if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed' || attemptStatus === 'expired') {
+        setRemainingSeconds(0);
         setLoading(false);
+        return;
       }
-    }
-    loadAttempt();
 
+      // Calculate remaining seconds reliably
+      let remaining = data.remaining_seconds ?? data.remainingSeconds;
+      if (remaining === undefined || remaining === null) {
+        const expiresAt = data.attempt?.expires_at || data.attempt?.expiresAt || data.expires_at || data.expiresAt;
+        if (expiresAt) {
+          remaining = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+        } else {
+          const dur = data.test?.duration_minutes ?? data.duration_minutes ?? 60;
+          remaining = dur * 60;
+        }
+      }
+      setRemainingSeconds(remaining);
+
+      // Restore authoritative counters from backend
+      const initialWarn = data.warning_count ?? data.warningCount ?? data.attempt?.warning_count ?? 0;
+      const initialSec = data.security_warning_count ?? data.attempt?.security_warning_count ?? 0;
+      const initialFs = data.fullscreen_exit_count ?? data.attempt?.fullscreen_exit_count ?? 0;
+      setWarningCount(initialWarn);
+      setSecurityWarningCount(initialSec);
+      securityWarningCountRef.current = initialSec;
+      setFullscreenExitCount(initialFs);
+      fullscreenExitCountRef.current = initialFs;
+
+      // Preload saved answers
+      if (data.responses) {
+        setResponses(data.responses);
+      }
+
+      const proctorConfig = data.proctoring_config || data.proctoringConfig || data.test?.proctoring_config;
+      // Start webcam if test requires proctoring
+      if (proctorConfig?.webcam_required) {
+        startCameraRef.current?.();
+      }
+
+      // Check initial fullscreen state
+      const isCurrentlyFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreenActive(isCurrentlyFullscreen);
+    } catch (err) {
+      console.error('Failed to load examination:', err);
+      setInitError(err.message || 'Unable to load examination attempt.');
+    } finally {
+      setLoading(false);
+    }
+  }, [attemptId]);
+
+  useEffect(() => {
+    loadAttempt();
     return () => {
       stopCameraRef.current?.();
     };
-  }, [attemptId]);
+  }, [loadAttempt]);
 
   // ---------------------------------------------------------------------------
   // 3. SERVER-AUTHORITATIVE COUNTDOWN TIMER
@@ -694,24 +840,8 @@ export function MockTestRunnerPage() {
   }, [examData, handleSecurityViolation, DEBUG_PROCTOR]);
 
   // ---------------------------------------------------------------------------
-  // 5. ANSWER STATE PERSISTENCE
+  // 5. QUESTION RESPONSE & INTERACTION HANDLERS
   // ---------------------------------------------------------------------------
-
-  const saveAnswerToServer = useCallback(async (questionId, responseData, isMarkedForReview, isVisited = true) => {
-    setSaveStatus('saving');
-    try {
-      await api.saveMockTestAnswer(attemptId, {
-        question_id: questionId,
-        response_data: responseData,
-        is_marked_for_review: isMarkedForReview,
-        is_visited: isVisited
-      });
-      setSaveStatus('saved');
-    } catch (err) {
-      console.warn('[Runner] Answer save failed:', err.message);
-      setSaveStatus('error');
-    }
-  }, [attemptId]);
 
   const isExamFullscreenRequired = Boolean(
     examData?.proctoring_config?.fullscreen_required ??
@@ -840,38 +970,8 @@ export function MockTestRunnerPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // 7. EXAM SUBMISSION
+  // 6. DERIVED STATE & METRIC HELPERS
   // ---------------------------------------------------------------------------
-
-  const handleAutoSubmit = async (reason) => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      stopCameraRef.current?.();
-      await api.submitMockTestAttempt(attemptId, {
-        auto_submitted: true,
-        reason: reason || 'Time expired'
-      });
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
-    } catch (err) {
-      console.error('Auto-submission error:', err);
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
-    }
-  };
-
-  const handleManualSubmit = async () => {
-    setIsSubmitting(true);
-    try {
-      stopCameraRef.current?.();
-      await api.submitMockTestAttempt(attemptId, {
-        auto_submitted: false
-      });
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
-    } catch (err) {
-      alert(err.message || 'Submission failed. Please verify connection.');
-      setIsSubmitting(false);
-    }
-  };
 
   // Format timer
   const formatTime = (secs) => {
@@ -920,7 +1020,7 @@ export function MockTestRunnerPage() {
     return (
       <div style={{ textAlign: 'center', padding: '6rem 1rem' }}>
         <div className="spinner" style={{ margin: '0 auto 1rem' }}></div>
-        <p style={{ color: 'var(--color-navy)', fontWeight: 600 }}>Connecting to Secure Examination Session...</p>
+        <p style={{ color: 'var(--color-navy)', fontWeight: 600 }}>Loading mock test...</p>
       </div>
     );
   }
@@ -929,19 +1029,58 @@ export function MockTestRunnerPage() {
     return (
       <div className="container" style={{ padding: '4rem 1rem', maxWidth: '600px' }}>
         <div style={{
-          background: 'var(--color-danger-bg)',
-          border: '1px solid var(--color-danger)',
-          color: 'var(--color-danger)',
-          padding: '1.75rem',
-          borderRadius: 'var(--radius-md)',
-          textAlign: 'center'
+          background: '#FFFFFF',
+          border: '1px solid #EF4444',
+          borderRadius: '16px',
+          padding: '2.5rem',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
         }}>
-          <h3>Examination Error</h3>
-          <p>{initError || 'Unable to open session.'}</p>
-          <button onClick={() => navigate('/mock-tests')} className="btn btn-secondary" style={{ marginTop: '1rem' }}>
-            Return to Mock Tests
-          </button>
+          <div style={{
+            width: '56px',
+            height: '56px',
+            borderRadius: '50%',
+            background: '#FEF2F2',
+            color: '#DC2626',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.25rem'
+          }}>
+            <AlertCircle size={28} />
+          </div>
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', marginBottom: '0.5rem' }}>
+            Unable to load the mock test.
+          </h3>
+          <p style={{ color: '#64748B', fontSize: '0.92rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>
+            {initError || 'Please try again.'}
+          </p>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={loadAttempt}
+              className="btn btn-primary"
+              style={{ padding: '0.6rem 1.5rem', fontWeight: 700 }}
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => navigate('/mock-tests')}
+              className="btn btn-secondary"
+              style={{ padding: '0.6rem 1.25rem', fontWeight: 600 }}
+            >
+              Return to Mock Tests
+            </button>
+          </div>
         </div>
+      </div>
+    );
+  }
+
+  if (examData && !examData.questions) {
+    return (
+      <div style={{ textAlign: 'center', padding: '6rem 1rem' }}>
+        <div className="spinner" style={{ margin: '0 auto 1rem' }}></div>
+        <p style={{ color: 'var(--color-navy)', fontWeight: 600 }}>Loading questions...</p>
       </div>
     );
   }
@@ -959,6 +1098,58 @@ export function MockTestRunnerPage() {
   const attemptStatus = examData?.status || examData?.attempt?.status;
   const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
   const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
+  const isExpired = attemptStatus === 'expired';
+
+  if (isExpired) {
+    return (
+      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '640px' }}>
+        <div style={{
+          background: '#FFFFFF',
+          border: '1px solid #F59E0B',
+          padding: '2.5rem',
+          borderRadius: '16px',
+          textAlign: 'center',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: '#FFFBEB',
+            color: '#D97706',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.25rem'
+          }}>
+            <Clock size={36} />
+          </div>
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 800, marginBottom: '0.5rem', color: 'var(--color-navy, #0F172A)' }}>
+            Examination Time Expired
+          </h2>
+          <p style={{ color: '#64748B', marginBottom: '1.5rem', lineHeight: 1.6, fontSize: '0.98rem' }}>
+            The allocated duration for this examination has ended. Further responses cannot be recorded.
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => navigate(`/mock-tests/attempts/${attemptId}/result`)}
+              className="btn btn-primary"
+              style={{ fontWeight: 700, padding: '0.65rem 1.5rem' }}
+            >
+              View Scorecard & Results
+            </button>
+            <button
+              onClick={() => navigate('/mock-tests')}
+              className="btn btn-secondary"
+              style={{ fontWeight: 600, padding: '0.65rem 1.25rem' }}
+            >
+              Back to Catalog
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isCompleted) {
     const subReason = autoSubmittedState?.reason || examData?.submission_reason || examData?.attempt?.submission_reason;
@@ -1429,15 +1620,15 @@ export function MockTestRunnerPage() {
                     borderRadius: '4px',
                     textTransform: 'uppercase'
                   }}>
-                    {activeQuestion.question_type.replace('_', ' ')}
+                    {(activeQuestion.question_type || 'mcq_single').replace('_', ' ')}
                   </span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.82rem' }}>
                   <span style={{ color: '#059669', fontWeight: 700 }}>
-                    +{activeQuestion.marks} Marks
+                    +{activeQuestion.marks ?? 0} Marks
                   </span>
-                  {activeQuestion.negative_marks > 0 && (
+                  {Number(activeQuestion.negative_marks) > 0 && (
                     <span style={{ color: '#DC2626', fontWeight: 700 }}>
                       -{activeQuestion.negative_marks} Neg.
                     </span>
@@ -2488,4 +2679,13 @@ export function MockTestRunnerPage() {
     </div>
   );
 }
+
+export function MockTestRunnerPage() {
+  return (
+    <RunnerErrorBoundary>
+      <MockTestRunnerView />
+    </RunnerErrorBoundary>
+  );
+}
+
 export default MockTestRunnerPage;

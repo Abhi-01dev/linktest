@@ -61,7 +61,8 @@ export const mockTestService = {
         has_passed: bestAttempt ? bestAttempt.passed : false,
         join_request_status: joinRequestStatus,
         join_request_id: latestRequest ? latestRequest.id : null,
-        rejection_reason: latestRequest?.status === 'REJECTED' ? latestRequest.rejection_reason : null
+        rejection_reason: latestRequest?.status === 'REJECTED' ? latestRequest.rejection_reason : null,
+        can_start_directly: Boolean(test.batch_id || joinRequestStatus === 'APPROVED')
       };
     }));
   },
