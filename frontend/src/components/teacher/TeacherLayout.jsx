@@ -66,6 +66,7 @@ export function TeacherLayout({ children }) {
 
   useEffect(() => {
     setMobileOpen(false);
+    window.scrollTo(0, 0);
   }, [location.pathname]);
 
   const toggleCollapse = () => {

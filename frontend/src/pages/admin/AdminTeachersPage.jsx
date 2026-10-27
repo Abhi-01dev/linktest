@@ -356,11 +356,16 @@ export function AdminTeachersPage() {
                   className="form-select"
                   value={assignSubjectId}
                   onChange={(e) => setAssignSubjectId(e.target.value)}
+                  disabled={subjects.length === 0}
                   required
                 >
-                  {subjects.map(s => (
-                    <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
-                  ))}
+                  {subjects.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    subjects.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -370,11 +375,16 @@ export function AdminTeachersPage() {
                   className="form-select"
                   value={assignClassId}
                   onChange={(e) => handleClassChangeInAssign(e.target.value)}
+                  disabled={classes.length === 0}
                   required
                 >
-                  {classes.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
+                  {classes.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))
+                  )}
                 </select>
               </div>
 

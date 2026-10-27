@@ -117,7 +117,10 @@ router.post('/token', requireAuth, async (req, res, next) => {
       });
     }
 
-    const isPublisher = req.user.role === 'TEACHER' || req.user.role === 'ADMIN';
+    // Respect client publisher request (for interactive classroom participation) or default to role-based check
+    const isPublisher = req.body.isPublisher !== undefined
+      ? Boolean(req.body.isPublisher)
+      : (req.user.role === 'TEACHER' || req.user.role === 'ADMIN');
     const result = livekitService.generateToken({
       roomName: targetRoomName,
       participantIdentity: req.user.id,

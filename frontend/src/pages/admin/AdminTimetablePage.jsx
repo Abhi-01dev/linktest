@@ -148,12 +148,17 @@ export function AdminTimetablePage() {
           <select
             value={selectedClassId}
             onChange={(e) => handleClassChange(e.target.value)}
+            disabled={classes.length === 0}
             className="form-select"
             style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
           >
-            {classes.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
+            {classes.length === 0 ? (
+              <option value="" disabled>No options</option>
+            ) : (
+              classes.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))
+            )}
           </select>
         </div>
 
@@ -266,19 +271,27 @@ export function AdminTimetablePage() {
 
               <div className="form-group">
                 <label className="form-label">Subject</label>
-                <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required>
-                  {subjects.map(s => (
-                    <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
-                  ))}
+                <select className="form-select" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} disabled={subjects.length === 0} required>
+                  {subjects.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    subjects.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                    ))
+                  )}
                 </select>
               </div>
 
               <div className="form-group">
                 <label className="form-label">Teacher / Faculty</label>
-                <select className="form-select" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} required>
-                  {teachers.map(t => (
-                    <option key={t.id} value={t.id}>{t.full_name}</option>
-                  ))}
+                <select className="form-select" value={teacherId} onChange={(e) => setTeacherId(e.target.value)} disabled={teachers.length === 0} required>
+                  {teachers.length === 0 ? (
+                    <option value="" disabled>No options</option>
+                  ) : (
+                    teachers.map(t => (
+                      <option key={t.id} value={t.id}>{t.full_name}</option>
+                    ))
+                  )}
                 </select>
               </div>
 

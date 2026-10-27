@@ -80,6 +80,10 @@ export function StudentAssignmentsPage() {
       loadData();
     } catch (err) {
       showToast(err.message || 'Failed to submit assignment', 'error');
+      if (err.code === 'ALREADY_SUBMITTED' || err.status === 409) {
+        setSelectedAssignment(null);
+        loadData();
+      }
     } finally {
       setSubmitting(false);
     }

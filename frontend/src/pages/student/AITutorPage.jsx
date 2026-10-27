@@ -43,6 +43,7 @@ What concept would you like to explore today?`,
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [initializingOllama, setInitializingOllama] = useState(false);
   const messagesEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
 
   const starterPrompts = [
     'Explain the Big-O time complexity of Binary Search with a simple analogy.',
@@ -90,7 +91,9 @@ What concept would you like to explore today?`,
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
   }, [messages, loading]);
 
   const handleSend = async (textToSend) => {
@@ -315,6 +318,7 @@ What concept would you like to explore today?`,
         >
           {/* Message Stream */}
           <div
+            ref={chatContainerRef}
             style={{
               flex: 1,
               overflowY: 'auto',

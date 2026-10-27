@@ -159,6 +159,18 @@ export const studentController = {
       const { id } = req.params;
       const parsed = submitAssignmentSchema.parse(req.body);
 
+      // Enforce single assignment submission policy
+      const existing = await lmsRepository.getSubmission(id, req.user.id);
+      if (existing && ['submitted', 'graded'].includes(existing.status)) {
+        return res.status(409).json({
+          success: false,
+          error: {
+            code: 'ALREADY_SUBMITTED',
+            message: 'You have already submitted this assignment. Resubmission is not permitted.'
+          }
+        });
+      }
+
       const submission = await lmsRepository.submitAssignment({
         assignmentId: id,
         studentId: req.user.id,

@@ -203,13 +203,13 @@ function MockTestResultView() {
             <Clock size={32} />
           </div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', margin: '0 0 0.75rem' }}>
-            Result Not Released Yet
+            Your test has been submitted successfully.
           </h2>
           <p style={{ color: '#334155', fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.4rem' }}>
-            Your result will be released soon.
+            Your result has not been released yet.
           </p>
           <p style={{ color: '#64748B', fontSize: '0.92rem', margin: '0 0 1.75rem' }}>
-            Please check back later.
+            Your teacher will release the result soon.
           </p>
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
             <button
@@ -376,13 +376,13 @@ function MockTestResultView() {
             <Clock size={32} />
           </div>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--color-navy, #0F172A)', margin: '0 0 0.75rem' }}>
-            Result Not Released Yet
+            Your test has been submitted successfully.
           </h2>
           <p style={{ color: '#334155', fontSize: '1.05rem', fontWeight: 600, margin: '0 0 0.4rem' }}>
-            Your result will be released soon.
+            Your result has not been released yet.
           </p>
           <p style={{ color: '#64748B', fontSize: '0.92rem', margin: '0 0 1.75rem' }}>
-            Please check back later.
+            Your teacher will release the result soon.
           </p>
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
             <button

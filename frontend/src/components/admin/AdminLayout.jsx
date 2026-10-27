@@ -14,9 +14,10 @@ export function AdminLayout({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
 
-  // Close mobile drawer on route change
+  // Close mobile drawer on route change and reset scroll
   useEffect(() => {
     setMobileOpen(false);
+    window.scrollTo(0, 0);
   }, [location.pathname]);
 
   return (

@@ -249,7 +249,29 @@ export const mockTestController = {
   async getMyAttempts(req, res, next) {
     try {
       const testId = req.query.test_id || null;
-      const attempts = await mockTestRepository.getAttemptsByStudent(req.user.id, testId);
+      const rawAttempts = await mockTestRepository.getAttemptsByStudent(req.user.id, testId);
+
+      const attempts = (rawAttempts || []).map(att => {
+        const isReleased = att.result_status === 'RELEASED';
+        if (req.user.role === 'STUDENT' && !isReleased) {
+          return {
+            ...att,
+            total_score: null,
+            score: null,
+            percentage: null,
+            passed: null,
+            correct_count: null,
+            incorrect_count: null,
+            unanswered_count: null,
+            responses: [],
+            results_released: false
+          };
+        }
+        return {
+          ...att,
+          results_released: isReleased
+        };
+      });
 
       return res.status(200).json({ success: true, data: { attempts } });
     } catch (err) {

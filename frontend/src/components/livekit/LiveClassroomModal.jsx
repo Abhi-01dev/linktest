@@ -45,7 +45,7 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
         const data = await api.getLiveKitToken({
           sessionId: session.id,
           roomName: `session-${session.id}`,
-          isPublisher: Boolean(isTeacher)
+          isPublisher: true
         });
         if (isMounted) {
           if (!data?.token || !data?.serverUrl) {
@@ -274,7 +274,7 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
                   api.getLiveKitToken({
                     sessionId: session.id,
                     roomName: `session-${session.id}`,
-                    isPublisher: Boolean(isTeacher)
+                    isPublisher: true
                   })
                     .then(data => setTokenData(data))
                     .catch(err => setError(err.message))
@@ -310,6 +310,82 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
             <RoomAudioRenderer />
           </LiveKitRoom>
         )}
+
+        {/* High-Contrast LiveKit Chat Styles */}
+        <style>{`
+          .lk-chat, .chat {
+            background-color: #0F172A !important;
+            border-left: 1px solid #334155 !important;
+          }
+          .lk-chat-header, .chat-header {
+            background-color: #1E293B !important;
+            color: #F8FAFC !important;
+            font-weight: 700 !important;
+            border-bottom: 1px solid #334155 !important;
+          }
+          .lk-chat-messages, .chat-messages {
+            background-color: #0F172A !important;
+            padding: 0.75rem !important;
+          }
+          .lk-chat-entry, .chat-entry {
+            margin-bottom: 0.65rem !important;
+          }
+          .lk-chat-entry .meta-data, .chat-entry .meta-data {
+            color: #94A3B8 !important;
+            font-size: 0.75rem !important;
+            margin-bottom: 0.25rem !important;
+          }
+          .lk-chat-entry .participant-name, .chat-entry .participant-name {
+            color: #60A5FA !important;
+            font-weight: 600 !important;
+          }
+          .lk-chat-entry .timestamp, .chat-entry .timestamp {
+            color: #64748B !important;
+          }
+          .lk-chat-entry[data-lk-message-origin='local'] .lk-message-body,
+          .lk-chat-entry[data-message-origin='local'] .lk-message-body,
+          .chat-entry[data-message-origin='local'] .message-body {
+            background-color: #2563EB !important;
+            color: #FFFFFF !important;
+            font-weight: 500 !important;
+            border-radius: 12px 12px 2px 12px !important;
+            padding: 0.4rem 0.8rem !important;
+            box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25) !important;
+          }
+          .lk-chat-entry[data-lk-message-origin='remote'] .lk-message-body,
+          .lk-chat-entry[data-message-origin='remote'] .lk-message-body,
+          .chat-entry[data-message-origin='remote'] .message-body {
+            background-color: #1E293B !important;
+            color: #F1F5F9 !important;
+            font-weight: 500 !important;
+            border: 1px solid #334155 !important;
+            border-radius: 12px 12px 12px 2px !important;
+            padding: 0.4rem 0.8rem !important;
+          }
+          .lk-chat-form, .chat-form {
+            background-color: #1E293B !important;
+            border-top: 1px solid #334155 !important;
+            padding: 0.75rem !important;
+          }
+          .lk-chat-form-input, .chat-form-input {
+            background-color: #0F172A !important;
+            color: #FFFFFF !important;
+            border: 1px solid #475569 !important;
+            border-radius: 8px !important;
+            padding: 0.5rem 0.75rem !important;
+            font-size: 0.88rem !important;
+          }
+          .lk-chat-form-input:focus, .chat-form-input:focus {
+            border-color: #3B82F6 !important;
+            outline: none !important;
+          }
+          .lk-button.lk-chat-form-button, .chat-form button {
+            background-color: #2563EB !important;
+            color: #FFFFFF !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+          }
+        `}</style>
       </main>
     </div>
   );

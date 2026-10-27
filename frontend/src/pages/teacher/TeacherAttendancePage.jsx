@@ -167,7 +167,9 @@ export function TeacherAttendancePage() {
                 <option value="" disabled>No options</option>
               ) : (
                 assignments.map(a => (
-                  <option key={a.id} value={a.id}>{a.class_name} • {a.subject_name}</option>
+                  <option key={a.id} value={a.id}>
+                    {a.batch_name ? `${a.batch_name} (${a.class_name}) • ${a.subject_name}` : `${a.class_name} • ${a.subject_name}`}
+                  </option>
                 ))
               )}
             </select>

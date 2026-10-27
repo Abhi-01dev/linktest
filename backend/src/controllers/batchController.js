@@ -623,7 +623,8 @@ export const batchController = {
   // ── Database Student Search (Core Requirement) ───────────────────────────
   async searchStudents(req, res, next) {
     try {
-      const { q = '', page = 1, limit = 20 } = req.query;
+      const q = (req.query.query || req.query.q || req.query.search || '').trim();
+      const { page = 1, limit = 20 } = req.query;
 
       const result = await userRepository.searchStudents({
         query: q,

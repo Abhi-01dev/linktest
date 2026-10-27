@@ -430,24 +430,67 @@ export const userRepository = {
       const countRes = await pool.query(`SELECT COUNT(*)::int as total FROM (${sql}) sub`, params);
       const total = countRes.rows[0]?.total || 0;
 
-      sql += ` ORDER BY u.full_name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      const rowsRes = await pool.query(sql, [...params, limit, offset]);
+      if (q) {
+        params.push(q);
+        const exactParamIdx = params.length;
+        params.push(`${q}%`);
+        const prefixParamIdx = params.length;
+        sql += ` ORDER BY 
+          CASE 
+            WHEN LOWER(u.email) = $${exactParamIdx} OR LOWER(u.full_name) = $${exactParamIdx} THEN 1
+            WHEN LOWER(u.full_name) LIKE $${prefixParamIdx} OR LOWER(u.email) LIKE $${prefixParamIdx} OR LOWER(COALESCE(sp.enrollment_number, '')) LIKE $${prefixParamIdx} THEN 2
+            ELSE 3
+          END ASC,
+          u.full_name ASC 
+          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        const rowsRes = await pool.query(sql, [...params, limit, offset]);
 
-      return {
-        students: rowsRes.rows,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit)
-      };
+        return {
+          students: rowsRes.rows,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit)
+        };
+      } else {
+        sql += ` ORDER BY u.full_name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        const rowsRes = await pool.query(sql, [...params, limit, offset]);
+
+        return {
+          students: rowsRes.rows,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit)
+        };
+      }
     }
 
     let students = memoryStore.users.filter(u => u.role === 'STUDENT');
     if (q) {
       students = students.filter(u =>
         u.full_name?.toLowerCase().includes(q) ||
-        u.email?.toLowerCase().includes(q)
+        u.email?.toLowerCase().includes(q) ||
+        (memoryStore.student_profiles || []).some(p => p.user_id === u.id && p.enrollment_number?.toLowerCase().includes(q))
       );
+      students.sort((a, b) => {
+        const aName = (a.full_name || '').toLowerCase();
+        const bName = (b.full_name || '').toLowerCase();
+        const aEmail = (a.email || '').toLowerCase();
+        const bEmail = (b.email || '').toLowerCase();
+
+        const aExact = aName === q || aEmail === q ? 1 : 0;
+        const bExact = bName === q || bEmail === q ? 1 : 0;
+        if (aExact !== bExact) return bExact - aExact;
+
+        const aPrefix = aName.startsWith(q) || aEmail.startsWith(q) ? 1 : 0;
+        const bPrefix = bName.startsWith(q) || bEmail.startsWith(q) ? 1 : 0;
+        if (aPrefix !== bPrefix) return bPrefix - aPrefix;
+
+        return aName.localeCompare(bName);
+      });
+    } else {
+      students.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
     }
     const total = students.length;
     const paged = students.slice(offset, offset + limit).map(u => {
