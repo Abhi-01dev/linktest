@@ -122,19 +122,23 @@ export const authService = {
     let emailSent = true;
     let emailErrorCode = null;
     try {
-      await emailService.sendVerificationOtp({
+      const emailResult = await emailService.sendVerificationOtp({
         email: user.email,
         fullName: user.full_name,
         otp
       });
+      if (emailResult && emailResult.sent === false) {
+        emailSent = false;
+        emailErrorCode = emailResult.errorCode || 'SMTP_UNAVAILABLE';
+      }
     } catch (err) {
       if (config.nodeEnv !== 'production') {
         console.error('[Registration] Email sending error:', err.message);
       } else {
-        console.error('[Registration] Email delivery failed with code:', err.code || 'EMAIL_DELIVERY_FAILED');
+        console.error('[Registration] Email delivery failed with code:', err.code || 'SMTP_UNAVAILABLE');
       }
       emailSent = false;
-      emailErrorCode = err.code || 'EMAIL_DELIVERY_FAILED';
+      emailErrorCode = err.code || 'SMTP_UNAVAILABLE';
     }
 
     return {
@@ -307,7 +311,13 @@ export const authService = {
     }
 
     try {
-      await emailService.sendVerificationOtp({ email: user.email, fullName: user.full_name, otp });
+      const emailResult = await emailService.sendVerificationOtp({ email: user.email, fullName: user.full_name, otp });
+      if (emailResult && emailResult.sent === false) {
+        const deliveryErr = new Error('Failed to deliver verification email. Please try again later.');
+        deliveryErr.statusCode = 503;
+        deliveryErr.code = emailResult.errorCode || 'SMTP_UNAVAILABLE';
+        throw deliveryErr;
+      }
     } catch (err) {
       if (config.nodeEnv !== 'production') {
         console.error('[Resend] Email delivery error:', err.message);
@@ -320,7 +330,11 @@ export const authService = {
       throw deliveryErr;
     }
 
-    return { success: true, message: 'A new verification code has been sent to your email.' };
+    return {
+      success: true,
+      email_sent: true,
+      message: 'A new verification code has been sent to your email.'
+    };
   },
 
   async login({ email, password }) {

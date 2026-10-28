@@ -73,10 +73,21 @@ export function RegisterPage() {
       const result = await register(trimmedName, trimmedEmail, password);
       if (result.email_sent === false) {
         showToast("We couldn't send the verification email. Please try again.", 'warning');
-        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}&deliveryFailed=true`);
+        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}&deliveryFailed=true`, {
+          state: {
+            email: trimmedEmail,
+            email_sent: false,
+            email_error: result.email_error
+          }
+        });
       } else {
         showToast(result.message || 'Account created. OTP sent to your email.', 'success');
-        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}`);
+        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}`, {
+          state: {
+            email: trimmedEmail,
+            email_sent: true
+          }
+        });
       }
     } catch (err) {
       setError(err.message || 'Registration failed. Please check your information.');

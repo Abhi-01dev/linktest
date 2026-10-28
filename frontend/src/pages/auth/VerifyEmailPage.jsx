@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { api } from '../../services/api';
@@ -16,12 +16,13 @@ import {
 } from 'lucide-react';
 
 export function VerifyEmailPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { verifyEmail } = useAuth();
   const { showToast } = useToast();
 
-  const emailParam = searchParams.get('email') || '';
+  const emailParam = searchParams.get('email') || location.state?.email || '';
   const [email, setEmail] = useState(emailParam);
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
@@ -30,6 +31,13 @@ export function VerifyEmailPage() {
   const [success, setSuccess] = useState(false);
   const [cooldown, setCooldown] = useState(60);
   const [lockedOut, setLockedOut] = useState(false);
+
+  // Delivery failure state: authoritative from navigation state or URL query
+  const [deliveryFailed, setDeliveryFailed] = useState(() => {
+    if (location.state?.email_sent === false) return true;
+    if (searchParams.get('deliveryFailed') === 'true') return true;
+    return false;
+  });
 
   const inputRefs = useRef([]);
   const isVerifyingRef = useRef(false);
@@ -44,12 +52,12 @@ export function VerifyEmailPage() {
     return `${name.charAt(0)}${'*'.repeat(Math.min(name.length - 2, 4))}${name.slice(-1)}@${domain}`;
   };
 
-  // Check if initial delivery failed
+  // Sync delivery failure state from URL or location state
   useEffect(() => {
-    if (searchParams.get('deliveryFailed') === 'true') {
-      setError("We couldn't deliver the initial verification email. Please click Resend Code below to receive your code.");
+    if (location.state?.email_sent === false || searchParams.get('deliveryFailed') === 'true') {
+      setDeliveryFailed(true);
     }
-  }, [searchParams]);
+  }, [location.state, searchParams]);
 
   // 60-second cooldown timer
   useEffect(() => {
@@ -193,6 +201,11 @@ export function VerifyEmailPage() {
     try {
       const res = await api.resendVerification(email);
       showToast(res.message || 'New verification code sent to your email!', 'success');
+      setDeliveryFailed(false);
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('deliveryFailed');
+      setSearchParams(newParams, { replace: true });
+
       setCooldown(60);
       setLockedOut(false);
       lastSubmittedOtpRef.current = '';
@@ -281,13 +294,49 @@ export function VerifyEmailPage() {
               Verify Your Email
             </h1>
 
-            <p style={{ fontSize: '0.925rem', color: 'var(--color-text-secondary)', marginBottom: '1.5rem' }}>
-              We sent a 6-digit verification code to
-              <br />
-              <strong style={{ color: 'var(--color-navy)' }}>
-                {maskEmail(email) || 'your registered email'}
-              </strong>
-            </p>
+            {deliveryFailed ? (
+              <p style={{ fontSize: '0.925rem', color: 'var(--color-text-secondary)', marginBottom: '1.5rem' }}>
+                Your account was created, but we couldn't deliver the verification email to
+                <br />
+                <strong style={{ color: 'var(--color-navy)' }}>
+                  {maskEmail(email) || 'your registered email'}
+                </strong>
+                .
+                <br />
+                Please click <strong>Resend Code</strong> below to receive your code.
+              </p>
+            ) : (
+              <p style={{ fontSize: '0.925rem', color: 'var(--color-text-secondary)', marginBottom: '1.5rem' }}>
+                We sent a 6-digit verification code to
+                <br />
+                <strong style={{ color: 'var(--color-navy)' }}>
+                  {maskEmail(email) || 'your registered email'}
+                </strong>
+              </p>
+            )}
+
+            {deliveryFailed && (
+              <div
+                style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius-md)',
+                  background: '#FFFBEB',
+                  border: '1px solid #FCD34D',
+                  color: '#92400E',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '1.5rem',
+                  textAlign: 'left'
+                }}
+              >
+                <AlertCircle size={18} style={{ flexShrink: 0, color: '#D97706' }} />
+                <span>
+                  Initial email delivery could not be completed. Click <strong>Resend Code</strong> below once the cooldown expires to receive your code.
+                </span>
+              </div>
+            )}
 
             {error && (
               <div

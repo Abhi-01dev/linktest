@@ -94,13 +94,14 @@ export function buildConfig(rawEnv = process.env) {
       timeoutMs: 45000
     },
     smtp: {
-      host: rawEnv.SMTP_HOST || 'smtp.gmail.com',
+      host: (rawEnv.SMTP_HOST || 'smtp.gmail.com').trim(),
       port: parseInt(rawEnv.SMTP_PORT || '587', 10),
       secure: rawEnv.SMTP_SECURE === 'true',
-      user: rawEnv.SMTP_USER || '',
-      pass: rawEnv.SMTP_APP_PASSWORD || '',
+      user: (rawEnv.SMTP_USER || '').trim(),
+      pass: (rawEnv.SMTP_APP_PASSWORD || '').trim(),
       fromName: rawEnv.SMTP_FROM_NAME || 'LinkTest',
-      fromEmail: rawEnv.SMTP_FROM_EMAIL || rawEnv.SMTP_USER || 'no-reply@linktest.io'
+      fromEmail: (rawEnv.SMTP_FROM_EMAIL || rawEnv.SMTP_USER || 'no-reply@linktest.io').trim(),
+      timeoutMs: parseInt(rawEnv.SMTP_TIMEOUT_MS || '6000', 10)
     },
     storage: {
       provider: rawEnv.STORAGE_PROVIDER || 'local',

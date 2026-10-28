@@ -47,8 +47,8 @@ export function categorizeEmailError(err) {
     msg.toLowerCase().includes('username and password not accepted')
   ) {
     const error = new Error('Email service authentication failed. Please contact support.');
-    error.statusCode = 502;
-    error.code = 'SMTP_AUTH_FAILED';
+    error.statusCode = 503;
+    error.code = 'SMTP_UNAVAILABLE';
     return error;
   }
 
@@ -258,20 +258,30 @@ export const emailService = {
       html
     };
 
+    // Ensure transporter is initialized if credentials exist and not in mock/test mode
+    if (!transporter && config.smtp?.user && config.smtp?.pass && config.nodeEnv !== 'test' && process.env.MOCK_EMAIL !== 'true') {
+      initTransporter();
+    }
+
     // 1. Transporter active (Real Gmail SMTP with connection pooling & timeouts, or injected mock/test transporter)
     if (transporter) {
       let timer;
       try {
+        const timeoutMs = config.smtp?.timeoutMs || 6000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
             timeoutErr.code = 'ETIMEDOUT';
             reject(timeoutErr);
-          }, 6000);
+          }, timeoutMs);
         });
 
+        const sendMailPromise = transporter.sendMail(emailPayload);
+        // Prevent unhandled promise rejection if provider fails/rejects after timeout fires
+        sendMailPromise.catch(() => {});
+
         const info = await Promise.race([
-          transporter.sendMail(emailPayload),
+          sendMailPromise,
           timeoutPromise
         ]);
         clearTimeout(timer);
@@ -282,7 +292,7 @@ export const emailService = {
           console.log(`[LinkTest Email] Verification email dispatched to ${email}`);
         }
         lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-        return { success: true, messageId: info.messageId };
+        return { success: true, sent: true, messageId: info.messageId };
       } catch (rawErr) {
         clearTimeout(timer);
         console.error(`[LinkTest Email] Failed sending verification email to ${email}:`, rawErr.code || rawErr.message);
@@ -293,7 +303,7 @@ export const emailService = {
     // 2. Test Mode (In-memory capture when no transporter is explicitly configured/injected)
     if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
       lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-      return { success: true, mocked: true, messageId: 'test-mock-id' };
+      return { success: true, sent: true, mocked: true, messageId: 'test-mock-id' };
     }
 
     // 3. Development Fallback (Log OTP to console only in dev/test, NEVER in production)
@@ -313,7 +323,7 @@ export const emailService = {
     console.log('================================================================');
 
     lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-    return { success: true, simulated: true };
+    return { success: true, sent: true, simulated: true };
   },
 
   getLastSentEmail() {
@@ -347,21 +357,24 @@ export const emailService = {
     if (transporter) {
       let timer;
       try {
+        const timeoutMs = config.smtp?.timeoutMs || 6000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
             timeoutErr.code = 'ETIMEDOUT';
             reject(timeoutErr);
-          }, 6000);
+          }, timeoutMs);
         });
+        const sendMailPromise = transporter.sendMail(payload);
+        sendMailPromise.catch(() => {});
         const info = await Promise.race([
-          transporter.sendMail(payload),
+          sendMailPromise,
           timeoutPromise
         ]);
         clearTimeout(timer);
         console.log(`[LinkTest Email] Teacher invitation sent to ${email}`);
         lastSentEmail = { ...payload, sentAt: new Date() };
-        return { success: true, messageId: info.messageId };
+        return { success: true, sent: true, messageId: info.messageId };
       } catch (err) {
         clearTimeout(timer);
         throw categorizeEmailError(err);
@@ -413,20 +426,23 @@ export const emailService = {
     if (transporter) {
       let timer;
       try {
+        const timeoutMs = config.smtp?.timeoutMs || 6000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
             timeoutErr.code = 'ETIMEDOUT';
             reject(timeoutErr);
-          }, 6000);
+          }, timeoutMs);
         });
+        const sendMailPromise = transporter.sendMail(payload);
+        sendMailPromise.catch(() => {});
         const info = await Promise.race([
-          transporter.sendMail(payload),
+          sendMailPromise,
           timeoutPromise
         ]);
         clearTimeout(timer);
         lastSentEmail = { ...payload, sentAt: new Date() };
-        return { success: true, messageId: info.messageId };
+        return { success: true, sent: true, messageId: info.messageId };
       } catch (err) {
         clearTimeout(timer);
         throw categorizeEmailError(err);
