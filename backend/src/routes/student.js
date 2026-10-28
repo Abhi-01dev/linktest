@@ -10,6 +10,7 @@ router.use(authenticateToken, requireRole('STUDENT'));
 // ── Dashboard & Enrolled Classes ──
 router.get('/dashboard', studentController.getDashboard);
 router.get('/classes', studentController.getEnrolledClasses);
+router.get('/progress', studentController.getProgress);
 
 // ── Timetable ──
 router.get('/timetable', studentController.getTimetable);

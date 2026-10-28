@@ -1,6 +1,8 @@
 import { lmsRepository } from '../repositories/lmsRepository.js';
 import { progressRepository } from '../repositories/progressRepository.js';
 import { quizRepository } from '../repositories/quizRepository.js';
+import { courseRepository } from '../repositories/courseRepository.js';
+import { mockTestRepository } from '../repositories/mockTestRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { notificationService } from '../services/notificationService.js';
 import { z } from 'zod';
@@ -193,14 +195,219 @@ export const studentController = {
   // ── Study Materials ──────────────────────────────────────────────────
   async getMaterials(req, res, next) {
     try {
-      const enrollments = await lmsRepository.getClassesForStudent(req.user.id);
-      const classId = enrollments[0]?.class_id;
+      const studentId = req.user.id;
+      const enrolledClasses = await lmsRepository.getClassesForStudent(studentId);
+      const classIds = (enrolledClasses || []).map(c => c.id || c.class_id).filter(Boolean);
+      const enrolledCourses = await courseRepository.getEnrolledCoursesForUser(studentId);
+      const courseIds = (enrolledCourses || []).map(c => c.id).filter(Boolean);
 
       const materials = await lmsRepository.getMaterials({
-        classId,
+        studentAccess: { classIds, courseIds },
         published: true
       });
       res.status(200).json({ success: true, data: materials });
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  // ── Student Progress & Mock Test Analytics ───────────────────────────
+  async getProgress(req, res, next) {
+    try {
+      const studentId = req.user.id;
+      const rawAttempts = await mockTestRepository.getAttemptsByStudent(studentId);
+
+      const attempts = [];
+      const testAttemptsMap = {};
+
+      for (const a of rawAttempts) {
+        let correctCount = a.correct_count;
+        let incorrectCount = a.incorrect_count;
+        let unansweredCount = a.unanswered_count;
+        let timeSpent = a.time_spent_seconds || 0;
+        let maxScore = parseFloat(a.max_score || 0);
+        let totalScore = parseFloat(a.total_score || 0);
+
+        if (correctCount === null || correctCount === undefined) {
+          const detailed = await mockTestRepository.getAttemptById(a.id);
+          const responses = detailed?.responses || [];
+          correctCount = responses.filter(r => r.is_correct === true).length;
+          incorrectCount = responses.filter(r => r.is_correct === false).length;
+          const questions = await mockTestRepository.getQuestionsByTestId(a.test_id);
+          const totalQ = questions.length;
+          unansweredCount = Math.max(0, totalQ - responses.length);
+          if (maxScore === 0) {
+            maxScore = questions.reduce((acc, q) => acc + (parseFloat(q.marks) || 1), 0);
+          }
+        }
+
+        const totalQuestions = (correctCount || 0) + (incorrectCount || 0) + (unansweredCount || 0);
+        const attemptedQuestions = (correctCount || 0) + (incorrectCount || 0);
+        const accuracy = attemptedQuestions > 0 ? Math.round(((correctCount || 0) / attemptedQuestions) * 100) : 0;
+        const percentage = parseFloat(a.percentage || (maxScore > 0 ? ((totalScore / maxScore) * 100).toFixed(2) : 0));
+
+        if (!testAttemptsMap[a.test_id]) {
+          testAttemptsMap[a.test_id] = await mockTestRepository.getAttemptsByTest(a.test_id);
+        }
+        const peerAttempts = testAttemptsMap[a.test_id] || [];
+        const sortedPeers = [...peerAttempts]
+          .filter(p => ['submitted', 'evaluated'].includes(p.status))
+          .sort((x, y) => {
+            const scoreDiff = parseFloat(y.total_score || 0) - parseFloat(x.total_score || 0);
+            if (scoreDiff !== 0) return scoreDiff;
+            return (x.time_spent_seconds || 0) - (y.time_spent_seconds || 0);
+          });
+        const rankIndex = sortedPeers.findIndex(p => p.id === a.id);
+        const rank = rankIndex !== -1 ? `${rankIndex + 1} / ${sortedPeers.length}` : '—';
+
+        attempts.push({
+          id: a.id,
+          test_id: a.test_id,
+          test_name: a.test_title || 'Mock Examination',
+          subject: a.subject || 'General',
+          date: a.submitted_at || a.started_at,
+          total_questions: totalQuestions,
+          questions_attempted: attemptedQuestions,
+          correct_answers: correctCount || 0,
+          wrong_answers: incorrectCount || 0,
+          unanswered_questions: unansweredCount || 0,
+          total_marks: maxScore,
+          marks_obtained: totalScore,
+          percentage,
+          time_taken_seconds: timeSpent,
+          accuracy,
+          rank,
+          passed: Boolean(a.passed),
+          status: a.status
+        });
+      }
+
+      const completedAttempts = attempts.filter(a => ['submitted', 'evaluated'].includes(a.status));
+      const totalAttempted = completedAttempts.length;
+
+      let avgScore = 0;
+      let highestScore = 0;
+      let lowestScore = 0;
+      let avgPercentage = 0;
+      let avgAccuracy = 0;
+      let totalQuestionsAttempted = 0;
+      let totalCorrect = 0;
+      let totalWrong = 0;
+      let totalUnanswered = 0;
+      let totalTimeSpent = 0;
+
+      if (totalAttempted > 0) {
+        const scores = completedAttempts.map(a => a.marks_obtained);
+        const pcts = completedAttempts.map(a => a.percentage);
+        const accs = completedAttempts.map(a => a.accuracy);
+
+        avgScore = parseFloat((scores.reduce((sum, s) => sum + s, 0) / totalAttempted).toFixed(2));
+        highestScore = Math.max(...scores);
+        lowestScore = Math.min(...scores);
+        avgPercentage = parseFloat((pcts.reduce((sum, p) => sum + p, 0) / totalAttempted).toFixed(2));
+        avgAccuracy = Math.round(accs.reduce((sum, ac) => sum + ac, 0) / totalAttempted);
+
+        totalCorrect = completedAttempts.reduce((sum, a) => sum + a.correct_answers, 0);
+        totalWrong = completedAttempts.reduce((sum, a) => sum + a.wrong_answers, 0);
+        totalUnanswered = completedAttempts.reduce((sum, a) => sum + a.unanswered_questions, 0);
+        totalQuestionsAttempted = totalCorrect + totalWrong;
+        totalTimeSpent = completedAttempts.reduce((sum, a) => sum + a.time_taken_seconds, 0);
+      }
+
+      const trend = [...completedAttempts]
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .map(a => ({
+          test_name: a.test_name,
+          date: a.date ? new Date(a.date).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '',
+          score: a.marks_obtained,
+          max_score: a.total_marks,
+          percentage: a.percentage,
+          accuracy: a.accuracy
+        }));
+
+      const allQ = totalCorrect + totalWrong + totalUnanswered;
+      const accuracyBreakdown = {
+        correct_count: totalCorrect,
+        wrong_count: totalWrong,
+        unanswered_count: totalUnanswered,
+        correct_percentage: allQ > 0 ? Math.round((totalCorrect / allQ) * 100) : 0,
+        wrong_percentage: allQ > 0 ? Math.round((totalWrong / allQ) * 100) : 0,
+        unanswered_percentage: allQ > 0 ? Math.round((totalUnanswered / allQ) * 100) : 0
+      };
+
+      const subjectMap = {};
+      completedAttempts.forEach(a => {
+        const sub = a.subject || 'General';
+        if (!subjectMap[sub]) {
+          subjectMap[sub] = {
+            subject: sub,
+            attempts_count: 0,
+            scores: [],
+            percentages: [],
+            correct: 0,
+            wrong: 0,
+            unanswered: 0
+          };
+        }
+        subjectMap[sub].attempts_count++;
+        subjectMap[sub].scores.push(a.marks_obtained);
+        subjectMap[sub].percentages.push(a.percentage);
+        subjectMap[sub].correct += a.correct_answers;
+        subjectMap[sub].wrong += a.wrong_answers;
+        subjectMap[sub].unanswered += a.unanswered_questions;
+      });
+
+      const subjects = Object.values(subjectMap).map(s => {
+        const attQ = s.correct + s.wrong;
+        const totalQ = attQ + s.unanswered;
+        const avgPct = s.percentages.length > 0 ? parseFloat((s.percentages.reduce((a, b) => a + b, 0) / s.percentages.length).toFixed(1)) : 0;
+        const acc = attQ > 0 ? Math.round((s.correct / attQ) * 100) : 0;
+        const avgSc = s.scores.length > 0 ? parseFloat((s.scores.reduce((a, b) => a + b, 0) / s.scores.length).toFixed(1)) : 0;
+        return {
+          subject: s.subject,
+          attempts_count: s.attempts_count,
+          average_score: avgSc,
+          average_percentage: avgPct,
+          accuracy: acc,
+          total_questions: totalQ,
+          questions_attempted: attQ,
+          correct_count: s.correct,
+          wrong_count: s.wrong
+        };
+      });
+
+      let bestSubject = null;
+      let weakestSubject = null;
+      if (subjects.length > 0) {
+        const sorted = [...subjects].sort((a, b) => b.average_percentage - a.average_percentage);
+        bestSubject = sorted[0];
+        weakestSubject = sorted[sorted.length - 1];
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          overall: {
+            total_mock_tests_attempted: totalAttempted,
+            average_score: avgScore,
+            highest_score: highestScore,
+            lowest_score: lowestScore,
+            average_percentage: avgPercentage,
+            average_accuracy: avgAccuracy,
+            total_questions_attempted: totalQuestionsAttempted,
+            total_correct: totalCorrect,
+            total_wrong: totalWrong,
+            total_unanswered: totalUnanswered,
+            total_time_spent_seconds: totalTimeSpent
+          },
+          trend,
+          accuracy_breakdown: accuracyBreakdown,
+          subjects,
+          best_subject: bestSubject,
+          weakest_subject: weakestSubject,
+          attempts
+        }
+      });
     } catch (err) {
       next(err);
     }

@@ -339,7 +339,161 @@ export const userRepository = {
   },
 
   async getStudents(filters = {}) {
-    return this.getAllUsers({ ...filters, role: 'STUDENT' });
+    const students = await this.getAllUsers({ ...filters, role: 'STUDENT' });
+    if (!students || students.length === 0) return [];
+
+    if (isPostgresConnected && pool) {
+      const studentIds = students.map(s => s.id);
+      try {
+        const enrollmentsRes = await pool.query(
+          `SELECT
+             be.student_id,
+             b.id as batch_id,
+             b.name as batch_name,
+             b.code as batch_code,
+             c.id as class_id,
+             c.name as class_name,
+             (
+               SELECT u.full_name
+               FROM teacher_assignments ta
+               JOIN users u ON ta.teacher_id = u.id
+               WHERE ta.batch_id = b.id
+               LIMIT 1
+             ) as teacher_name
+           FROM batch_enrollments be
+           JOIN batches b ON be.batch_id = b.id
+           LEFT JOIN classes c ON b.class_id = c.id
+           WHERE be.student_id = ANY($1::varchar[]) AND (be.status = 'active' OR be.status IS NULL)
+           UNION
+           SELECT
+             sce.student_id,
+             b.id as batch_id,
+             b.name as batch_name,
+             b.code as batch_code,
+             c.id as class_id,
+             c.name as class_name,
+             (
+               SELECT u.full_name
+               FROM teacher_assignments ta
+               JOIN users u ON ta.teacher_id = u.id
+               WHERE ta.batch_id = b.id
+               LIMIT 1
+             ) as teacher_name
+           FROM student_class_enrollments sce
+           JOIN classes c ON sce.class_id = c.id
+           LEFT JOIN batches b ON sce.batch_id = b.id
+           WHERE sce.student_id = ANY($1::varchar[])`,
+          [studentIds]
+        );
+
+        const studentEnrollMap = {};
+        for (const row of enrollmentsRes.rows) {
+          if (!studentEnrollMap[row.student_id]) {
+            studentEnrollMap[row.student_id] = [];
+          }
+          studentEnrollMap[row.student_id].push(row);
+        }
+
+        return students.map(s => {
+          const enrolls = studentEnrollMap[s.id] || [];
+          const batches = enrolls.filter(e => e.batch_id && e.batch_name).map(e => ({
+            id: e.batch_id,
+            name: e.batch_name,
+            code: e.batch_code,
+            class_name: e.class_name,
+            teacher_name: e.teacher_name
+          }));
+          const uniqueBatches = [];
+          const seenBatchIds = new Set();
+          for (const b of batches) {
+            if (!seenBatchIds.has(b.id)) {
+              seenBatchIds.add(b.id);
+              uniqueBatches.push(b);
+            }
+          }
+          const batchNames = uniqueBatches.map(b => b.name).join(', ');
+          const batchCodes = uniqueBatches.map(b => b.code).filter(Boolean).join(', ');
+          const teacherNames = Array.from(new Set(uniqueBatches.map(b => b.teacher_name).filter(Boolean))).join(', ');
+          const className = enrolls.map(e => e.class_name).filter(Boolean)[0] || s.class_name || null;
+          const classId = enrolls.map(e => e.class_id).filter(Boolean)[0] || s.class_id || null;
+
+          return {
+            ...s,
+            batches: uniqueBatches,
+            batch_id: uniqueBatches[0]?.id || null,
+            batch_name: batchNames || null,
+            batch_code: batchCodes || null,
+            teacher_name: teacherNames || null,
+            class_name: className,
+            class_id: classId
+          };
+        });
+      } catch (err) {
+        console.error('Error enriching students:', err);
+        return students;
+      }
+    }
+
+    // MemoryStore fallback
+    return students.map(s => {
+      const bEnrolls = (memoryStore.batch_enrollments || []).filter(be => be.student_id === s.id && (be.status === 'active' || !be.status));
+      const cEnrolls = (memoryStore.student_class_enrollments || []).filter(ce => ce.student_id === s.id);
+      const combinedBatches = [];
+      const seenIds = new Set();
+
+      for (const be of bEnrolls) {
+        const b = (memoryStore.batches || []).find(x => x.id === be.batch_id);
+        if (b && !seenIds.has(b.id)) {
+          seenIds.add(b.id);
+          const c = (memoryStore.classes || []).find(cls => cls.id === b.class_id);
+          const ta = (memoryStore.teacher_assignments || []).find(t => t.batch_id === b.id);
+          const teacher = ta ? (memoryStore.users || []).find(u => u.id === ta.teacher_id) : null;
+          combinedBatches.push({
+            id: b.id,
+            name: b.name,
+            code: b.code,
+            class_name: c?.name || null,
+            teacher_name: teacher?.full_name || null
+          });
+        }
+      }
+
+      for (const ce of cEnrolls) {
+        if (ce.batch_id && !seenIds.has(ce.batch_id)) {
+          seenIds.add(ce.batch_id);
+          const b = (memoryStore.batches || []).find(x => x.id === ce.batch_id);
+          const c = (memoryStore.classes || []).find(cls => cls.id === ce.class_id);
+          const ta = (memoryStore.teacher_assignments || []).find(t => t.batch_id === ce.batch_id);
+          const teacher = ta ? (memoryStore.users || []).find(u => u.id === ta.teacher_id) : null;
+          if (b) {
+            combinedBatches.push({
+              id: b.id,
+              name: b.name,
+              code: b.code,
+              class_name: c?.name || null,
+              teacher_name: teacher?.full_name || null
+            });
+          }
+        }
+      }
+
+      const batchNames = combinedBatches.map(b => b.name).join(', ');
+      const batchCodes = combinedBatches.map(b => b.code).filter(Boolean).join(', ');
+      const teacherNames = Array.from(new Set(combinedBatches.map(b => b.teacher_name).filter(Boolean))).join(', ');
+      const cEnroll = cEnrolls[0];
+      const cls = cEnroll ? (memoryStore.classes || []).find(c => c.id === cEnroll.class_id) : null;
+
+      return {
+        ...s,
+        batches: combinedBatches,
+        batch_id: combinedBatches[0]?.id || null,
+        batch_name: batchNames || null,
+        batch_code: batchCodes || null,
+        teacher_name: teacherNames || null,
+        class_name: cls?.name || s.class_name || null,
+        class_id: cls?.id || s.class_id || null
+      };
+    });
   },
 
   async getTeachers(filters = {}) {

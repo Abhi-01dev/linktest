@@ -439,6 +439,22 @@ function AppContent() {
                   }
                 />
                 <Route
+                  path="/admin/mock-tests/:id/analytics"
+                  element={
+                    <ProtectedRoute requiredRole="ADMIN">
+                      <AdminLayout><TeacherTestAnalyticsPage /></AdminLayout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/mock-tests/:id/analysis"
+                  element={
+                    <ProtectedRoute requiredRole="ADMIN">
+                      <AdminLayout><TeacherTestAnalyticsPage /></AdminLayout>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
                   path="/admin/question-bank"
                   element={
                     <ProtectedRoute requiredRole="ADMIN">

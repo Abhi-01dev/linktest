@@ -22,20 +22,33 @@ export const batchRepository = {
           c.title as course_title,
           cls.name as class_name,
           COALESCE(be.student_count, 0)::int as enrolled_count,
+          COALESCE(be.student_count, 0)::int as students_count,
+          COALESCE(bt.teacher_count, 0)::int as teacher_count,
           COALESCE(bt.teacher_count, 0)::int as teachers_count,
-          (b.capacity - COALESCE(be.student_count, 0))::int as available_capacity
+          bt.teacher_names,
+          GREATEST(0, (b.capacity - COALESCE(be.student_count, 0)))::int as available_capacity
         FROM batches b
         LEFT JOIN courses c ON b.course_id = c.id
         LEFT JOIN classes cls ON b.class_id = cls.id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as student_count
-          FROM batch_enrollments
-          WHERE status = 'active'
+          SELECT batch_id, COUNT(DISTINCT student_id)::int as student_count
+          FROM (
+            SELECT batch_id, student_id FROM batch_enrollments WHERE status = 'active' OR status IS NULL
+            UNION
+            SELECT batch_id, student_id FROM student_class_enrollments WHERE batch_id IS NOT NULL
+          ) all_s
           GROUP BY batch_id
         ) be ON b.id = be.batch_id
         LEFT JOIN (
-          SELECT batch_id, COUNT(*)::int as teacher_count
-          FROM batch_teachers
+          SELECT batch_id,
+                 COUNT(DISTINCT teacher_id)::int as teacher_count,
+                 STRING_AGG(DISTINCT u.full_name, ', ') as teacher_names
+          FROM (
+            SELECT batch_id, teacher_id FROM batch_teachers
+            UNION
+            SELECT batch_id, teacher_id FROM teacher_assignments WHERE batch_id IS NOT NULL
+          ) all_t
+          JOIN users u ON all_t.teacher_id = u.id
           GROUP BY batch_id
         ) bt ON b.id = bt.batch_id
         WHERE 1=1
@@ -99,17 +112,33 @@ export const batchRepository = {
     }
 
     return list.slice(offset, offset + limit).map(b => {
-      const course = memoryStore.courses.find(c => c.id === b.course_id);
-      const cls = memoryStore.classes.find(c => c.id === b.class_id);
-      const enrolled = (memoryStore.batch_enrollments || []).filter(e => e.batch_id === b.id && e.status === 'active').length;
-      const teachers = (memoryStore.batch_teachers || []).filter(t => t.batch_id === b.id).length;
+      const course = (memoryStore.courses || []).find(c => c.id === b.course_id);
+      const cls = (memoryStore.classes || []).find(c => c.id === b.class_id);
+      const enrolled = new Set([
+        ...(memoryStore.batch_enrollments || []).filter(e => e.batch_id === b.id && (e.status === 'active' || !e.status)).map(e => e.student_id),
+        ...(memoryStore.student_class_enrollments || []).filter(e => e.batch_id === b.id).map(e => e.student_id)
+      ]).size;
+
+      const teacherIds = new Set([
+        ...(memoryStore.batch_teachers || []).filter(t => t.batch_id === b.id).map(t => t.teacher_id),
+        ...(memoryStore.teacher_assignments || []).filter(t => t.batch_id === b.id).map(t => t.teacher_id)
+      ]);
+      const teachers = teacherIds.size;
+      const teacherNames = Array.from(teacherIds)
+        .map(tId => (memoryStore.users || []).find(u => u.id === tId)?.full_name)
+        .filter(Boolean)
+        .join(', ');
+
       return {
         ...b,
         course_title: course?.title || null,
         class_name: cls?.name || null,
         enrolled_count: enrolled,
+        students_count: enrolled,
+        teacher_count: teachers,
         teachers_count: teachers,
-        available_capacity: (b.capacity || 50) - enrolled
+        teacher_names: teacherNames || null,
+        available_capacity: Math.max(0, (b.capacity || 50) - enrolled)
       };
     });
   },
@@ -507,39 +536,67 @@ export const batchRepository = {
   async getBatchStudents(batchId) {
     if (isPostgresConnected && pool) {
       const query = `
-        SELECT
-          be.id as enrollment_id,
-          be.batch_id,
-          be.student_id,
-          be.status,
-          be.enrolled_at,
-          u.full_name,
-          u.email,
-          u.avatar_url,
-          u.phone,
-          sp.enrollment_number,
-          enroll_user.full_name as enrolled_by_name
-        FROM batch_enrollments be
-        JOIN users u ON be.student_id = u.id
-        LEFT JOIN student_profiles sp ON u.id = sp.user_id
-        LEFT JOIN users enroll_user ON be.enrolled_by = enroll_user.id
-        WHERE be.batch_id = $1 AND be.status = 'active'
-        ORDER BY be.enrolled_at DESC
+        SELECT DISTINCT ON (student_id)
+          enrollment_id, batch_id, student_id, status, enrolled_at,
+          full_name, email, avatar_url, phone, enrollment_number, enrolled_by_name
+        FROM (
+          SELECT
+            be.id as enrollment_id,
+            be.batch_id,
+            be.student_id,
+            COALESCE(be.status, 'active') as status,
+            be.enrolled_at,
+            u.full_name,
+            u.email,
+            u.avatar_url,
+            u.phone,
+            sp.enrollment_number,
+            enroll_user.full_name as enrolled_by_name
+          FROM batch_enrollments be
+          JOIN users u ON be.student_id = u.id
+          LEFT JOIN student_profiles sp ON u.id = sp.user_id
+          LEFT JOIN users enroll_user ON be.enrolled_by = enroll_user.id
+          WHERE be.batch_id = $1 AND (be.status = 'active' OR be.status IS NULL)
+          UNION ALL
+          SELECT
+            sce.id as enrollment_id,
+            sce.batch_id,
+            sce.student_id,
+            'active' as status,
+            sce.enrolled_at,
+            u.full_name,
+            u.email,
+            u.avatar_url,
+            u.phone,
+            sp.enrollment_number,
+            'System' as enrolled_by_name
+          FROM student_class_enrollments sce
+          JOIN users u ON sce.student_id = u.id
+          LEFT JOIN student_profiles sp ON u.id = sp.user_id
+          WHERE sce.batch_id = $1
+        ) combined
+        ORDER BY student_id, enrolled_at DESC
       `;
       const res = await pool.query(query, [batchId]);
       return res.rows;
     }
 
-    const enrolls = (memoryStore.batch_enrollments || []).filter(be => be.batch_id === batchId && be.status === 'active');
-    return enrolls.map(be => {
-      const u = memoryStore.users.find(user => user.id === be.student_id);
+    const bEnrolls = (memoryStore.batch_enrollments || []).filter(be => be.batch_id === batchId && (be.status === 'active' || !be.status));
+    const cEnrolls = (memoryStore.student_class_enrollments || []).filter(ce => ce.batch_id === batchId);
+    const seenStudentIds = new Set();
+    const result = [];
+
+    for (const be of bEnrolls) {
+      if (seenStudentIds.has(be.student_id)) continue;
+      seenStudentIds.add(be.student_id);
+      const u = (memoryStore.users || []).find(user => user.id === be.student_id);
       const sp = (memoryStore.student_profiles || []).find(p => p.user_id === be.student_id);
-      const enroller = memoryStore.users.find(user => user.id === be.enrolled_by);
-      return {
+      const enroller = (memoryStore.users || []).find(user => user.id === be.enrolled_by);
+      result.push({
         enrollment_id: be.id,
         batch_id: be.batch_id,
         student_id: be.student_id,
-        status: be.status,
+        status: be.status || 'active',
         enrolled_at: be.enrolled_at,
         full_name: u?.full_name || 'Student',
         email: u?.email || '',
@@ -548,8 +605,31 @@ export const batchRepository = {
         enrollment_number: sp?.enrollment_number || null,
         roll_number: sp?.roll_number || null,
         enrolled_by_name: enroller?.full_name || 'Staff'
-      };
-    });
+      });
+    }
+
+    for (const ce of cEnrolls) {
+      if (seenStudentIds.has(ce.student_id)) continue;
+      seenStudentIds.add(ce.student_id);
+      const u = (memoryStore.users || []).find(user => user.id === ce.student_id);
+      const sp = (memoryStore.student_profiles || []).find(p => p.user_id === ce.student_id);
+      result.push({
+        enrollment_id: ce.id,
+        batch_id: ce.batch_id,
+        student_id: ce.student_id,
+        status: 'active',
+        enrolled_at: ce.enrolled_at,
+        full_name: u?.full_name || 'Student',
+        email: u?.email || '',
+        avatar_url: u?.avatar_url || null,
+        phone: u?.phone || null,
+        enrollment_number: sp?.enrollment_number || null,
+        roll_number: sp?.roll_number || null,
+        enrolled_by_name: 'System'
+      });
+    }
+
+    return result;
   },
 
   async enrollStudentsBulkInBatch({ batchId, studentIds, enrolledBy }) {

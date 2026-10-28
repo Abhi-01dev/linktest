@@ -794,7 +794,8 @@ export function AdminBatchesPage() {
                         FACULTY ALLOCATED
                       </span>
                       <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155' }}>
-                        {batch.teacher_count || 0} Faculty Mentor(s)
+                        {batch.teacher_count || batch.teachers_count || 0} Faculty Mentor(s)
+                        {batch.teacher_names ? ` (${batch.teacher_names})` : ''}
                       </span>
                     </div>
                   </div>
@@ -861,7 +862,7 @@ export function AdminBatchesPage() {
                     }}
                   >
                     <GraduationCap size={15} />
-                    <span>Faculty ({batch.teacher_count || 0})</span>
+                    <span>Faculty ({batch.teacher_count || batch.teachers_count || 0})</span>
                   </button>
 
                   <button

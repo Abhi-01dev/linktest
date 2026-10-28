@@ -95,15 +95,16 @@ export function AdminStudentsPage() {
   };
 
   const exportCSV = () => {
-    const headers = ['ID', 'Full Name', 'Email', 'Role', 'Status', 'Class', 'Created At'];
+    const headers = ['Student ID', 'Student Name', 'Email', 'Batch(es)', 'Batch Code', 'Teacher', 'Status', 'Created At'];
     const rows = filteredStudents.map(s => [
-      s.id,
+      `"${s.id}"`,
       `"${s.full_name}"`,
-      s.email,
-      s.role,
-      s.status,
-      `"${s.class_name || 'Unassigned'}"`,
-      s.created_at
+      `"${s.email}"`,
+      `"${s.batch_name || 'Unassigned'}"`,
+      `"${s.batch_code || '—'}"`,
+      `"${s.teacher_name || '—'}"`,
+      `"${s.status}"`,
+      `"${s.created_at}"`
     ]);
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
@@ -116,10 +117,15 @@ export function AdminStudentsPage() {
   };
 
   const filteredStudents = students.filter(s => {
-    const matchesSearch = s.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-                          s.email?.toLowerCase().includes(search.toLowerCase());
+    const q = search.toLowerCase();
+    const matchesSearch = !search ||
+                          s.full_name?.toLowerCase().includes(q) ||
+                          s.email?.toLowerCase().includes(q) ||
+                          s.id?.toLowerCase().includes(q) ||
+                          s.batch_name?.toLowerCase().includes(q) ||
+                          s.batch_code?.toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'ALL' || s.status === statusFilter;
-    const matchesClass = classFilter === 'ALL' || s.class_id === classFilter;
+    const matchesClass = classFilter === 'ALL' || s.class_id === classFilter || s.batches?.some(b => b.class_id === classFilter);
     return matchesSearch && matchesStatus && matchesClass;
   });
 
@@ -196,41 +202,73 @@ export function AdminStudentsPage() {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
               <thead>
-                <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontWeight: 600 }}>
-                  <th style={{ padding: '0.85rem 1.25rem' }}>Student Name</th>
-                  <th style={{ padding: '0.85rem 1.25rem' }}>Email Address</th>
-                  <th style={{ padding: '0.85rem 1.25rem' }}>Enrolled Class</th>
-                  <th style={{ padding: '0.85rem 1.25rem' }}>Status</th>
-                  <th style={{ padding: '0.85rem 1.25rem' }}>Joined Date</th>
-                  <th style={{ padding: '0.85rem 1.25rem', textAlign: 'right' }}>Actions</th>
+                <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontWeight: 600, fontSize: '0.78rem', textTransform: 'uppercase' }}>
+                  <th style={{ padding: '0.85rem 1rem' }}>Student Name</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Email</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Student ID</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Batch(es)</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Batch Code</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Teacher</th>
+                  <th style={{ padding: '0.85rem 1rem' }}>Status</th>
+                  <th style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredStudents.map((student) => (
                   <tr key={student.id} style={{ borderBottom: '1px solid #F1F5F9', transition: 'background 0.15s ease' }}>
-                    <td style={{ padding: '0.85rem 1.25rem', fontWeight: 600, color: '#0F172A' }}>
+                    <td style={{ padding: '0.85rem 1rem', fontWeight: 600, color: '#0F172A' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                         <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(37, 99, 235, 0.1)', color: '#2563EB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.8rem' }}>
                           {student.full_name?.charAt(0)}
                         </div>
                         <div>
                           <div>{student.full_name}</div>
-                          <div style={{ fontSize: '0.75rem', color: '#64748B' }}>ID: {student.id.slice(0, 8)}</div>
+                          <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
+                            Joined {new Date(student.created_at).toLocaleDateString()}
+                          </div>
                         </div>
                       </div>
                     </td>
-                    <td style={{ padding: '0.85rem 1.25rem', color: '#475569' }}>{student.email}</td>
-                    <td style={{ padding: '0.85rem 1.25rem' }}>
-                      {student.class_name ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.6rem', background: '#EFF6FF', color: '#1D4ED8', borderRadius: '4px', fontSize: '0.78rem', fontWeight: 600 }}>
-                          <GraduationCap size={13} />
-                          {student.class_name} {student.batch_name ? `(${student.batch_name})` : ''}
+                    <td style={{ padding: '0.85rem 1rem', color: '#475569' }}>{student.email}</td>
+                    <td style={{ padding: '0.85rem 1rem', fontFamily: 'monospace', fontSize: '0.8rem', color: '#64748B' }}>
+                      {student.id.slice(0, 10)}
+                    </td>
+                    <td style={{ padding: '0.85rem 1rem' }}>
+                      {student.batches && student.batches.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                          {student.batches.map(b => (
+                            <span key={b.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0.5rem', background: '#EFF6FF', color: '#1D4ED8', borderRadius: '4px', fontSize: '0.76rem', fontWeight: 600 }}>
+                              <GraduationCap size={12} />
+                              {b.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : student.batch_name ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0.5rem', background: '#EFF6FF', color: '#1D4ED8', borderRadius: '4px', fontSize: '0.76rem', fontWeight: 600 }}>
+                          <GraduationCap size={12} />
+                          {student.batch_name}
                         </span>
                       ) : (
                         <span style={{ color: '#94A3B8', fontSize: '0.8rem', fontStyle: 'italic' }}>Unassigned</span>
                       )}
                     </td>
-                    <td style={{ padding: '0.85rem 1.25rem' }}>
+                    <td style={{ padding: '0.85rem 1rem' }}>
+                      {student.batch_code ? (
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.78rem', background: '#F1F5F9', padding: '0.2rem 0.45rem', borderRadius: '4px', fontWeight: 600, color: '#334155' }}>
+                          {student.batch_code}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#94A3B8' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '0.85rem 1rem', color: '#334155', fontSize: '0.84rem' }}>
+                      {student.teacher_name ? (
+                        <span style={{ fontWeight: 600 }}>{student.teacher_name}</span>
+                      ) : (
+                        <span style={{ color: '#94A3B8' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '0.85rem 1rem' }}>
                       <span style={{
                         padding: '0.25rem 0.65rem',
                         borderRadius: '999px',
@@ -242,9 +280,6 @@ export function AdminStudentsPage() {
                       }}>
                         {student.status || 'active'}
                       </span>
-                    </td>
-                    <td style={{ padding: '0.85rem 1.25rem', color: '#64748B', fontSize: '0.8rem' }}>
-                      {new Date(student.created_at).toLocaleDateString()}
                     </td>
                     <td style={{ padding: '0.85rem 1.25rem', textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>

@@ -238,7 +238,7 @@ export function AdminMockTestsPage() {
                     <td style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
                         <Link
-                          to={`/teacher/mock-tests/${t.id}/analytics`}
+                          to={`/admin/mock-tests/${t.id}/analytics`}
                           className="btn btn-secondary"
                           style={{ fontSize: '0.76rem', padding: '0.35rem 0.65rem' }}
                         >

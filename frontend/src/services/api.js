@@ -924,6 +924,11 @@ class ApiClient {
     return res.data;
   }
 
+  async getStudentProgress() {
+    const res = await this.request('/student/progress');
+    return res.data;
+  }
+
   async getStudentMaterials() {
     const res = await this.request('/student/materials');
     return res.data;

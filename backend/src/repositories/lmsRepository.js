@@ -635,21 +635,34 @@ export const lmsRepository = {
   async getClassesForStudent(studentId) {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
-        `SELECT c.*, b.name as batch_name, sce.batch_id FROM student_class_enrollments sce
-         JOIN classes c ON sce.class_id = c.id
-         LEFT JOIN batches b ON sce.batch_id = b.id
-         WHERE sce.student_id = $1`,
+        `SELECT DISTINCT c.*, b.name as batch_name, COALESCE(sce.batch_id, be.batch_id) as batch_id
+         FROM classes c
+         LEFT JOIN student_class_enrollments sce ON sce.class_id = c.id AND sce.student_id = $1
+         LEFT JOIN batches b ON b.class_id = c.id
+         LEFT JOIN batch_enrollments be ON be.batch_id = b.id AND be.student_id = $1 AND (be.status = 'active' OR be.status IS NULL)
+         WHERE sce.student_id = $1 OR be.student_id = $1`,
         [studentId]
       );
       return res.rows;
     }
-    return memoryStore.student_class_enrollments
-      .filter(e => e.student_id === studentId)
-      .map(e => {
-        const cls = memoryStore.classes.find(c => c.id === e.class_id);
-        const batch = memoryStore.batches.find(b => b.id === e.batch_id);
-        return cls ? { ...cls, batch_id: e.batch_id, batch_name: batch?.name } : null;
-      }).filter(Boolean);
+    const studentClassEnrollments = (memoryStore.student_class_enrollments || []).filter(e => e.student_id === studentId);
+    const studentBatchEnrollments = (memoryStore.batch_enrollments || []).filter(e => e.student_id === studentId && (e.status === 'active' || !e.status));
+    const batchClassIds = new Set(
+      studentBatchEnrollments.map(be => (memoryStore.batches || []).find(b => b.id === be.batch_id)?.class_id).filter(Boolean)
+    );
+    const allClasses = (memoryStore.classes || []).filter(c =>
+      studentClassEnrollments.some(e => e.class_id === c.id) || batchClassIds.has(c.id)
+    );
+    return allClasses.map(c => {
+      const sce = studentClassEnrollments.find(e => e.class_id === c.id);
+      const sbe = studentBatchEnrollments.find(be => {
+        const b = (memoryStore.batches || []).find(x => x.id === be.batch_id);
+        return b?.class_id === c.id;
+      });
+      const batchId = sce?.batch_id || sbe?.batch_id;
+      const batch = (memoryStore.batches || []).find(b => b.id === batchId);
+      return { ...c, batch_id: batchId, batch_name: batch?.name };
+    });
   },
 
   // ============================================================
@@ -1045,7 +1058,7 @@ export const lmsRepository = {
   // ============================================================
   // STUDY MATERIALS
   // ============================================================
-  async getMaterials({ subjectId, classId, courseId, uploadedBy, published } = {}) {
+  async getMaterials({ subjectId, classId, classIds, courseId, courseIds, uploadedBy, published, studentAccess } = {}) {
     if (isPostgresConnected && pool) {
       let where = 'WHERE 1=1';
       const params = [];
@@ -1054,6 +1067,30 @@ export const lmsRepository = {
       if (courseId) { params.push(courseId); where += ` AND sm.course_id = $${params.length}`; }
       if (uploadedBy) { params.push(uploadedBy); where += ` AND sm.uploaded_by = $${params.length}`; }
       if (published !== undefined) { params.push(published); where += ` AND sm.published = $${params.length}`; }
+
+      if (studentAccess) {
+        const cIds = Array.isArray(studentAccess.classIds) ? studentAccess.classIds.filter(Boolean) : [];
+        const crsIds = Array.isArray(studentAccess.courseIds) ? studentAccess.courseIds.filter(Boolean) : [];
+        params.push(cIds);
+        const pClass = params.length;
+        params.push(crsIds);
+        const pCourse = params.length;
+        where += ` AND (
+          (sm.class_id IS NULL AND sm.course_id IS NULL)
+          OR (cardinality($${pClass}::varchar[]) > 0 AND sm.class_id = ANY($${pClass}::varchar[]))
+          OR (cardinality($${pCourse}::varchar[]) > 0 AND sm.course_id = ANY($${pCourse}::varchar[]))
+        )`;
+      } else {
+        if (Array.isArray(classIds) && classIds.length > 0) {
+          params.push(classIds);
+          where += ` AND (sm.class_id = ANY($${params.length}::varchar[]) OR sm.class_id IS NULL)`;
+        }
+        if (Array.isArray(courseIds) && courseIds.length > 0) {
+          params.push(courseIds);
+          where += ` AND (sm.course_id = ANY($${params.length}::varchar[]) OR sm.course_id IS NULL)`;
+        }
+      }
+
       const res = await pool.query(
         `SELECT sm.*, u.full_name as uploader_name, s.name as subject_name, c.name as class_name
          FROM study_materials sm
@@ -1065,36 +1102,58 @@ export const lmsRepository = {
       );
       return res.rows;
     }
-    let mats = [...memoryStore.study_materials];
+    let mats = [...(memoryStore.study_materials || [])];
     if (subjectId) mats = mats.filter(m => m.subject_id === subjectId);
     if (classId) mats = mats.filter(m => m.class_id === classId);
     if (courseId) mats = mats.filter(m => m.course_id === courseId);
     if (uploadedBy) mats = mats.filter(m => m.uploaded_by === uploadedBy);
     if (published !== undefined) mats = mats.filter(m => m.published === published);
+
+    if (studentAccess) {
+      const cSet = new Set(Array.isArray(studentAccess.classIds) ? studentAccess.classIds.filter(Boolean) : []);
+      const crsSet = new Set(Array.isArray(studentAccess.courseIds) ? studentAccess.courseIds.filter(Boolean) : []);
+      mats = mats.filter(m => {
+        if (!m.class_id && !m.course_id) return true;
+        if (m.class_id && cSet.has(m.class_id)) return true;
+        if (m.course_id && crsSet.has(m.course_id)) return true;
+        return false;
+      });
+    } else {
+      if (Array.isArray(classIds) && classIds.length > 0) {
+        const cSet = new Set(classIds);
+        mats = mats.filter(m => !m.class_id || cSet.has(m.class_id));
+      }
+      if (Array.isArray(courseIds) && courseIds.length > 0) {
+        const coSet = new Set(courseIds);
+        mats = mats.filter(m => !m.course_id || coSet.has(m.course_id));
+      }
+    }
     return mats.map(m => {
-      const user = memoryStore.users.find(u => u.id === m.uploaded_by);
-      const subject = memoryStore.subjects.find(s => s.id === m.subject_id);
-      const cls = memoryStore.classes.find(c => c.id === m.class_id);
+      const user = (memoryStore.users || []).find(u => u.id === m.uploaded_by);
+      const subject = (memoryStore.subjects || []).find(s => s.id === m.subject_id);
+      const cls = (memoryStore.classes || []).find(c => c.id === m.class_id);
       return { ...m, uploader_name: user?.full_name, subject_name: subject?.name, class_name: cls?.name };
     }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   },
 
-  async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, courseId, lessonId, uploadedBy }) {
+  async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, courseId, lessonId, uploadedBy, published = true }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const normalizedSubjectId = sanitizeOptionalString(subjectId);
     const normalizedClassId = sanitizeOptionalString(classId);
     const normalizedCourseId = sanitizeOptionalString(courseId);
     const normalizedLessonId = sanitizeOptionalString(lessonId);
+    const isPublished = published !== false;
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO study_materials (id, title, description, type, file_path, file_name, file_size, external_url, subject_id, class_id, course_id, lesson_id, uploaded_by, published, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false,$14,$14) RETURNING *`,
-        [id, title, description || null, type || 'document', filePath || null, fileName || null, fileSize || null, externalUrl || null, normalizedSubjectId, normalizedClassId, normalizedCourseId, normalizedLessonId, uploadedBy, now]
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15) RETURNING *`,
+        [id, title, description || null, type || 'document', filePath || null, fileName || null, fileSize || null, externalUrl || null, normalizedSubjectId, normalizedClassId, normalizedCourseId, normalizedLessonId, uploadedBy, isPublished, now]
       );
       return res.rows[0];
     }
-    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: normalizedSubjectId, class_id: normalizedClassId, course_id: normalizedCourseId, lesson_id: normalizedLessonId, uploaded_by: uploadedBy, published: false, created_at: now, updated_at: now };
+    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: normalizedSubjectId, class_id: normalizedClassId, course_id: normalizedCourseId, lesson_id: normalizedLessonId, uploaded_by: uploadedBy, published: isPublished, created_at: now, updated_at: now };
+    if (!memoryStore.study_materials) memoryStore.study_materials = [];
     memoryStore.study_materials.push(mat);
     return mat;
   },

@@ -1662,9 +1662,17 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
     const objMax = testQuestions.filter(q => objectiveQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
     const manualMax = testQuestions.filter(q => manualQIds.has(q.id)).reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
 
+    const allResponsesByQuestion = {};
     const candidates = await Promise.all(attempts.map(async a => {
       const fullAttempt = await mockTestRepository.getAttemptById(a.id);
       const responses = fullAttempt?.responses || [];
+
+      responses.forEach(r => {
+        if (!allResponsesByQuestion[r.question_id]) {
+          allResponsesByQuestion[r.question_id] = [];
+        }
+        allResponsesByQuestion[r.question_id].push(r);
+      });
 
       let objScore = 0;
       let manScore = 0;
@@ -1685,6 +1693,18 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
         manualStatus = (pendingCount > 0 || a.result_status === 'PENDING_EVALUATION' || (a.status === 'submitted' && a.result_status !== 'EVALUATED' && a.result_status !== 'RELEASED')) ? 'Pending' : 'Evaluated';
       }
 
+      const correctCount = a.correct_count !== null && a.correct_count !== undefined 
+        ? a.correct_count 
+        : responses.filter(r => r.is_correct === true).length;
+      const incorrectCount = a.incorrect_count !== null && a.incorrect_count !== undefined
+        ? a.incorrect_count
+        : responses.filter(r => r.is_correct === false).length;
+      const unansweredCount = a.unanswered_count !== null && a.unanswered_count !== undefined
+        ? a.unanswered_count
+        : Math.max(0, testQuestions.length - responses.length);
+      const attemptedCount = correctCount + incorrectCount;
+      const accuracy = attemptedCount > 0 ? Math.round((correctCount / attemptedCount) * 100) : 0;
+
       return {
         attempt_id: a.id,
         student_id: a.student_id,
@@ -1698,6 +1718,12 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
         manual_max_score: manualMax,
         manual_status: manualStatus,
         percentage: parseFloat(a.percentage || 0),
+        correct_count: correctCount,
+        incorrect_count: incorrectCount,
+        wrong_count: incorrectCount,
+        unanswered_count: unansweredCount,
+        accuracy,
+        time_spent_seconds: a.time_spent_seconds || 0,
         passed: a.passed,
         status: a.status,
         result_status: a.result_status || (manualStatus === 'Pending' ? 'PENDING_EVALUATION' : 'EVALUATED'),
@@ -1708,22 +1734,60 @@ Respond ONLY with a valid JSON object adhering strictly to this schema:
       };
     }));
 
+    // Question-level analysis
+    const questionAnalysis = testQuestions.map(q => {
+      const qResponses = allResponsesByQuestion[q.id] || [];
+      const totalQAttempts = qResponses.length;
+      const correctAnswers = qResponses.filter(r => r.is_correct === true).length;
+      const wrongAnswers = qResponses.filter(r => r.is_correct === false).length;
+      const skipped = Math.max(0, completed.length - totalQAttempts);
+      const correctPct = totalQAttempts > 0 ? Math.round((correctAnswers / totalQAttempts) * 100) : 0;
+      const difficulty = correctPct >= 70 ? 'Easy' : correctPct >= 40 ? 'Medium' : 'Hard';
+
+      return {
+        question_id: q.id,
+        question_text: q.question_text || ('Question ' + (q.order_index || '')),
+        question_type: q.question_type,
+        marks: parseFloat(q.marks || 1),
+        subject: q.subject || test.subject || 'General',
+        total_attempts: totalQAttempts,
+        correct_answers: correctAnswers,
+        wrong_answers: wrongAnswers,
+        skipped,
+        correct_percentage: correctPct,
+        difficulty
+      };
+    });
+
+    const candidateAccuracies = candidates.filter(c => ['submitted', 'evaluated'].includes(c.status)).map(c => c.accuracy);
+    const avgAccuracy = candidateAccuracies.length > 0 ? Math.round(candidateAccuracies.reduce((a, b) => a + b, 0) / candidateAccuracies.length) : 0;
+    const avgPct = completed.length > 0 ? parseFloat((completed.map(a => parseFloat(a.percentage || 0)).reduce((a, b) => a + b, 0) / completed.length).toFixed(1)) : 0;
+    const completionRate = attempts.length > 0 ? parseFloat(((completed.length / attempts.length) * 100).toFixed(1)) : 0;
+
     return {
       test_id: test.id,
       title: test.title,
+      description: test.description || '',
       subject: test.subject,
       total_marks: test.total_marks,
+      duration_minutes: test.duration_minutes || 60,
+      total_questions: testQuestions.length,
+      pass_percentage: test.pass_percentage || 40,
       total_candidates: totalCandidates,
       total_attempts: attempts.length,
       completed_attempts: completed.length,
+      completion_rate_percentage: completionRate,
       average_score: avgScore,
+      average_percentage: avgPct,
+      average_accuracy: avgAccuracy,
       highest_score: maxScore,
       lowest_score: minScore,
       pass_count: passCount,
       pass_rate_percentage: passRate,
       flagged_proctoring_count: flaggedAttempts.length,
       score_distribution: distribution,
-      candidates
+      candidates,
+      question_analysis: questionAnalysis
     };
   }
 };

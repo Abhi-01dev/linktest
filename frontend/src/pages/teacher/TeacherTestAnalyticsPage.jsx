@@ -1,9 +1,10 @@
-// Teacher Mock Test Analytics & Candidate Performance Dashboard
+// Teacher & Admin Mock Test Analytics & Candidate Performance Dashboard
 // LinkTest Enterprise Examination Studio
 
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import {
   BarChart,
   Bar,
@@ -23,17 +24,26 @@ import {
   CheckCircle,
   Eye,
   Send,
-  Download
+  Download,
+  Target,
+  Clock,
+  HelpCircle,
+  BarChart2
 } from 'lucide-react';
 
 export function TeacherTestAnalyticsPage() {
   const { id } = useParams();
+  const { user } = useAuth();
 
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [releasing, setReleasing] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
+
+  const isAdmin = user?.role === 'ADMIN';
+  const backRoute = isAdmin ? '/admin/mock-tests' : '/teacher/mock-tests';
+  const backLabel = isAdmin ? 'Back to Mock Tests' : 'Back to Mock Tests Studio';
 
   const loadAnalytics = async () => {
     try {
@@ -86,6 +96,18 @@ export function TeacherTestAnalyticsPage() {
     }
   };
 
+  const formatSeconds = (sec) => {
+    if (!sec || sec <= 0) return '0m';
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    if (m >= 60) {
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      return `${h}h ${remM}m`;
+    }
+    return `${m}m ${s > 0 ? `${s}s` : ''}`.trim();
+  };
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '6rem' }}>
@@ -101,8 +123,8 @@ export function TeacherTestAnalyticsPage() {
         <div style={{ background: '#FEF2F2', border: '1px solid #EF4444', color: '#DC2626', padding: '1.5rem', borderRadius: '8px' }}>
           <h3>Analytics Error</h3>
           <p>{error || 'Analytics not available.'}</p>
-          <Link to="/teacher/mock-tests" className="btn btn-secondary" style={{ marginTop: '1rem' }}>
-            Back to Mock Tests
+          <Link to={backRoute} className="btn btn-secondary" style={{ marginTop: '1rem' }}>
+            {backLabel}
           </Link>
         </div>
       </div>
@@ -110,11 +132,11 @@ export function TeacherTestAnalyticsPage() {
   }
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
+    <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Top Header */}
       <div style={{ marginBottom: '1.75rem' }}>
         <Link
-          to="/teacher/mock-tests"
+          to={backRoute}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -126,7 +148,7 @@ export function TeacherTestAnalyticsPage() {
           }}
         >
           <ArrowLeft size={16} />
-          <span>Back to Mock Tests Studio</span>
+          <span>{backLabel}</span>
         </Link>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
@@ -134,11 +156,13 @@ export function TeacherTestAnalyticsPage() {
             <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#2563EB', textTransform: 'uppercase' }}>
               ASSESSMENT PERFORMANCE & PROCTORING AUDIT
             </div>
-            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-navy)', margin: '0.2rem 0' }}>
+            <h1 style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--color-navy)', margin: '0.2rem 0' }}>
               {analytics.title}
             </h1>
             <div style={{ fontSize: '0.88rem', color: 'var(--color-text-secondary)' }}>
               Subject: <strong>{analytics.subject}</strong> • Max Score: <strong>{analytics.total_marks} Marks</strong>
+              {analytics.duration_minutes ? ` • Duration: ${analytics.duration_minutes} Mins` : ''}
+              {analytics.total_questions ? ` • Total Questions: ${analytics.total_questions}` : ''}
             </div>
           </div>
 
@@ -181,7 +205,9 @@ export function TeacherTestAnalyticsPage() {
           <div style={{ fontSize: '1.8rem', fontWeight: 900, color: 'var(--color-navy)', marginTop: '0.3rem' }}>
             {analytics.total_candidates}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#64748B' }}>Total enrolled submissions</div>
+          <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
+            {analytics.completed_attempts || 0} completed ({analytics.completion_rate_percentage || 0}%)
+          </div>
         </div>
 
         <div style={{ background: '#FFFFFF', padding: '1.25rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
@@ -198,12 +224,23 @@ export function TeacherTestAnalyticsPage() {
         <div style={{ background: '#FFFFFF', padding: '1.25rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#64748B', fontSize: '0.8rem', fontWeight: 700 }}>
             <TrendingUp size={16} style={{ color: '#10B981' }} />
-            <span>PASS PERCENTAGE</span>
+            <span>PASS RATE</span>
           </div>
           <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#059669', marginTop: '0.3rem' }}>
             {analytics.pass_rate_percentage}%
           </div>
           <div style={{ fontSize: '0.75rem', color: '#64748B' }}>{analytics.pass_count} passed cutoff</div>
+        </div>
+
+        <div style={{ background: '#FFFFFF', padding: '1.25rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#64748B', fontSize: '0.8rem', fontWeight: 700 }}>
+            <Target size={16} style={{ color: '#8B5CF6' }} />
+            <span>AVG ACCURACY</span>
+          </div>
+          <div style={{ fontSize: '1.8rem', fontWeight: 900, color: '#7C3AED', marginTop: '0.3rem' }}>
+            {analytics.average_accuracy || 0}%
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#64748B' }}>Candidate question precision</div>
         </div>
 
         <div style={{ background: '#FFFFFF', padding: '1.25rem', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
@@ -231,7 +268,7 @@ export function TeacherTestAnalyticsPage() {
           Candidate Score Distribution
         </h3>
 
-        <div style={{ height: '240px', width: '100%' }}>
+        <div style={{ height: '220px', width: '100%' }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={analytics.score_distribution}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
@@ -247,21 +284,22 @@ export function TeacherTestAnalyticsPage() {
         </div>
       </div>
 
-      {/* Candidate Submissions Roster */}
+      {/* Candidate Performance Table */}
       <div style={{
         background: '#FFFFFF',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--color-border)',
         boxShadow: 'var(--shadow-sm)',
-        padding: '1.5rem'
+        padding: '1.5rem',
+        marginBottom: '2rem'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-navy)', margin: 0 }}>
-              Candidate Attempts & Evaluation Roster ({analytics.candidates?.length || 0})
+              Candidate Performance & Evaluation Roster ({analytics.candidates?.length || 0})
             </h3>
             <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: '#64748B' }}>
-              Evaluate pending long-answer and coding responses, then release individual results to candidates.
+              Full evaluation breakdown including objective and subjective scores, question accuracy, and proctoring audit.
             </p>
           </div>
           <button
@@ -281,17 +319,18 @@ export function TeacherTestAnalyticsPage() {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.86rem' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontSize: '0.74rem', textTransform: 'uppercase' }}>
+                <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontSize: '0.74rem', textTransform: 'uppercase', background: '#F8FAFC' }}>
                   <th style={{ padding: '0.75rem 0.85rem' }}>Student</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Batch</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Submission Time</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Objective Score</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Manual Eval</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Total Score</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Score</th>
                   <th style={{ padding: '0.75rem 0.85rem' }}>Percentage</th>
-                  <th style={{ padding: '0.75rem 0.85rem' }}>Result Status</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Correct</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Wrong</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Unanswered</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Accuracy</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Time Taken</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Status</th>
                   <th style={{ padding: '0.75rem 0.85rem', textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
@@ -306,40 +345,32 @@ export function TeacherTestAnalyticsPage() {
                         <div style={{ fontSize: '0.74rem', color: '#64748B' }}>{c.student_email}</div>
                       </td>
 
-                      <td style={{ padding: '0.75rem 0.85rem', color: '#334155' }}>
-                        <span style={{ background: '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.76rem', fontWeight: 600 }}>
-                          {c.batch_name || analytics.test?.batch_name || 'Enrolled'}
-                        </span>
-                      </td>
-
-                      <td style={{ padding: '0.75rem 0.85rem', fontSize: '0.78rem', color: '#64748B' }}>
-                        {c.submitted_at ? new Date(c.submitted_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : 'In Progress'}
-                      </td>
-
-                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#2563EB' }}>
-                        {c.objective_score !== undefined ? `${c.objective_score} / ${c.objective_max_score}` : `${c.score} / ${analytics.total_marks}`}
-                      </td>
-
-                      <td style={{ padding: '0.75rem 0.85rem' }}>
-                        {c.manual_status === 'Pending' ? (
-                          <span style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '999px', background: '#FEF3C7', color: '#B45309' }}>
-                            Pending
-                          </span>
-                        ) : c.manual_status === 'Evaluated' ? (
-                          <span style={{ fontSize: '0.74rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '999px', background: '#EFF6FF', color: '#1D4ED8' }}>
-                            {c.manual_score} / {c.manual_max_score}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '0.74rem', color: '#94A3B8' }}>None</span>
-                        )}
-                      </td>
-
-                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: 'var(--color-navy)' }}>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#2563EB', whiteSpace: 'nowrap' }}>
                         {isManualPending ? '—' : `${c.score} / ${analytics.total_marks}`}
                       </td>
 
-                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 600 }}>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700 }}>
                         {isManualPending ? '—' : `${c.percentage}%`}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#059669' }}>
+                        {c.correct_count ?? '—'}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#DC2626' }}>
+                        {c.wrong_count ?? c.incorrect_count ?? '—'}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', color: '#94A3B8' }}>
+                        {c.unanswered_count ?? '—'}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#7C3AED' }}>
+                        {c.accuracy !== undefined ? `${c.accuracy}%` : '—'}
+                      </td>
+
+                      <td style={{ padding: '0.75rem 0.85rem', color: '#64748B', whiteSpace: 'nowrap' }}>
+                        {formatSeconds(c.time_spent_seconds)}
                       </td>
 
                       <td style={{ padding: '0.75rem 0.85rem' }}>
@@ -384,7 +415,7 @@ export function TeacherTestAnalyticsPage() {
                                 color: isManualPending ? '#94A3B8' : '#FFFFFF'
                               }}
                             >
-                              Release Result
+                              Release
                             </button>
                           )}
                         </div>
@@ -397,7 +428,112 @@ export function TeacherTestAnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Question Analysis Section */}
+      <div style={{
+        background: '#FFFFFF',
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border)',
+        boxShadow: 'var(--shadow-sm)',
+        padding: '1.5rem'
+      }}>
+        <div style={{ marginBottom: '1.25rem' }}>
+          <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--color-navy)', margin: 0 }}>
+            Question-by-Question Analysis ({analytics.question_analysis?.length || 0})
+          </h3>
+          <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: '#64748B' }}>
+            Detailed breakdown of candidate attempts, success rates, and calculated difficulty index per question.
+          </p>
+        </div>
+
+        {(!analytics.question_analysis || analytics.question_analysis.length === 0) ? (
+          <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#64748B' }}>
+            No question analysis data available for this examination.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ borderBottom: '2px solid #E2E8F0', color: '#64748B', fontSize: '0.74rem', textTransform: 'uppercase', background: '#F8FAFC' }}>
+                  <th style={{ padding: '0.75rem 0.85rem', width: '50px' }}>#</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Question</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Type & Marks</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Attempts</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Correct</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Wrong</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Skipped</th>
+                  <th style={{ padding: '0.75rem 0.85rem' }}>Correct %</th>
+                  <th style={{ padding: '0.75rem 0.85rem', textAlign: 'right' }}>Difficulty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analytics.question_analysis.map((q, idx) => {
+                  const diffColor = q.difficulty === 'Easy' ? '#059669' : q.difficulty === 'Medium' ? '#D97706' : '#DC2626';
+                  const diffBg = q.difficulty === 'Easy' ? '#ECFDF5' : q.difficulty === 'Medium' ? '#FFFBEB' : '#FEF2F2';
+                  return (
+                    <tr key={q.question_id || idx} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#64748B' }}>
+                        {idx + 1}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', maxWidth: '350px' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--color-navy)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {q.question_text}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748B' }}>{q.subject}</div>
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', color: '#475569' }}>
+                        <span style={{ background: '#F1F5F9', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.74rem', fontWeight: 600 }}>
+                          {q.question_type} ({q.marks}M)
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 600, color: '#334155' }}>
+                        {q.total_attempts}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#059669' }}>
+                        {q.correct_answers}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', fontWeight: 700, color: '#DC2626' }}>
+                        {q.wrong_answers}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', color: '#94A3B8' }}>
+                        {q.skipped}
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontWeight: 700, minWidth: '35px' }}>{q.correct_percentage}%</span>
+                          <div style={{ width: '70px', height: '6px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div
+                              style={{
+                                width: `${q.correct_percentage}%`,
+                                height: '100%',
+                                background: q.correct_percentage >= 70 ? '#10B981' : q.correct_percentage >= 40 ? 'var(--color-orange)' : '#EF4444'
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ padding: '0.75rem 0.85rem', textAlign: 'right' }}>
+                        <span style={{
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: '999px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          background: diffBg,
+                          color: diffColor
+                        }}>
+                          {q.difficulty}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
+
 export default TeacherTestAnalyticsPage;
