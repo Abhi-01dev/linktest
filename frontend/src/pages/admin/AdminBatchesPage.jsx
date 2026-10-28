@@ -1574,8 +1574,8 @@ export function AdminBatchesPage() {
                   </div>
 
                   {searchResults.length === 0 && !searchingStudents ? (
-                    <div style={{ padding: '0.75rem', textAlign: 'center', color: '#94A3B8', fontSize: '0.82rem' }}>
-                      No eligible student accounts match "{studentSearchQuery}".
+                    <div style={{ padding: '0.75rem', textAlign: 'center', color: '#94A3B8', fontSize: '0.82rem', fontWeight: 600 }}>
+                      No students found matching "{studentSearchQuery}".
                     </div>
                   ) : (
                     <div
