@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
-import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
+import { GoogleLogin } from '@react-oauth/google';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+const hasValidClientId =
+  GOOGLE_CLIENT_ID &&
+  GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID' &&
+  !GOOGLE_CLIENT_ID.startsWith('YOUR_');
 
 // Official Google 'G' icon
 export function GoogleIcon({ size = 18 }) {
@@ -36,30 +40,30 @@ export function GoogleSignInButton({
 }) {
   const [internalLoading, setInternalLoading] = useState(false);
 
-  // If a valid Google Client ID is provided, render the official Google Identity Services button
-  if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID') {
+  // If a valid Google Client ID is configured, render the official Google Identity Services button.
+  // Note: GoogleOAuthProvider is declared at the app root level (main.jsx) to avoid multiple
+  // google.accounts.id.initialize() invocations across renders and page switches.
+  if (hasValidClientId) {
     return (
-      <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-        <div style={{ width, display: 'flex', justifyContent: 'center' }}>
-          <GoogleLogin
-            onSuccess={(credentialResponse) => {
-              if (credentialResponse.credential) {
-                onSuccess?.(credentialResponse.credential);
-              } else {
-                onError?.(new Error('No credential returned from Google.'));
-              }
-            }}
-            onError={() => {
-              onError?.(new Error('Google authentication cancelled or failed.'));
-            }}
-            theme="outline"
-            size="large"
-            shape="rectangular"
-            text="continue_with"
-            width={width === '100%' ? '380' : width}
-          />
-        </div>
-      </GoogleOAuthProvider>
+      <div style={{ width, display: 'flex', justifyContent: 'center' }}>
+        <GoogleLogin
+          onSuccess={(credentialResponse) => {
+            if (credentialResponse.credential) {
+              onSuccess?.(credentialResponse.credential);
+            } else {
+              onError?.(new Error('No credential returned from Google.'));
+            }
+          }}
+          onError={() => {
+            onError?.(new Error('Google authentication cancelled or failed.'));
+          }}
+          theme="outline"
+          size="large"
+          shape="rectangular"
+          text="continue_with"
+          width={width === '100%' ? '380' : width}
+        />
+      </div>
     );
   }
 

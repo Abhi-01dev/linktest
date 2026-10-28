@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { AdminSidebar } from './AdminSidebar';
 import { ShieldAlert, Menu, X } from 'lucide-react';
@@ -13,11 +13,15 @@ export function AdminLayout({ children }) {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const mainContentRef = useRef(null);
 
   // Close mobile drawer on route change and reset scroll
   useEffect(() => {
     setMobileOpen(false);
-    window.scrollTo(0, 0);
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
   }, [location.pathname]);
 
   return (
@@ -90,6 +94,7 @@ export function AdminLayout({ children }) {
 
         {/* Main Content Area */}
         <main
+          ref={mainContentRef}
           className="admin-main-content"
           style={{
             flex: 1,

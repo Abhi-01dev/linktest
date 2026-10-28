@@ -200,26 +200,65 @@ export function useWebcamProctor({
       }
     }
 
-    // Merge closely adjacent components (e.g. neck & face)
-    const distinctFaces = [];
-    for (const b of blobs) {
-      const existing = distinctFaces.find(f => {
+    if (blobs.length === 0) {
+      return { faceCount: 0, state: 'NO_FACE' };
+    }
+
+    // Sort blobs by area descending: primary candidate first
+    blobs.sort((a, b) => b.area - a.area);
+    const primaryFace = blobs[0];
+
+    // Primary blob must be substantial (at least 6 cells out of 192 total)
+    if (primaryFace.area < 6) {
+      return { faceCount: 0, state: 'NO_FACE' };
+    }
+
+    // Distinguish genuine separate secondary faces from neck, collar, torso, hands, or background noise
+    const distinctFaces = [primaryFace];
+
+    for (let i = 1; i < blobs.length; i++) {
+      const b = blobs[i];
+
+      const isPartOfExistingPerson = distinctFaces.some(f => {
         const dx = Math.abs(f.centerX - b.centerX);
-        const dy = Math.abs(f.centerY - b.centerY);
-        return dx < 3.5 && dy < 3.5;
+        const dy = b.centerY - f.centerY;
+
+        // 1. Proximity merge (close components)
+        if (Math.abs(f.centerX - b.centerX) <= 3.5 && Math.abs(f.centerY - b.centerY) <= 3.5) {
+          return true;
+        }
+
+        // 2. Vertical alignment below face (neck, collar, chest, throat)
+        // If blob is below the face (dy > 0) and horizontally aligned (dx <= 3.0),
+        // it is anatomically contiguous with the primary subject.
+        if (dy > 0 && dy <= 6.5 && dx <= 3.0) {
+          return true;
+        }
+
+        // 3. Bounding box adjacency/touching
+        const xOverlap = !(b.maxX < f.minX - 1 || b.minX > f.maxX + 1);
+        const yAdjacency = !(b.maxY < f.minY - 2 || b.minY > f.maxY + 2);
+        if (xOverlap && yAdjacency) {
+          return true;
+        }
+
+        return false;
       });
-      if (existing) {
-        existing.area += b.area;
-        existing.centerX = (existing.centerX + b.centerX) / 2;
-        existing.centerY = (existing.centerY + b.centerY) / 2;
-      } else {
-        distinctFaces.push({ ...b });
+
+      if (!isPartOfExistingPerson) {
+        // A genuine separate human face must have sufficient area (at least 8 cells and >= 25% of primary face)
+        // and human-like facial proportions
+        const widthCells = b.maxX - b.minX + 1;
+        const heightCells = b.maxY - b.minY + 1;
+        const aspect = heightCells / Math.max(1, widthCells);
+
+        if (b.area >= 8 && b.area >= primaryFace.area * 0.25 && aspect >= 0.55 && aspect <= 2.2) {
+          distinctFaces.push(b);
+        }
       }
     }
 
-    if (distinctFaces.length === 0) {
-      return { faceCount: 0, state: 'NO_FACE' };
-    } else if (distinctFaces.length === 1) {
+    if (distinctFaces.length === 1) {
       return { faceCount: 1, state: 'ONE_FACE' };
     } else {
       return { faceCount: distinctFaces.length, state: 'MULTIPLE_FACES' };

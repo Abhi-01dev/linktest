@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -63,10 +63,14 @@ export function TeacherLayout({ children }) {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+  const mainContentRef = useRef(null);
 
   useEffect(() => {
     setMobileOpen(false);
-    window.scrollTo(0, 0);
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    if (mainContentRef.current) {
+      mainContentRef.current.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
   }, [location.pathname]);
 
   const toggleCollapse = () => {
@@ -262,6 +266,7 @@ export function TeacherLayout({ children }) {
 
         {/* Main Content Area */}
         <main
+          ref={mainContentRef}
           className="teacher-main-content"
           style={{
             flex: 1,
