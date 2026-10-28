@@ -93,16 +93,17 @@ function AppContent() {
   const location = useLocation();
   const isRunner = location.pathname.includes('/runner/');
 
-  // Scroll the document to top on route change, but only for routes that don't
-  // have their own layout scroll container (admin and teacher layouts handle
-  // their own scroll restoration via a ref on the <main> element).
+  // Comprehensive scroll-to-top on route change across all public, student, teacher, and admin pages
   useEffect(() => {
-    const isLayoutRoute =
-      location.pathname.startsWith('/admin') ||
-      location.pathname.startsWith('/teacher');
-    if (!isLayoutRoute) {
-      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    const scrollContainers = document.querySelectorAll('.teacher-main-content, .admin-main-content, main');
+    scrollContainers.forEach(el => {
+      if (el && typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      }
+    });
   }, [location.pathname]);
 
   return (
