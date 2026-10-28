@@ -851,8 +851,8 @@ export function TeacherClassesPage() {
                   Type a name or email address above to query active database students.
                 </div>
               ) : searchResults.length === 0 && !searching ? (
-                <div style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8', fontSize: '0.85rem' }}>
-                  No matching student accounts found in the database.
+                <div style={{ padding: '2rem', textAlign: 'center', color: '#94A3B8', fontSize: '0.85rem', fontWeight: 600 }}>
+                  No students found
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>

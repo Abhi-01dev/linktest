@@ -1326,7 +1326,8 @@ function MockTestRunnerView() {
     );
   }
 
-  const activeQuestion = questions[currentIndex] || null;
+  const safeCurrentIndex = (questions.length > 0 && (currentIndex < 0 || currentIndex >= questions.length)) ? 0 : currentIndex;
+  const activeQuestion = questions[safeCurrentIndex] || null;
   const activeResponse = activeQuestion ? (responses[activeQuestion.id]?.response_data || null) : null;
   const isMarked = activeQuestion ? Boolean(responses[activeQuestion.id]?.is_marked_for_review) : false;
 
@@ -1773,7 +1774,9 @@ function MockTestRunnerView() {
                         activeResponse?.selected_key === opt.key ||
                         activeResponse?.selected_option_index === optIdx ||
                         activeResponse?.selected === opt.key ||
-                        activeResponse?.text === opt.text;
+                        activeResponse?.text === opt.text ||
+                        activeResponse === opt.key ||
+                        activeResponse === optIdx;
 
                       return (
                         <div
@@ -1890,7 +1893,7 @@ function MockTestRunnerView() {
                 {activeQuestion.question_type === 'true_false' && (
                   <div style={{ display: 'flex', gap: '1rem' }}>
                     {[true, false].map((val) => {
-                      const isSelected = activeResponse?.selected_value === val || activeResponse?.selected_bool === val;
+                      const isSelected = activeResponse?.selected_value === val || activeResponse?.selected_bool === val || activeResponse === val;
                       return (
                         <button
                           key={String(val)}
