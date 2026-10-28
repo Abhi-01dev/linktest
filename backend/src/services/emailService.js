@@ -16,9 +16,9 @@ function escapeHtml(str) {
 
 export function categorizeEmailError(err) {
   if (!err) {
-    const error = new Error('Failed to deliver email. Please try again.');
-    error.statusCode = 502;
-    error.code = 'EMAIL_DELIVERY_FAILED';
+    const error = new Error('Email delivery service is currently unavailable.');
+    error.statusCode = 503;
+    error.code = 'SMTP_UNAVAILABLE';
     return error;
   }
 
@@ -65,9 +65,9 @@ export function categorizeEmailError(err) {
     return error;
   }
 
-  const error = new Error('Failed to deliver email. Please try again.');
-  error.statusCode = err.statusCode || 502;
-  error.code = err.code || 'EMAIL_DELIVERY_FAILED';
+  const error = new Error('Email delivery service is currently unavailable. Please try again later.');
+  error.statusCode = err.statusCode || 503;
+  error.code = 'SMTP_UNAVAILABLE';
   return error;
 }
 
@@ -258,13 +258,7 @@ export const emailService = {
       html
     };
 
-    // 1. Test Mode (In-memory capture)
-    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
-      lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-      return { success: true, mocked: true, messageId: 'test-mock-id' };
-    }
-
-    // 2. Transporter active (Real Gmail SMTP with connection pooling & timeouts)
+    // 1. Transporter active (Real Gmail SMTP with connection pooling & timeouts, or injected mock/test transporter)
     if (transporter) {
       let timer;
       try {
@@ -287,13 +281,19 @@ export const emailService = {
         } else {
           console.log(`[LinkTest Email] Verification email dispatched to ${email}`);
         }
-        lastSentEmail = { ...emailPayload, otp: 'MASKED_IN_PROD', sentAt: new Date() };
+        lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
         return { success: true, messageId: info.messageId };
       } catch (rawErr) {
         clearTimeout(timer);
         console.error(`[LinkTest Email] Failed sending verification email to ${email}:`, rawErr.code || rawErr.message);
         throw categorizeEmailError(rawErr);
       }
+    }
+
+    // 2. Test Mode (In-memory capture when no transporter is explicitly configured/injected)
+    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
+      lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
+      return { success: true, mocked: true, messageId: 'test-mock-id' };
     }
 
     // 3. Development Fallback (Log OTP to console only in dev/test, NEVER in production)
@@ -344,10 +344,6 @@ export const emailService = {
 
     const payload = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text };
 
-    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
-      lastSentEmail = { ...payload, sentAt: new Date() };
-      return { success: true, mocked: true };
-    }
     if (transporter) {
       let timer;
       try {
@@ -364,12 +360,19 @@ export const emailService = {
         ]);
         clearTimeout(timer);
         console.log(`[LinkTest Email] Teacher invitation sent to ${email}`);
+        lastSentEmail = { ...payload, sentAt: new Date() };
         return { success: true, messageId: info.messageId };
       } catch (err) {
         clearTimeout(timer);
         throw categorizeEmailError(err);
       }
     }
+
+    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
+      lastSentEmail = { ...payload, sentAt: new Date() };
+      return { success: true, mocked: true };
+    }
+
     if (config.nodeEnv === 'production') {
       const err = new Error('Teacher invitation email delivery is unavailable.');
       err.statusCode = 503;
@@ -407,10 +410,6 @@ export const emailService = {
 
     const payload = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text };
 
-    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
-      lastSentEmail = { ...payload, sentAt: new Date() };
-      return { success: true, mocked: true };
-    }
     if (transporter) {
       let timer;
       try {
@@ -426,11 +425,17 @@ export const emailService = {
           timeoutPromise
         ]);
         clearTimeout(timer);
+        lastSentEmail = { ...payload, sentAt: new Date() };
         return { success: true, messageId: info.messageId };
       } catch (err) {
         clearTimeout(timer);
         throw categorizeEmailError(err);
       }
+    }
+
+    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
+      lastSentEmail = { ...payload, sentAt: new Date() };
+      return { success: true, mocked: true };
     }
     if (config.nodeEnv === 'production') {
       const err = new Error('Password reset email cannot be sent because SMTP is not configured.');
