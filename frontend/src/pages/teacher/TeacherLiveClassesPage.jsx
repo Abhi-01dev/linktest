@@ -22,6 +22,7 @@ export function TeacherLiveClassesPage() {
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
 
   // Active in-app LiveKit classroom
   const [activeSession, setActiveSession] = useState(null);
@@ -41,14 +42,16 @@ export function TeacherLiveClassesPage() {
   const loadData = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const [lcList, bList, cList, sList] = await Promise.all([
-        api.getTeacherLiveClasses().catch(() => []),
+        api.getTeacherLiveClasses(),
         api.getBatches().catch(() => []),
         api.getTeacherClasses().catch(() => []),
         api.getAdminSubjects().catch(() => [])
       ]);
-      const sortedLcList = (Array.isArray(lcList) ? [...lcList] : []).sort(
-        (a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0)
+      const rawList = Array.isArray(lcList) ? lcList : (lcList?.data || lcList?.sessions || []);
+      const sortedLcList = [...rawList].sort(
+        (a, b) => new Date(b.started_at || b.scheduled_at || b.created_at || 0) - new Date(a.started_at || a.scheduled_at || a.created_at || 0)
       );
       setLiveClasses(sortedLcList);
       setBatches(Array.isArray(bList) ? bList : []);
@@ -59,6 +62,7 @@ export function TeacherLiveClassesPage() {
       if (cList?.length > 0 && !classId) setClassId(cList[0].class_id || cList[0].id);
       if (sList?.length > 0 && !subjectId) setSubjectId(sList[0].id);
     } catch (err) {
+      setLoadError(err.message || 'Failed to load live classes');
       showToast(err.message || 'Failed to load live classes', 'error');
     } finally {
       setLoading(false);
@@ -82,7 +86,7 @@ export function TeacherLiveClassesPage() {
 
     try {
       setSubmitting(true);
-      await api.createTeacherLiveClass({
+      const res = await api.createTeacherLiveClass({
         title: title.trim(),
         description: description.trim(),
         batch_id: batchId || null,
@@ -90,10 +94,26 @@ export function TeacherLiveClassesPage() {
         subject_id: subjectId || null,
         scheduled_at: new Date(scheduledAt).toISOString()
       });
+
+      const newSession = res?.data || res?.session || res;
+      if (newSession && newSession.id) {
+        const batchObj = batches.find(b => b.id === (newSession.batch_id || batchId));
+        const classObj = classes.find(c => (c.class_id || c.id) === (newSession.class_id || classId));
+        const subjectObj = subjects.find(s => s.id === (newSession.subject_id || subjectId));
+        const enriched = {
+          ...newSession,
+          batch_name: newSession.batch_name || batchObj?.name,
+          class_name: newSession.class_name || classObj?.class_name || classObj?.name,
+          subject_name: newSession.subject_name || subjectObj?.name
+        };
+        setLiveClasses(prev => [enriched, ...prev.filter(x => x.id !== enriched.id)]);
+      }
+
       showToast('Live lecture broadcast scheduled successfully with LiveKit room', 'success');
       setShowAddModal(false);
       setTitle('');
       setDescription('');
+      setScheduledAt('');
       loadData();
     } catch (err) {
       showToast(err.message || 'Failed to schedule live lecture', 'error');
@@ -169,6 +189,23 @@ export function TeacherLiveClassesPage() {
           <div style={{ padding: '3.5rem', textAlign: 'center', color: '#64748B' }}>
             Loading scheduled lecture broadcasts...
           </div>
+        ) : loadError ? (
+          <div style={{ padding: '3.5rem', textAlign: 'center' }}>
+            <AlertCircle size={42} style={{ color: '#EF4444', margin: '0 auto 1rem' }} />
+            <h3 style={{ fontSize: '1.15rem', color: '#0F172A', marginBottom: '0.35rem' }}>
+              Unable to Load Live Lectures
+            </h3>
+            <p style={{ color: '#64748B', fontSize: '0.875rem', maxWidth: '420px', margin: '0 auto 1.5rem' }}>
+              {loadError}
+            </p>
+            <button
+              onClick={loadData}
+              className="btn btn-outline"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <span>Retry</span>
+            </button>
+          </div>
         ) : liveClasses.length === 0 ? (
           <div style={{ padding: '3.5rem', textAlign: 'center' }}>
             <Video size={42} style={{ color: '#94A3B8', margin: '0 auto 1rem' }} />
@@ -197,8 +234,8 @@ export function TeacherLiveClassesPage() {
               </thead>
               <tbody>
                 {liveClasses.map((lc) => {
-                  const isLive = lc.status === 'ongoing';
-                  const isCompleted = lc.status === 'completed';
+                  const isLive = lc.status === 'ongoing' || lc.status === 'live';
+                  const isCompleted = lc.status === 'completed' || lc.status === 'ended';
 
                   return (
                     <tr key={lc.id} style={{ borderBottom: '1px solid #F1F5F9', background: isLive ? '#F0FDF4' : undefined }}>
@@ -237,7 +274,7 @@ export function TeacherLiveClassesPage() {
                       <td style={{ padding: '1rem 1.25rem', color: '#64748B', fontSize: '0.82rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                           <Clock size={13} style={{ color: '#F97316' }} />
-                          <span>{new Date(lc.scheduled_at).toLocaleString()}</span>
+                          <span>{new Date(lc.scheduled_at).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                       </td>
                       <td style={{ padding: '1rem 1.25rem' }}>

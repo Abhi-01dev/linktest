@@ -36,14 +36,16 @@ const createMaterialSchema = z.object({
   lesson_id: z.string().uuid().or(z.string().min(1)).optional().nullable()
 });
 
+const optionalId = z.string().trim().optional().nullable().transform(val => (val && val.length > 0 ? val : null));
+
 const createLiveClassSchema = z.object({
   title: z.string().min(2).max(255),
   description: z.string().optional().default(''),
-  class_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
-  batch_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
-  subject_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
-  course_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
-  scheduled_at: z.string(),
+  class_id: optionalId,
+  batch_id: optionalId,
+  subject_id: optionalId,
+  course_id: optionalId,
+  scheduled_at: z.string().refine(val => !isNaN(Date.parse(val)), 'Invalid date format'),
   meeting_url: z.string().optional().nullable()
 });
 
@@ -453,7 +455,7 @@ export const teacherController = {
         batchId: parsed.batch_id,
         subjectId: parsed.subject_id,
         courseId: parsed.course_id,
-        scheduledAt: parsed.scheduled_at,
+        scheduledAt: new Date(parsed.scheduled_at).toISOString(),
         meetingUrl: parsed.meeting_url || null,
         meetingProvider: 'livekit'
       });
@@ -538,14 +540,19 @@ export const teacherController = {
     try {
       const { id } = req.params;
       const { status } = req.body;
-      if (!['scheduled', 'ongoing', 'completed', 'cancelled'].includes(status)) {
+      if (!['scheduled', 'ongoing', 'completed', 'cancelled', 'ended'].includes(status)) {
         return res.status(400).json({
           success: false,
-          error: { code: 'INVALID_STATUS', message: 'Status must be scheduled, ongoing, completed, or cancelled' }
+          error: { code: 'INVALID_STATUS', message: 'Status must be scheduled, ongoing, completed, cancelled, or ended' }
         });
       }
 
-      const updated = await lmsRepository.updateLiveClass(id, { status });
+      const updates = { status };
+      const nowIso = new Date().toISOString();
+      if (status === 'ongoing') updates.started_at = nowIso;
+      if (status === 'completed' || status === 'ended') updates.ended_at = nowIso;
+
+      const updated = await lmsRepository.updateLiveClass(id, updates);
       await logAudit(req.user, 'UPDATE_LIVE_CLASS_STATUS', 'live_class_sessions', id, `Updated live class status to ${status}`);
       res.status(200).json({ success: true, data: updated });
     } catch (err) {

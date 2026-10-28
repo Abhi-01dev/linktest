@@ -33,7 +33,7 @@ export const studentController = {
         classId ? lmsRepository.getTimetable({ classId, batchId, dayOfWeek: todayDayOfWeek }) : [],
         lmsRepository.getAssignments({ studentId, classId }),
         lmsRepository.getAttendance({ studentId }),
-        classId ? lmsRepository.getLiveClasses({ classId, status: 'scheduled' }) : [],
+        lmsRepository.getLiveClasses({ studentId }),
         lmsRepository.getAnnouncements({ limit: 5 }),
         progressRepository.getUserProgressSummary(studentId),
         quizRepository.getUserAttempts(studentId)
@@ -72,7 +72,7 @@ export const studentController = {
           },
           today_schedule: timetable,
           pending_assignments: pendingAssignments.slice(0, 5),
-          upcoming_live_classes: liveClasses.slice(0, 3),
+          upcoming_live_classes: (Array.isArray(liveClasses) ? liveClasses : []).filter(lc => lc.status === 'scheduled' || lc.status === 'ongoing').slice(0, 3),
           announcements: announcements.slice(0, 5),
           overall_progress: overallProgress
         }

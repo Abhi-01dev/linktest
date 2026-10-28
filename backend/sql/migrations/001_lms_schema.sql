@@ -320,7 +320,7 @@ CREATE TABLE IF NOT EXISTS live_class_sessions (
   meeting_url TEXT,
   meeting_provider VARCHAR(50) DEFAULT 'external',
   status VARCHAR(20) NOT NULL DEFAULT 'scheduled'
-    CHECK (status IN ('scheduled','live','completed','cancelled')),
+    CHECK (status IN ('scheduled','live','ongoing','completed','cancelled','ended')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_live_class_teacher ON live_class_sessions(teacher_id);

@@ -458,9 +458,11 @@ CREATE TABLE live_class_sessions (
     subject_id VARCHAR(64) REFERENCES subjects(id) ON DELETE SET NULL,
     course_id VARCHAR(64),
     scheduled_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE,
+    ended_at TIMESTAMP WITH TIME ZONE,
     meeting_url TEXT NULL,
     meeting_provider VARCHAR(50) DEFAULT 'external',
-    status VARCHAR(20) NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'ongoing', 'completed', 'cancelled')),
+    status VARCHAR(20) NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'live', 'ongoing', 'completed', 'cancelled', 'ended')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

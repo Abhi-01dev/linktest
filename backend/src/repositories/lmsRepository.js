@@ -1337,7 +1337,17 @@ export const lmsRepository = {
     if (isPostgresConnected && pool) {
       let where = 'WHERE 1=1';
       const params = [];
-      if (teacherId) { params.push(teacherId); where += ` AND lc.teacher_id = $${params.length}`; }
+      if (teacherId) {
+        params.push(teacherId);
+        where += ` AND (
+          lc.teacher_id = $${params.length}
+          OR lc.batch_id IN (SELECT batch_id FROM batch_teachers WHERE teacher_id = $${params.length})
+          OR lc.batch_id IN (SELECT id FROM batches WHERE class_teacher_id = $${params.length})
+          OR lc.class_id IN (SELECT class_id FROM teacher_assignments WHERE teacher_id = $${params.length})
+          OR lc.batch_id IN (SELECT batch_id FROM teacher_assignments WHERE teacher_id = $${params.length})
+          OR lc.class_id IN (SELECT b.class_id FROM batch_teachers bt JOIN batches b ON b.id = bt.batch_id WHERE bt.teacher_id = $${params.length})
+        )`;
+      }
       if (classId) { params.push(classId); where += ` AND lc.class_id = $${params.length}`; }
       if (batchId) { params.push(batchId); where += ` AND lc.batch_id = $${params.length}`; }
       if (status) { params.push(status); where += ` AND lc.status = $${params.length}`; }
@@ -1353,25 +1363,56 @@ export const lmsRepository = {
       const res = await pool.query(
         `SELECT lc.*, u.full_name as teacher_name, c.name as class_name, s.name as subject_name, b.name as batch_name
          FROM live_class_sessions lc
-         JOIN users u ON lc.teacher_id = u.id
+         LEFT JOIN users u ON lc.teacher_id = u.id
          LEFT JOIN classes c ON lc.class_id = c.id
          LEFT JOIN subjects s ON lc.subject_id = s.id
          LEFT JOIN batches b ON lc.batch_id = b.id
-         ${where} ORDER BY COALESCE(lc.started_at, lc.created_at) DESC, lc.created_at DESC`,
+         ${where} ORDER BY COALESCE(lc.started_at, lc.scheduled_at, lc.created_at) DESC, lc.created_at DESC`,
         params
       );
       return res.rows;
     }
-    let sessions = [...memoryStore.live_class_sessions];
-    if (teacherId) sessions = sessions.filter(s => s.teacher_id === teacherId);
+    let sessions = [...(memoryStore.live_class_sessions || [])];
+    if (teacherId) {
+      const teacherBatchIds = new Set([
+        ...(memoryStore.batch_teachers || []).filter(bt => bt.teacher_id === teacherId).map(bt => bt.batch_id),
+        ...(memoryStore.batches || []).filter(b => b.class_teacher_id === teacherId).map(b => b.id),
+        ...(memoryStore.teacher_assignments || []).filter(ta => ta.teacher_id === teacherId && ta.batch_id).map(ta => ta.batch_id)
+      ]);
+      const teacherClassIds = new Set([
+        ...(memoryStore.teacher_assignments || []).filter(ta => ta.teacher_id === teacherId && ta.class_id).map(ta => ta.class_id),
+        ...(memoryStore.batches || []).filter(b => teacherBatchIds.has(b.id)).map(b => b.class_id).filter(Boolean)
+      ]);
+      sessions = sessions.filter(s =>
+        s.teacher_id === teacherId ||
+        (s.batch_id && teacherBatchIds.has(s.batch_id)) ||
+        (s.class_id && teacherClassIds.has(s.class_id))
+      );
+    }
     if (classId) sessions = sessions.filter(s => s.class_id === classId);
     if (batchId) sessions = sessions.filter(s => s.batch_id === batchId);
     if (status) sessions = sessions.filter(s => s.status === status);
+    if (studentId) {
+      const studentEnrollments = (memoryStore.student_class_enrollments || []).filter(e => e.student_id === studentId);
+      const studentClassIds = new Set(studentEnrollments.map(e => e.class_id));
+      const studentBatchIds = new Set(
+        (memoryStore.batch_enrollments || [])
+          .filter(be => be.student_id === studentId && (be.status === 'active' || !be.status))
+          .map(be => be.batch_id)
+      );
+      const hasEnrollments = studentEnrollments.length > 0 || studentBatchIds.size > 0;
+      sessions = sessions.filter(s =>
+        !hasEnrollments ||
+        (!s.class_id && !s.batch_id) ||
+        (s.class_id && studentClassIds.has(s.class_id)) ||
+        (s.batch_id && studentBatchIds.has(s.batch_id))
+      );
+    }
     return sessions.map(lc => {
-      const teacher = memoryStore.users.find(u => u.id === lc.teacher_id);
-      const cls = memoryStore.classes.find(c => c.id === lc.class_id);
+      const teacher = (memoryStore.users || []).find(u => u.id === lc.teacher_id);
+      const cls = (memoryStore.classes || []).find(c => c.id === lc.class_id);
       const batch = (memoryStore.batches || []).find(b => b.id === lc.batch_id);
-      const subject = memoryStore.subjects.find(s => s.id === lc.subject_id);
+      const subject = (memoryStore.subjects || []).find(s => s.id === lc.subject_id);
       return {
         ...lc,
         teacher_name: teacher?.full_name,
@@ -1379,7 +1420,7 @@ export const lmsRepository = {
         batch_name: batch?.name,
         subject_name: subject?.name
       };
-    }).sort((a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0));
+    }).sort((a, b) => new Date(b.started_at || b.scheduled_at || b.created_at || 0) - new Date(a.started_at || a.scheduled_at || a.created_at || 0));
   },
 
   async getLiveClassById(id) {
@@ -1387,7 +1428,7 @@ export const lmsRepository = {
       const res = await pool.query(
         `SELECT lc.*, u.full_name as teacher_name, c.name as class_name, s.name as subject_name, b.name as batch_name
          FROM live_class_sessions lc
-         JOIN users u ON lc.teacher_id = u.id
+         LEFT JOIN users u ON lc.teacher_id = u.id
          LEFT JOIN classes c ON lc.class_id = c.id
          LEFT JOIN subjects s ON lc.subject_id = s.id
          LEFT JOIN batches b ON lc.batch_id = b.id
@@ -1398,10 +1439,10 @@ export const lmsRepository = {
     }
     const lc = (memoryStore.live_class_sessions || []).find(s => s.id === id);
     if (!lc) return null;
-    const teacher = memoryStore.users.find(u => u.id === lc.teacher_id);
-    const cls = memoryStore.classes.find(c => c.id === lc.class_id);
+    const teacher = (memoryStore.users || []).find(u => u.id === lc.teacher_id);
+    const cls = (memoryStore.classes || []).find(c => c.id === lc.class_id);
     const batch = (memoryStore.batches || []).find(b => b.id === lc.batch_id);
-    const subject = memoryStore.subjects.find(s => s.id === lc.subject_id);
+    const subject = (memoryStore.subjects || []).find(s => s.id === lc.subject_id);
     return {
       ...lc,
       teacher_name: teacher?.full_name,
@@ -1424,12 +1465,14 @@ export const lmsRepository = {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'scheduled',$12) RETURNING *`,
         [id, title, description || null, teacherId, normalizedClassId, normalizedBatchId, normalizedSubjectId, normalizedCourseId, scheduledAt, meetingUrl || null, meetingProvider || 'livekit', now]
       );
-      return res.rows[0];
+      const enriched = await this.getLiveClassById(id);
+      return enriched || res.rows[0];
     }
     const session = { id, title, description: description || null, teacher_id: teacherId, class_id: normalizedClassId, batch_id: normalizedBatchId, subject_id: normalizedSubjectId, course_id: normalizedCourseId, scheduled_at: scheduledAt, started_at: null, ended_at: null, meeting_url: meetingUrl || null, meeting_provider: meetingProvider || 'livekit', status: 'scheduled', created_at: now };
     if (!memoryStore.live_class_sessions) memoryStore.live_class_sessions = [];
     memoryStore.live_class_sessions.push(session);
-    return session;
+    const enriched = await this.getLiveClassById(id);
+    return enriched || session;
   },
 
   async updateLiveClass(id, updates) {
@@ -1437,12 +1480,14 @@ export const lmsRepository = {
       const setClause = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`).join(', ');
       const values = [...Object.values(updates), id];
       const res = await pool.query(`UPDATE live_class_sessions SET ${setClause} WHERE id = $${values.length} RETURNING *`, values);
-      return res.rows[0] || null;
+      const enriched = await this.getLiveClassById(id);
+      return enriched || res.rows[0] || null;
     }
     const session = (memoryStore.live_class_sessions || []).find(s => s.id === id);
     if (!session) return null;
     Object.assign(session, updates);
-    return session;
+    const enriched = await this.getLiveClassById(id);
+    return enriched || session;
   },
 
   // ============================================================

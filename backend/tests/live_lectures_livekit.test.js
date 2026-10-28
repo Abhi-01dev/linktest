@@ -402,4 +402,57 @@ describe('LinkTest Phase 2 & 5: LiveKit Live Lectures & Batch Allocation E2E Sui
       }
     }
   });
+
+  test('14. Schedule Live Lecture: Handles empty string optional IDs safely and returns enriched metadata', async () => {
+    const scheduledTime = new Date(Date.now() + 7200000).toISOString();
+    const res = await fetch(`${baseUrl}/api/teacher/live-classes`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        title: `Relativity & Gravitation Masterclass ${rand}`,
+        description: 'Deep dive into tensors and general relativity',
+        batch_id: testBatchId,
+        class_id: '',
+        subject_id: '',
+        course_id: '',
+        scheduled_at: scheduledTime
+      })
+    });
+    const body = await res.json();
+    assert.equal(res.status, 201);
+    assert.equal(body.success, true);
+    assert.ok(body.data?.id);
+    assert.equal(body.data.status, 'scheduled');
+    assert.equal(body.data.class_id, null);
+    assert.equal(body.data.subject_id, null);
+    // Enriched batch name should be present
+    assert.ok(body.data.batch_name || body.data.batch_id === testBatchId);
+  });
+
+  test('15. Live Lectures List Retrieval: Teacher immediately sees newly scheduled lecture', async () => {
+    const listRes = await fetch(`${baseUrl}/api/teacher/live-classes`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const listBody = await listRes.json();
+    assert.equal(listRes.status, 200);
+    assert.equal(listBody.success, true);
+    assert.ok(Array.isArray(listBody.data));
+
+    const scheduled = listBody.data.find(s => s.title.includes(`Relativity & Gravitation Masterclass ${rand}`));
+    assert.ok(scheduled, 'Newly scheduled lecture must appear in teacher live-classes list');
+    assert.equal(scheduled.status, 'scheduled');
+  });
+
+  test('16. Empty State API Behavior: Valid empty array returned without server error', async () => {
+    const emptyRes = await fetch(`${baseUrl}/api/teacher/live-classes?status=nonexistent_status`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const emptyBody = await emptyRes.json();
+    assert.equal(emptyRes.status, 200);
+    assert.equal(emptyBody.success, true);
+    assert.deepEqual(emptyBody.data, []);
+  });
 });

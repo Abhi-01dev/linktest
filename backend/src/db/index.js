@@ -157,6 +157,17 @@ export async function initDb() {
     // Test connection with a fast heartbeat query
     const client = await pool.connect();
     const res = await client.query('SELECT NOW()');
+
+    // Ensure live_class_sessions schema includes lifecycle timestamp columns
+    try {
+      await client.query(`
+        ALTER TABLE live_class_sessions ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE live_class_sessions ADD COLUMN IF NOT EXISTS ended_at TIMESTAMP WITH TIME ZONE;
+      `);
+    } catch {
+      // Table may not exist yet prior to migrations
+    }
+
     client.release();
 
     isPostgresConnected = true;
