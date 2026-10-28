@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { LinkTestLogo } from '../../components/common/LinkTestLogo';
 import { GoogleSignInButton } from '../../components/auth/GoogleSignInButton';
-import { UserPlus, AlertCircle } from 'lucide-react';
+import { UserPlus, AlertCircle, Loader2 } from 'lucide-react';
 
 export function RegisterPage() {
   const [fullName, setFullName] = useState('');
@@ -14,12 +14,15 @@ export function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const isSubmittingRef = useRef(false);
   const { register, loginWithGoogle } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
   const handleGoogleSuccess = async (credential) => {
+    if (loading || isSubmittingRef.current) return;
     setError('');
+    isSubmittingRef.current = true;
     setLoading(true);
 
     try {
@@ -29,6 +32,7 @@ export function RegisterPage() {
     } catch (err) {
       setError(err.message || 'Google registration failed. Please try again.');
     } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
@@ -39,7 +43,18 @@ export function RegisterPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // Guard against rapid duplicate submissions
+    if (loading || isSubmittingRef.current) return;
+
     setError('');
+
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedName || !trimmedEmail || !password) {
+      setError('Please fill in all required fields.');
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError('Passwords do not match. Please re-enter.');
@@ -51,15 +66,22 @@ export function RegisterPage() {
       return;
     }
 
+    isSubmittingRef.current = true;
     setLoading(true);
 
     try {
-      const result = await register(fullName, email, password);
-      showToast(result.message || 'Account created! Please verify your email with the 6-digit code.', 'success');
-      navigate(`/verify-email?email=${encodeURIComponent(email)}`);
+      const result = await register(trimmedName, trimmedEmail, password);
+      if (result.email_sent === false) {
+        showToast("We couldn't send the verification email. Please try again.", 'warning');
+        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}&deliveryFailed=true`);
+      } else {
+        showToast(result.message || 'Account created. OTP sent to your email.', 'success');
+        navigate(`/verify-email?email=${encodeURIComponent(trimmedEmail)}`);
+      }
     } catch (err) {
       setError(err.message || 'Registration failed. Please check your information.');
     } finally {
+      isSubmittingRef.current = false;
       setLoading(false);
     }
   };
@@ -139,6 +161,7 @@ export function RegisterPage() {
               placeholder="e.g. Aarav Sharma"
               required
               autoFocus
+              disabled={loading}
             />
           </div>
 
@@ -154,6 +177,7 @@ export function RegisterPage() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="name@example.com"
               required
+              disabled={loading}
             />
           </div>
 
@@ -169,6 +193,7 @@ export function RegisterPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="At least 8 characters"
               required
+              disabled={loading}
             />
           </div>
 
@@ -184,17 +209,28 @@ export function RegisterPage() {
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Re-enter password"
               required
+              disabled={loading}
             />
           </div>
 
           <button
             type="submit"
             className="btn btn-primary"
-            style={{ width: '100%', padding: '0.75rem' }}
+            style={{
+              width: '100%',
+              padding: '0.75rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem'
+            }}
             disabled={loading}
           >
             {loading ? (
-              <span>Creating Account...</span>
+              <>
+                <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} />
+                <span>Creating account...</span>
+              </>
             ) : (
               <>
                 <UserPlus size={18} />

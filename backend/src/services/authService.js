@@ -120,6 +120,7 @@ export const authService = {
     }
 
     let emailSent = true;
+    let emailErrorCode = null;
     try {
       await emailService.sendVerificationOtp({
         email: user.email,
@@ -127,8 +128,13 @@ export const authService = {
         otp
       });
     } catch (err) {
-      console.error('[Registration] Email sending error:', err.message);
+      if (config.nodeEnv !== 'production') {
+        console.error('[Registration] Email sending error:', err.message);
+      } else {
+        console.error('[Registration] Email delivery failed with code:', err.code || 'EMAIL_DELIVERY_FAILED');
+      }
       emailSent = false;
+      emailErrorCode = err.code || 'EMAIL_DELIVERY_FAILED';
     }
 
     return {
@@ -141,9 +147,10 @@ export const authService = {
         created_at: user.created_at
       },
       email_sent: emailSent,
+      email_error: emailErrorCode,
       message: emailSent
-        ? 'Account created. Please verify your email with the 6-digit code sent.'
-        : 'Account created, but email delivery failed. You can request a new verification code on the verification page.'
+        ? 'Account created. OTP sent to your email.'
+        : "We couldn't send the verification email. Please try again."
     };
   },
 
@@ -302,10 +309,14 @@ export const authService = {
     try {
       await emailService.sendVerificationOtp({ email: user.email, fullName: user.full_name, otp });
     } catch (err) {
-      console.error('[Resend] Email delivery error:', err.message);
-      const deliveryErr = new Error(`Failed to deliver verification email: ${err.message}`);
-      deliveryErr.statusCode = 502;
-      deliveryErr.code = 'EMAIL_DELIVERY_FAILED';
+      if (config.nodeEnv !== 'production') {
+        console.error('[Resend] Email delivery error:', err.message);
+      } else {
+        console.error('[Resend] Email delivery failed with code:', err.code || 'EMAIL_DELIVERY_FAILED');
+      }
+      const deliveryErr = new Error(err.message || 'Failed to deliver verification email.');
+      deliveryErr.statusCode = err.statusCode || 502;
+      deliveryErr.code = err.code || 'EMAIL_DELIVERY_FAILED';
       throw deliveryErr;
     }
 

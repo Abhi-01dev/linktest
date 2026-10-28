@@ -29,8 +29,12 @@ export function VerifyEmailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [cooldown, setCooldown] = useState(60);
+  const [lockedOut, setLockedOut] = useState(false);
 
   const inputRefs = useRef([]);
+  const isVerifyingRef = useRef(false);
+  const isResendingRef = useRef(false);
+  const lastSubmittedOtpRef = useRef('');
 
   // Obfuscate email for privacy: aarav@example.com -> a***v@example.com
   const maskEmail = (rawEmail) => {
@@ -40,14 +44,25 @@ export function VerifyEmailPage() {
     return `${name.charAt(0)}${'*'.repeat(Math.min(name.length - 2, 4))}${name.slice(-1)}@${domain}`;
   };
 
+  // Check if initial delivery failed
+  useEffect(() => {
+    if (searchParams.get('deliveryFailed') === 'true') {
+      setError("We couldn't deliver the initial verification email. Please click Resend Code below to receive your code.");
+    }
+  }, [searchParams]);
+
   // 60-second cooldown timer
   useEffect(() => {
-    let timer;
-    if (cooldown > 0) {
-      timer = setInterval(() => {
-        setCooldown(prev => prev - 1);
-      }, 1000);
-    }
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
     return () => clearInterval(timer);
   }, [cooldown]);
 
@@ -60,7 +75,6 @@ export function VerifyEmailPage() {
 
   const handleDigitChange = (index, value) => {
     setError('');
-    // Accept only digits
     const cleanVal = value.replace(/\D/g, '');
     if (!cleanVal) {
       const nextDigits = [...otpDigits];
@@ -69,8 +83,21 @@ export function VerifyEmailPage() {
       return;
     }
 
+    if (cleanVal.length > 1) {
+      // Rapid typing or multi-char paste into single box
+      const chars = cleanVal.slice(0, 6).split('');
+      const nextDigits = [...otpDigits];
+      chars.forEach((c, i) => {
+        if (index + i < 6) nextDigits[index + i] = c;
+      });
+      setOtpDigits(nextDigits);
+      const nextFocus = Math.min(index + chars.length, 5);
+      inputRefs.current[nextFocus]?.focus();
+      return;
+    }
+
     const nextDigits = [...otpDigits];
-    nextDigits[index] = cleanVal.slice(-1); // Take the latest single digit
+    nextDigits[index] = cleanVal;
     setOtpDigits(nextDigits);
 
     // Auto-advance to next box
@@ -97,13 +124,13 @@ export function VerifyEmailPage() {
     if (!pastedData) return;
 
     const chars = pastedData.slice(0, 6).split('');
-    const nextDigits = [...otpDigits];
+    const nextDigits = ['', '', '', '', '', ''];
     chars.forEach((c, i) => {
-      nextDigits[i] = c;
+      if (i < 6) nextDigits[i] = c;
     });
     setOtpDigits(nextDigits);
 
-    // Focus on next available empty box or last box
+    // Focus on last filled or 6th box
     const nextFocusIndex = Math.min(chars.length, 5);
     inputRefs.current[nextFocusIndex]?.focus();
   };
@@ -112,6 +139,8 @@ export function VerifyEmailPage() {
 
   const handleVerify = async (e) => {
     if (e) e.preventDefault();
+    if (loading || isVerifyingRef.current) return;
+
     if (currentOtp.length !== 6) {
       setError('Please enter the complete 6-digit verification code.');
       return;
@@ -122,6 +151,13 @@ export function VerifyEmailPage() {
       return;
     }
 
+    // Prevent duplicate verification submission for the same failed code
+    if (currentOtp === lastSubmittedOtpRef.current && error) {
+      return;
+    }
+
+    lastSubmittedOtpRef.current = currentOtp;
+    isVerifyingRef.current = true;
     setError('');
     setLoading(true);
 
@@ -133,15 +169,24 @@ export function VerifyEmailPage() {
         navigate('/dashboard');
       }, 1500);
     } catch (err) {
-      setError(err.message || 'Verification failed. Please check the code and try again.');
+      if (err.code === 'MAX_ATTEMPTS_EXCEEDED') {
+        setLockedOut(true);
+        setError('Too many incorrect attempts. For security, this verification code has been locked. Please request a new code.');
+      } else if (err.code === 'OTP_EXPIRED') {
+        setError('This verification code has expired. Please request a new code.');
+      } else {
+        setError(err.message || 'Verification failed. Please check the code and try again.');
+      }
     } finally {
+      isVerifyingRef.current = false;
       setLoading(false);
     }
   };
 
   const handleResend = async () => {
-    if (cooldown > 0 || resending || !email) return;
+    if (cooldown > 0 || resending || isResendingRef.current || !email) return;
 
+    isResendingRef.current = true;
     setError('');
     setResending(true);
 
@@ -149,11 +194,17 @@ export function VerifyEmailPage() {
       const res = await api.resendVerification(email);
       showToast(res.message || 'New verification code sent to your email!', 'success');
       setCooldown(60);
+      setLockedOut(false);
+      lastSubmittedOtpRef.current = '';
       setOtpDigits(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     } catch (err) {
+      if (err.code === 'RESEND_COOLDOWN' && err.details?.cooldown_seconds) {
+        setCooldown(err.details.cooldown_seconds);
+      }
       setError(err.message || 'Failed to resend verification code. Please try again later.');
     } finally {
+      isResendingRef.current = false;
       setResending(false);
     }
   };
@@ -281,7 +332,7 @@ export function VerifyEmailPage() {
                     onChange={(e) => handleDigitChange(idx, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(idx, e)}
                     onPaste={handlePaste}
-                    disabled={loading}
+                    disabled={loading || lockedOut}
                     style={{
                       width: '48px',
                       height: '56px',
@@ -290,7 +341,7 @@ export function VerifyEmailPage() {
                       fontWeight: 700,
                       borderRadius: 'var(--radius-md)',
                       border: `2px solid ${digit ? 'var(--color-orange)' : 'var(--color-border)'}`,
-                      background: digit ? '#FFF7ED' : '#FFFFFF',
+                      background: lockedOut ? '#F1F5F9' : (digit ? '#FFF7ED' : '#FFFFFF'),
                       color: digit ? '#C2410C' : 'var(--color-navy)',
                       outline: 'none',
                       transition: 'all 0.15s ease'
@@ -302,11 +353,31 @@ export function VerifyEmailPage() {
               <button
                 type="submit"
                 className="btn btn-primary"
-                style={{ width: '100%', padding: '0.75rem', marginBottom: '1rem' }}
-                disabled={currentOtp.length !== 6 || loading}
+                style={{
+                  width: '100%',
+                  padding: '0.75rem',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+                disabled={currentOtp.length !== 6 || loading || lockedOut}
               >
                 {loading ? (
-                  <span>Verifying Code...</span>
+                  <>
+                    <div
+                      style={{
+                        width: 18,
+                        height: 18,
+                        border: '2px solid rgba(255,255,255,0.3)',
+                        borderTopColor: '#fff',
+                        borderRadius: '50%',
+                        animation: 'spin 0.8s linear infinite'
+                      }}
+                    />
+                    <span>Verifying Code...</span>
+                  </>
                 ) : (
                   <>
                     <ShieldCheck size={18} />
@@ -320,7 +391,8 @@ export function VerifyEmailPage() {
             <div style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', marginTop: '0.5rem' }}>
               Didn't receive the email?{' '}
               {cooldown > 0 ? (
-                <span style={{ color: 'var(--color-text-muted)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--color-text-muted)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                  <Clock size={14} />
                   Resend code in {cooldown}s
                 </span>
               ) : (
@@ -337,7 +409,7 @@ export function VerifyEmailPage() {
                     cursor: 'pointer'
                   }}
                 >
-                  {resending ? 'Sending...' : 'Resend Code'}
+                  {resending ? 'Sending OTP...' : 'Resend Code'}
                 </button>
               )}
             </div>
