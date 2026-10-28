@@ -1357,7 +1357,7 @@ export const lmsRepository = {
          LEFT JOIN classes c ON lc.class_id = c.id
          LEFT JOIN subjects s ON lc.subject_id = s.id
          LEFT JOIN batches b ON lc.batch_id = b.id
-         ${where} ORDER BY lc.scheduled_at ASC`,
+         ${where} ORDER BY COALESCE(lc.started_at, lc.created_at) DESC, lc.created_at DESC`,
         params
       );
       return res.rows;
@@ -1379,7 +1379,7 @@ export const lmsRepository = {
         batch_name: batch?.name,
         subject_name: subject?.name
       };
-    }).sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+    }).sort((a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0));
   },
 
   async getLiveClassById(id) {

@@ -47,7 +47,10 @@ export function TeacherLiveClassesPage() {
         api.getTeacherClasses().catch(() => []),
         api.getAdminSubjects().catch(() => [])
       ]);
-      setLiveClasses(Array.isArray(lcList) ? lcList : []);
+      const sortedLcList = (Array.isArray(lcList) ? [...lcList] : []).sort(
+        (a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0)
+      );
+      setLiveClasses(sortedLcList);
       setBatches(Array.isArray(bList) ? bList : []);
       setClasses(Array.isArray(cList) ? cList : []);
       setSubjects(Array.isArray(sList) ? sList : []);

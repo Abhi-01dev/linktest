@@ -2,6 +2,7 @@ import { lmsRepository } from '../repositories/lmsRepository.js';
 import { userRepository } from '../repositories/userRepository.js';
 import { logAudit } from '../repositories/auditRepository.js';
 import { notificationService } from '../services/notificationService.js';
+import { livekitService } from '../services/livekitService.js';
 import { z } from 'zod';
 
 const createAssignmentSchema = z.object({
@@ -505,7 +506,27 @@ export const teacherController = {
       if (req.user.role !== 'ADMIN' && session.teacher_id !== req.user.id) {
         return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized to end this lecture' } });
       }
-      const updated = await lmsRepository.updateLiveClass(id, { status: 'completed' });
+      const nowIso = new Date().toISOString();
+      const updated = await lmsRepository.updateLiveClass(id, { status: 'completed', ended_at: nowIso });
+
+      // Signal LiveKit students and tear down room
+      const roomName = `lecture-${id}`;
+      try {
+        await livekitService.sendData(roomName, {
+          type: 'LECTURE_ENDED',
+          lectureId: id,
+          message: 'This live lecture has been ended by the instructor.'
+        });
+      } catch (sendErr) {
+        console.warn('[TeacherController] LiveKit sendData notice:', sendErr.message);
+      }
+
+      try {
+        await livekitService.deleteRoom(roomName);
+      } catch (delErr) {
+        console.warn('[TeacherController] LiveKit deleteRoom notice:', delErr.message);
+      }
+
       await logAudit(req.user, 'END_LIVE_CLASS', 'live_class_sessions', id, `Ended live class "${session.title}"`);
       res.status(200).json({ success: true, data: updated, message: 'Live lecture concluded successfully.' });
     } catch (err) {

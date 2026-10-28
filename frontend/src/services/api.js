@@ -828,6 +828,14 @@ class ApiClient {
     return res.data;
   }
 
+  async controlLectureParticipant(sessionId, data) {
+    const res = await this.request(`/livekit/sessions/${sessionId}/control-participant`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    return res.data;
+  }
+
   async getTeacherAnnouncements() {
     const res = await this.request('/teacher/announcements');
     return res.data;

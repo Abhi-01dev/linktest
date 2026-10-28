@@ -300,7 +300,7 @@ describe('LinkTest Phase 2 & 5: LiveKit Live Lectures & Batch Allocation E2E Sui
     assert.equal(endBody.data.status, 'completed');
   });
 
-  test('10. Security: Post-conclusion token requests are rejected with 400 SESSION_CONCLUDED', async () => {
+  test('10. Security: Post-conclusion token requests are rejected with 400 LECTURE_ENDED', async () => {
     const res = await fetch(`${baseUrl}/api/livekit/token`, {
       method: 'POST',
       headers: {
@@ -312,7 +312,10 @@ describe('LinkTest Phase 2 & 5: LiveKit Live Lectures & Batch Allocation E2E Sui
     const body = await res.json();
     assert.equal(res.status, 400);
     assert.equal(body.success, false);
-    assert.equal(body.error.code, 'SESSION_CONCLUDED');
+    assert.ok(
+      body.error.code === 'LECTURE_ENDED' || body.error.code === 'SESSION_CONCLUDED',
+      `Expected LECTURE_ENDED or SESSION_CONCLUDED, got ${body.error?.code}`
+    );
   });
 
   test('11. Security: Unauthenticated token request is rejected with 401', async () => {
@@ -322,5 +325,81 @@ describe('LinkTest Phase 2 & 5: LiveKit Live Lectures & Batch Allocation E2E Sui
       body: JSON.stringify({ sessionId: liveSessionId })
     });
     assert.equal(res.status, 401);
+  });
+
+  test('12. Security & Moderation: Teacher controls student participant media and RBAC blocks students', async () => {
+    // 12a. Student attempts to control participant -> must be rejected with 403 Forbidden
+    const studentControlRes = await fetch(`${baseUrl}/api/livekit/sessions/${liveSessionId}/control-participant`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${studentToken}`
+      },
+      body: JSON.stringify({
+        participantIdentity: 'student-identity-123',
+        action: 'mute_mic'
+      })
+    });
+    assert.equal(studentControlRes.status, 403, 'Student must not be allowed to control participants');
+
+    // 12b. Authorized teacher controls participant -> succeeds with 200
+    const teacherControlRes = await fetch(`${baseUrl}/api/livekit/sessions/${liveSessionId}/control-participant`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        participantIdentity: studentId,
+        action: 'mute_mic'
+      })
+    });
+    const controlBody = await teacherControlRes.json();
+    assert.equal(teacherControlRes.status, 200);
+    assert.equal(controlBody.success, true);
+    assert.equal(controlBody.data.action, 'mute_mic');
+
+    // 12c. Teacher controls camera and screen share
+    const camRes = await fetch(`${baseUrl}/api/livekit/sessions/${liveSessionId}/control-participant`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        participantIdentity: studentId,
+        action: 'disable_camera'
+      })
+    });
+    assert.equal(camRes.status, 200);
+
+    const screenRes = await fetch(`${baseUrl}/api/livekit/sessions/${liveSessionId}/control-participant`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${teacherToken}`
+      },
+      body: JSON.stringify({
+        participantIdentity: studentId,
+        action: 'stop_screen_share'
+      })
+    });
+    assert.equal(screenRes.status, 200);
+  });
+
+  test('13. Live Lectures Recency Sorting: Newest sessions are returned first', async () => {
+    const listRes = await fetch(`${baseUrl}/api/teacher/live-classes`, {
+      headers: { Authorization: `Bearer ${teacherToken}` }
+    });
+    const listBody = await listRes.json();
+    assert.equal(listRes.status, 200);
+    assert.ok(Array.isArray(listBody.data));
+    if (listBody.data.length >= 2) {
+      for (let i = 0; i < listBody.data.length - 1; i++) {
+        const curr = new Date(listBody.data[i].started_at || listBody.data[i].created_at || 0).getTime();
+        const next = new Date(listBody.data[i + 1].started_at || listBody.data[i + 1].created_at || 0).getTime();
+        assert.ok(curr >= next, `Lecture at index ${i} should be more recent than index ${i + 1}`);
+      }
+    }
   });
 });

@@ -16,7 +16,9 @@ export function StudentLiveClassesPage() {
     try {
       setLoading(true);
       const data = await api.getStudentLiveClasses();
-      setLiveClasses(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? [...data] : [];
+      list.sort((a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0));
+      setLiveClasses(list);
     } catch (err) {
       showToast(err.message || 'Failed to load live sessions', 'error');
     } finally {

@@ -31,7 +31,10 @@ export function AdminLiveClassesPage() {
         api.getAdminSubjects(),
         api.getAdminTeachers()
       ]);
-      setLiveClasses(lcList || []);
+      const sortedLcList = (Array.isArray(lcList) ? [...lcList] : []).sort(
+        (a, b) => new Date(b.started_at || b.created_at || b.scheduled_at || 0) - new Date(a.started_at || a.created_at || a.scheduled_at || 0)
+      );
+      setLiveClasses(sortedLcList);
       setClasses(cList || []);
       setSubjects(sList || []);
       setTeachers(tList || []);

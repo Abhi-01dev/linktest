@@ -557,7 +557,18 @@ function MockTestRunnerView() {
     }
   }, [attemptId]);
 
+  const handleExitTo = useCallback((path) => {
+    isFinalizedRef.current = true;
+    stopCameraRef.current?.();
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    navigate(path);
+  }, [navigate]);
+
   const handleAutoSubmit = useCallback(async (reason) => {
+    isFinalizedRef.current = true;
+    stopCameraRef.current?.();
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
@@ -566,26 +577,28 @@ function MockTestRunnerView() {
         auto_submitted: true,
         reason: reason || 'Time expired'
       });
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
+      handleExitTo(`/mock-tests/attempts/${attemptId}/result`);
     } catch (err) {
       console.error('Auto-submission error:', err);
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
+      handleExitTo(`/mock-tests/attempts/${attemptId}/result`);
     }
-  }, [attemptId, isSubmitting, navigate]);
+  }, [attemptId, isSubmitting, handleExitTo]);
 
   const handleManualSubmit = useCallback(async () => {
+    isFinalizedRef.current = true;
+    stopCameraRef.current?.();
     setIsSubmitting(true);
     try {
       stopCameraRef.current?.();
       await api.submitMockTestAttempt(attemptId, {
         auto_submitted: false
       });
-      navigate(`/mock-tests/attempts/${attemptId}/result`);
+      handleExitTo(`/mock-tests/attempts/${attemptId}/result`);
     } catch (err) {
       alert(err.message || 'Submission failed. Please verify connection.');
       setIsSubmitting(false);
     }
-  }, [attemptId, navigate]);
+  }, [attemptId, handleExitTo]);
 
   // ---------------------------------------------------------------------------
   // 1. CENTRALIZED SECURITY VIOLATION PIPELINE (Requirement 2)
@@ -634,6 +647,21 @@ function MockTestRunnerView() {
     );
   }, [attemptId, DEBUG_PROCTOR]);
 
+  const attemptStatus = examData?.status || examData?.attempt?.status;
+  const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
+  const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
+  const isExpired = attemptStatus === 'expired';
+  const isTestActive = Boolean(
+    examData &&
+    !loading &&
+    !isCompleted &&
+    !isExpired &&
+    !isAutoSubmitted &&
+    !autoSubmittedState?.submitted &&
+    !isFinalizedRef.current &&
+    (remainingSeconds === null || remainingSeconds > 0)
+  );
+
   const {
     videoRef,
     startCamera,
@@ -644,8 +672,8 @@ function MockTestRunnerView() {
     faceCount,
     warningMessage: cameraWarning
   } = useWebcamProctor({
-    enabled: Boolean(examData?.proctoring_config?.webcam_required),
-    faceDetectionEnabled: Boolean(examData?.proctoring_config?.face_detection),
+    enabled: Boolean(isTestActive && examData?.proctoring_config?.webcam_required),
+    faceDetectionEnabled: Boolean(isTestActive && examData?.proctoring_config?.face_detection),
     onViolation: handleSecurityViolation,
     onEvent: handleSecurityViolation
   });
@@ -693,6 +721,8 @@ function MockTestRunnerView() {
 
       // Auto-submitted restore check (Requirement 16)
       if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') {
+        isFinalizedRef.current = true;
+        stopCameraRef.current?.();
         setAutoSubmittedState({
           submitted: true,
           reason: subReason || 'AUTO_SUBMITTED',
@@ -706,6 +736,8 @@ function MockTestRunnerView() {
       }
 
       if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed' || attemptStatus === 'expired') {
+        isFinalizedRef.current = true;
+        stopCameraRef.current?.();
         setRemainingSeconds(0);
         setLoading(false);
         return;
@@ -740,8 +772,8 @@ function MockTestRunnerView() {
       }
 
       const proctorConfig = data.proctoring_config || data.proctoringConfig || data.test?.proctoring_config;
-      // Start webcam if test requires proctoring
-      if (proctorConfig?.webcam_required) {
+      // Start webcam if test requires proctoring and attempt is still active
+      if (!isFinalizedRef.current && proctorConfig?.webcam_required) {
         startCameraRef.current?.();
       }
 
@@ -759,9 +791,29 @@ function MockTestRunnerView() {
   useEffect(() => {
     loadAttempt();
     return () => {
+      isFinalizedRef.current = true;
       stopCameraRef.current?.();
     };
   }, [loadAttempt]);
+
+  // Dedicated browser lifecycle listeners for immediate camera and fullscreen cleanup
+  useEffect(() => {
+    const handleLeavePage = () => {
+      isFinalizedRef.current = true;
+      stopCameraRef.current?.();
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    };
+    window.addEventListener('beforeunload', handleLeavePage);
+    window.addEventListener('pagehide', handleLeavePage);
+    return () => {
+      isFinalizedRef.current = true;
+      stopCameraRef.current?.();
+      window.removeEventListener('beforeunload', handleLeavePage);
+      window.removeEventListener('pagehide', handleLeavePage);
+    };
+  }, []);
 
   // ---------------------------------------------------------------------------
   // 3. SERVER-AUTHORITATIVE COUNTDOWN TIMER
@@ -769,13 +821,15 @@ function MockTestRunnerView() {
 
   useEffect(() => {
     if (loading || !examData) return;
-    const attemptStatus = examData?.status || examData?.attempt?.status;
-    if (attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed' || attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') return;
+    const currentStatus = examData?.status || examData?.attempt?.status;
+    if (currentStatus === 'submitted' || currentStatus === 'evaluated' || currentStatus === 'completed' || currentStatus === 'AUTO_SUBMITTED' || currentStatus === 'auto_submitted') return;
 
     timerIntervalRef.current = setInterval(() => {
       setRemainingSeconds(prev => {
         if (prev <= 1) {
           clearInterval(timerIntervalRef.current);
+          isFinalizedRef.current = true;
+          stopCameraRef.current?.();
           handleAutoSubmit('EXAM_TIME_EXPIRED');
           return 0;
         }
@@ -1136,7 +1190,7 @@ function MockTestRunnerView() {
               Retry
             </button>
             <button
-              onClick={() => navigate('/mock-tests')}
+              onClick={() => handleExitTo('/mock-tests')}
               className="btn btn-secondary"
               style={{ padding: '0.6rem 1.25rem', fontWeight: 600 }}
             >
@@ -1166,11 +1220,6 @@ function MockTestRunnerView() {
     examData?.proctoring_config?.max_security_warnings ||
     examData?.test?.proctoring_config?.tab_switch_limit ||
     examData?.proctoring_config?.tab_switch_limit || 3;
-
-  const attemptStatus = examData?.status || examData?.attempt?.status;
-  const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
-  const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
-  const isExpired = attemptStatus === 'expired';
 
   if (isExpired) {
     return (
@@ -1204,14 +1253,14 @@ function MockTestRunnerView() {
           </p>
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              onClick={() => navigate(`/mock-tests/attempts/${attemptId}/result`)}
+              onClick={() => handleExitTo(`/mock-tests/attempts/${attemptId}/result`)}
               className="btn btn-primary"
               style={{ fontWeight: 700, padding: '0.65rem 1.5rem' }}
             >
               View Scorecard & Results
             </button>
             <button
-              onClick={() => navigate('/mock-tests')}
+              onClick={() => handleExitTo('/mock-tests')}
               className="btn btn-secondary"
               style={{ fontWeight: 600, padding: '0.65rem 1.25rem' }}
             >
@@ -1307,14 +1356,14 @@ function MockTestRunnerView() {
 
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              onClick={() => navigate(`/mock-tests/attempts/${attemptId}/result`)}
+              onClick={() => handleExitTo(`/mock-tests/attempts/${attemptId}/result`)}
               className="btn btn-primary"
               style={{ fontWeight: 700, padding: '0.65rem 1.5rem' }}
             >
               View Scorecard & Results
             </button>
             <button
-              onClick={() => navigate('/mock-tests')}
+              onClick={() => handleExitTo('/mock-tests')}
               className="btn btn-secondary"
               style={{ fontWeight: 600, padding: '0.65rem 1.25rem' }}
             >
@@ -2413,7 +2462,7 @@ function MockTestRunnerView() {
                 This mock test currently does not contain any questions. Please check back later or contact your instructor.
               </p>
               <button
-                onClick={() => navigate('/mock-tests')}
+                onClick={() => handleExitTo('/mock-tests')}
                 className="btn btn-secondary"
                 style={{ fontWeight: 600 }}
               >

@@ -22,6 +22,7 @@ export function useWebcamProctor({
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const deviceChangeListenerRef = useRef(null);
+  const isCancelledRef = useRef(false);
 
   const [hasPermission, setHasPermission] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -333,6 +334,7 @@ export function useWebcamProctor({
    * Request user camera permission and start video stream
    */
   const startCamera = useCallback(async () => {
+    if (!enabled || isCancelledRef.current) return;
     setError(null);
 
     try {
@@ -358,6 +360,16 @@ export function useWebcamProctor({
         },
         audio: false
       });
+
+      // Abort check if camera was stopped or disabled while awaiting getUserMedia
+      if (isCancelledRef.current || !enabled) {
+        stream.getTracks().forEach(track => {
+          try {
+            track.stop();
+          } catch (e) {}
+        });
+        return;
+      }
 
       streamRef.current = stream;
       if (videoRef.current) {
@@ -399,6 +411,7 @@ export function useWebcamProctor({
         navigator.mediaDevices.addEventListener('devicechange', deviceChangeListenerRef.current);
       }
     } catch (err) {
+      if (isCancelledRef.current || !enabled) return;
       console.error('[WebcamProctor] Camera failure:', err);
       const isDenied = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
       const msg = isDenied
@@ -414,12 +427,14 @@ export function useWebcamProctor({
         { message: err.message, name: err.name }
       );
     }
-  }, [notifyViolation]);
+  }, [enabled, notifyViolation]);
 
   /**
-   * Safely stop camera stream and release hardware
+   * Safely and idempotently stop camera stream and release hardware
    */
   const stopCamera = useCallback(() => {
+    isCancelledRef.current = true;
+
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
@@ -442,6 +457,13 @@ export function useWebcamProctor({
     }
 
     if (videoRef.current) {
+      if (videoRef.current.srcObject && typeof videoRef.current.srcObject.getTracks === 'function') {
+        videoRef.current.srcObject.getTracks().forEach(track => {
+          try {
+            track.stop();
+          } catch (e) {}
+        });
+      }
       videoRef.current.srcObject = null;
     }
 
@@ -452,24 +474,29 @@ export function useWebcamProctor({
     setIsStreaming(false);
   }, []);
 
-  // Ensure video element receives the stream as soon as videoRef mounts in the DOM
+  // Ensure video element receives the stream when active
   useEffect(() => {
-    if (videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
+    if (enabled && isStreaming && videoRef.current && streamRef.current && videoRef.current.srcObject !== streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
       videoRef.current.play().catch(e => console.warn('Autoplay prevented:', e));
     }
-  });
+  }, [enabled, isStreaming]);
 
-  // Automatically start camera if enabled and not already streaming
+  // Synchronize camera running state with enabled prop
   useEffect(() => {
-    if (enabled && !isStreaming && !streamRef.current) {
-      startCamera();
+    if (enabled) {
+      isCancelledRef.current = false;
+      if (!isStreaming && !streamRef.current) {
+        startCamera();
+      }
+    } else {
+      stopCamera();
     }
-  }, [enabled, isStreaming, startCamera]);
+  }, [enabled, isStreaming, startCamera, stopCamera]);
 
   // Frame processing timer loop (~ 1.0 second intervals for precise timing)
   useEffect(() => {
-    if (isStreaming && faceDetectionEnabled) {
+    if (enabled && isStreaming && faceDetectionEnabled) {
       intervalRef.current = setInterval(processFrame, 1000);
     }
     return () => {
@@ -478,11 +505,20 @@ export function useWebcamProctor({
         intervalRef.current = null;
       }
     };
-  }, [isStreaming, faceDetectionEnabled, processFrame]);
+  }, [enabled, isStreaming, faceDetectionEnabled, processFrame]);
 
-  // Cleanup camera on component unmount
+  // Cleanup camera on component unmount and browser unload/pagehide
   useEffect(() => {
+    const handleBrowserUnload = () => {
+      stopCamera();
+    };
+
+    window.addEventListener('beforeunload', handleBrowserUnload);
+    window.addEventListener('pagehide', handleBrowserUnload);
+
     return () => {
+      window.removeEventListener('beforeunload', handleBrowserUnload);
+      window.removeEventListener('pagehide', handleBrowserUnload);
       stopCamera();
     };
   }, [stopCamera]);
