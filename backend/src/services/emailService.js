@@ -14,42 +14,117 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+export function categorizeEmailError(err) {
+  if (!err) {
+    const error = new Error('Failed to deliver email. Please try again.');
+    error.statusCode = 502;
+    error.code = 'EMAIL_DELIVERY_FAILED';
+    return error;
+  }
+
+  const msg = String(err.message || '');
+  const code = String(err.code || '');
+
+  if (
+    code === 'ETIMEDOUT' ||
+    code === 'ESOCKET' ||
+    code === 'ESOCKETTIMEDOUT' ||
+    msg.toLowerCase().includes('timeout') ||
+    msg.toLowerCase().includes('timed out')
+  ) {
+    const error = new Error('Email delivery timed out. Please try again.');
+    error.statusCode = 504;
+    error.code = 'EMAIL_TIMEOUT';
+    return error;
+  }
+
+  if (
+    code === 'EAUTH' ||
+    code === '535' ||
+    msg.includes('535') ||
+    msg.toLowerCase().includes('invalid credentials') ||
+    msg.toLowerCase().includes('bad auth') ||
+    msg.toLowerCase().includes('username and password not accepted')
+  ) {
+    const error = new Error('Email service authentication failed. Please contact support.');
+    error.statusCode = 502;
+    error.code = 'SMTP_AUTH_FAILED';
+    return error;
+  }
+
+  if (
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'ECONNRESET' ||
+    code === 'EHOSTUNREACH' ||
+    msg.toLowerCase().includes('connection refused')
+  ) {
+    const error = new Error('Email delivery service is currently unreachable. Please try again later.');
+    error.statusCode = 503;
+    error.code = 'SMTP_UNAVAILABLE';
+    return error;
+  }
+
+  const error = new Error('Failed to deliver email. Please try again.');
+  error.statusCode = err.statusCode || 502;
+  error.code = err.code || 'EMAIL_DELIVERY_FAILED';
+  return error;
+}
+
+export function setTransporter(customTransporter) {
+  transporter = customTransporter;
+}
+
+export function getTransporter() {
+  return transporter;
+}
+
 export function initTransporter() {
   if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
     transporter = null;
-    return;
+    return null;
   }
 
   if (!config.smtp.user || !config.smtp.pass) {
     if (config.nodeEnv === 'production') {
       console.error('[LinkTest Email] FATAL: SMTP credentials not set in production.');
     } else {
-      console.info('[LinkTest Email] Notice: Gmail SMTP credentials (SMTP_USER/SMTP_APP_PASSWORD) not configured.');
-      console.info('[LinkTest Email] Development Mode: Verification OTPs will be logged to server console.');
+      console.info('[LinkTest Email] Notice: Gmail SMTP credentials not configured. Local fallback active.');
     }
     transporter = null;
-    return;
+    return null;
+  }
+
+  if (transporter) {
+    return transporter;
   }
 
   try {
     transporter = nodemailer.createTransport({
+      pool: true,
+      maxConnections: 5,
+      maxMessages: 100,
       host: config.smtp.host,
       port: config.smtp.port,
-      secure: config.smtp.secure, // false for 587
-      requireTLS: true, // enforce STARTTLS
+      secure: config.smtp.secure, // false for 587 (STARTTLS)
+      requireTLS: true,           // Enforce STARTTLS
       auth: {
         user: config.smtp.user,
         pass: config.smtp.pass
       },
       tls: {
         rejectUnauthorized: true
-      }
+      },
+      connectionTimeout: 5000, // 5s connection timeout
+      greetingTimeout: 5000,   // 5s greeting timeout
+      socketTimeout: 10000     // 10s socket inactivity timeout
     });
-    console.log(`[LinkTest Email] Gmail SMTP transporter configured for ${config.smtp.user} via ${config.smtp.host}:${config.smtp.port}`);
+    console.log(`[LinkTest Email] Gmail SMTP connection pool configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
   } catch (err) {
-    console.error('[LinkTest Email] Failed to initialize nodemailer transporter:', err.message);
+    console.error('[LinkTest Email] Failed to initialize nodemailer transporter pool:', err.message);
     transporter = null;
   }
+  return transporter;
 }
 
 // Build branded HTML email template
@@ -189,19 +264,46 @@ export const emailService = {
       return { success: true, mocked: true, messageId: 'test-mock-id' };
     }
 
-    // 2. Transporter active (Real Gmail SMTP)
+    // 2. Transporter active (Real Gmail SMTP with connection pooling & timeouts)
     if (transporter) {
+      let timer;
       try {
-        const info = await transporter.sendMail(emailPayload);
-        console.log(`[LinkTest Email] Verification OTP successfully sent to ${email} (MessageId: ${info.messageId})`);
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            timeoutErr.code = 'ETIMEDOUT';
+            reject(timeoutErr);
+          }, 6000);
+        });
+
+        const info = await Promise.race([
+          transporter.sendMail(emailPayload),
+          timeoutPromise
+        ]);
+        clearTimeout(timer);
+
+        if (config.nodeEnv !== 'production') {
+          console.log(`[LinkTest Email] Verification OTP successfully sent to ${email} (MessageId: ${info.messageId})`);
+        } else {
+          console.log(`[LinkTest Email] Verification email dispatched to ${email}`);
+        }
+        lastSentEmail = { ...emailPayload, otp: 'MASKED_IN_PROD', sentAt: new Date() };
         return { success: true, messageId: info.messageId };
-      } catch (err) {
-        console.error(`[LinkTest Email] Gmail SMTP error sending to ${email}:`, err.message);
-        throw new Error(`Failed to send verification email via Gmail SMTP: ${err.message}`);
+      } catch (rawErr) {
+        clearTimeout(timer);
+        console.error(`[LinkTest Email] Failed sending verification email to ${email}:`, rawErr.code || rawErr.message);
+        throw categorizeEmailError(rawErr);
       }
     }
 
-    // 3. Development Fallback (Log OTP to console)
+    // 3. Development Fallback (Log OTP to console only in dev/test, NEVER in production)
+    if (config.nodeEnv === 'production') {
+      const err = new Error('Email delivery service is currently unavailable.');
+      err.statusCode = 503;
+      err.code = 'SMTP_UNAVAILABLE';
+      throw err;
+    }
+
     console.log('================================================================');
     console.log('  [LinkTest Email Simulator] VERIFICATION CODE SENT            ');
     console.log('----------------------------------------------------------------');
@@ -247,14 +349,31 @@ export const emailService = {
       return { success: true, mocked: true };
     }
     if (transporter) {
-      const info = await transporter.sendMail(payload);
-      console.log(`[LinkTest Email] Teacher invitation sent to ${email}`);
-      return { success: true, messageId: info.messageId };
+      let timer;
+      try {
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            timeoutErr.code = 'ETIMEDOUT';
+            reject(timeoutErr);
+          }, 6000);
+        });
+        const info = await Promise.race([
+          transporter.sendMail(payload),
+          timeoutPromise
+        ]);
+        clearTimeout(timer);
+        console.log(`[LinkTest Email] Teacher invitation sent to ${email}`);
+        return { success: true, messageId: info.messageId };
+      } catch (err) {
+        clearTimeout(timer);
+        throw categorizeEmailError(err);
+      }
     }
     if (config.nodeEnv === 'production') {
       const err = new Error('Teacher invitation email delivery is unavailable.');
       err.statusCode = 503;
-      err.code = 'EMAIL_DELIVERY_UNAVAILABLE';
+      err.code = 'SMTP_UNAVAILABLE';
       throw err;
     }
     console.log('================================================================');
@@ -293,12 +412,30 @@ export const emailService = {
       return { success: true, mocked: true };
     }
     if (transporter) {
-      const info = await transporter.sendMail(payload);
-      return { success: true, messageId: info.messageId };
+      let timer;
+      try {
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const timeoutErr = new Error('SMTP connection timed out after 6000ms');
+            timeoutErr.code = 'ETIMEDOUT';
+            reject(timeoutErr);
+          }, 6000);
+        });
+        const info = await Promise.race([
+          transporter.sendMail(payload),
+          timeoutPromise
+        ]);
+        clearTimeout(timer);
+        return { success: true, messageId: info.messageId };
+      } catch (err) {
+        clearTimeout(timer);
+        throw categorizeEmailError(err);
+      }
     }
     if (config.nodeEnv === 'production') {
       const err = new Error('Password reset email cannot be sent because SMTP is not configured.');
-      err.code = 'EMAIL_DELIVERY_FAILED';
+      err.statusCode = 503;
+      err.code = 'SMTP_UNAVAILABLE';
       throw err;
     }
     console.log('================================================================');

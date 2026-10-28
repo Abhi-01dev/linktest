@@ -136,13 +136,31 @@ export const userRepository = {
 
     if (isPostgresConnected && pool) {
       const db = client || pool;
-      const res = await db.query(
-        `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING ${SAFE_USER_FIELDS}`,
-        [id, fullName.trim(), normalizedEmail, passwordHash, role, status, emailVerified, emailVerifiedAt, createdAt]
-      );
-      return res.rows[0];
+      try {
+        const res = await db.query(
+          `INSERT INTO users (id, full_name, email, password_hash, role, status, email_verified, email_verified_at, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING ${SAFE_USER_FIELDS}`,
+          [id, fullName.trim(), normalizedEmail, passwordHash, role, status, emailVerified, emailVerifiedAt, createdAt]
+        );
+        return res.rows[0];
+      } catch (err) {
+        if (err.code === '23505') {
+          const conflictErr = new Error('An account with this email address already exists.');
+          conflictErr.statusCode = 409;
+          conflictErr.code = 'CONFLICT';
+          throw conflictErr;
+        }
+        throw err;
+      }
+    }
+
+    const existingInMem = memoryStore.users.find(u => u.email.toLowerCase() === normalizedEmail);
+    if (existingInMem) {
+      const conflictErr = new Error('An account with this email address already exists.');
+      conflictErr.statusCode = 409;
+      conflictErr.code = 'CONFLICT';
+      throw conflictErr;
     }
 
     const newUser = {
