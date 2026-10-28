@@ -182,9 +182,16 @@ export function VerifyEmailPage() {
         navigate('/dashboard');
       }, 1500);
     } catch (err) {
+      if (err.code === 'ALREADY_VERIFIED') {
+        showToast('Your email is already verified! Please sign in.', 'info');
+        setTimeout(() => navigate('/login'), 1500);
+        return;
+      }
       if (err.code === 'MAX_ATTEMPTS_EXCEEDED') {
         setLockedOut(true);
         setError('Too many incorrect attempts. For security, this verification code has been locked. Please request a new code.');
+      } else if (err.code === 'OTP_ALREADY_USED') {
+        setError('This verification code has already been consumed. Please log in or request a new code.');
       } else if (err.code === 'OTP_EXPIRED') {
         setError('This verification code has expired. Please request a new code.');
       } else {
@@ -364,6 +371,22 @@ export function VerifyEmailPage() {
               </div>
             )}
 
+            {!emailParam && (
+              <div style={{ marginBottom: '1.25rem', textAlign: 'left' }}>
+                <label className="form-label" style={{ fontSize: '0.85rem' }}>
+                  Registered Email Address
+                </label>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="student@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value.trim().toLowerCase())}
+                  disabled={loading || success}
+                  required
+                />
+              </div>
+            )}
             {/* 6-Digit OTP Boxes */}
             <form onSubmit={handleVerify}>
               <div

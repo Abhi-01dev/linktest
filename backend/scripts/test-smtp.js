@@ -1,6 +1,14 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load .env from backend directory or project root
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config();
 
 async function testSmtp() {
@@ -55,6 +63,19 @@ async function testSmtp() {
     await transporter.verify();
     console.log('[SMTP Test] SUCCESS: Gmail SMTP credentials verified and authenticated!');
     console.log('LinkTest is ready to deliver production emails.');
+
+    const recipient = process.argv[2];
+    if (recipient && recipient.includes('@')) {
+      console.log(`\n[SMTP Test] Sending live diagnostic email to ${recipient}...`);
+      const info = await transporter.sendMail({
+        from: `"${process.env.SMTP_FROM_NAME || 'LinkTest'}" <${process.env.SMTP_FROM_EMAIL || user}>`,
+        to: recipient,
+        subject: 'LinkTest SMTP Diagnostic Test',
+        text: 'This is a test email confirming that Gmail SMTP is properly configured and functional in LinkTest.',
+        html: '<div style="font-family:sans-serif;padding:20px;border:1px solid #E2E8F0;border-radius:8px"><h2>LinkTest SMTP Operational</h2><p>Your Gmail SMTP integration is fully configured and delivering emails successfully.</p></div>'
+      });
+      console.log(`[SMTP Test] Live email delivered successfully! MessageId: ${info.messageId}`);
+    }
   } catch (err) {
     console.error('[SMTP Test] FAILED: Could not authenticate with Gmail SMTP server:');
     console.error(`  Error Code:    ${err.code || 'UNKNOWN'}`);

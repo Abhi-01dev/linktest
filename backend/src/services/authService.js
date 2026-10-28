@@ -317,6 +317,7 @@ export const authService = {
     try {
       const emailResult = await emailService.sendVerificationOtp({ email: user.email, fullName: user.full_name, otp });
       if (emailResult && emailResult.sent === false) {
+        await tokenRepository.clearTokenCooldown(user.id);
         const deliveryErr = new Error('Failed to deliver verification email. Please try again later.');
         deliveryErr.statusCode = 503;
         deliveryErr.code = emailResult.errorCode || 'SMTP_UNAVAILABLE';
@@ -328,6 +329,7 @@ export const authService = {
       } else {
         console.error('[Resend] Email delivery failed with code:', err.code || 'EMAIL_DELIVERY_FAILED');
       }
+      await tokenRepository.clearTokenCooldown(user.id);
       const deliveryErr = new Error(err.message || 'Failed to deliver verification email.');
       deliveryErr.statusCode = err.statusCode || 502;
       deliveryErr.code = err.code || 'EMAIL_DELIVERY_FAILED';

@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import { config } from '../config/env.js';
 
 let transporter = null;
+let customTransporterInjected = false;
 let lastSentEmail = null; // Exposed for test assertions
 
 function escapeHtml(str) {
@@ -73,6 +74,7 @@ export function categorizeEmailError(err) {
 
 export function setTransporter(customTransporter) {
   transporter = customTransporter;
+  customTransporterInjected = customTransporter !== null;
 }
 
 export function getTransporter() {
@@ -260,6 +262,12 @@ export const emailService = {
       initTransporter();
     }
 
+    // In-memory capture when mock/test mode is active without a custom injected transporter
+    if ((config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') && !customTransporterInjected) {
+      lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
+      return { success: true, sent: true, mocked: true, messageId: 'test-mock-id' };
+    }
+
     // 1. Transporter active (Real Gmail SMTP with connection pooling & timeouts, or injected mock/test transporter)
     if (transporter) {
       let timer;
@@ -349,6 +357,11 @@ export const emailService = {
 </div></body></html>`;
     const text = `You're invited to join LinkTest as a Teacher!\n\nHi ${fullName},\n\n${inviterName} has invited you. Click below to accept:\n${inviteUrl}\n\nExpires: ${expireStr}\n\n— LinkTest`;
 
+    if ((config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') && !customTransporterInjected) {
+      lastSentEmail = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text, sentAt: new Date() };
+      return { success: true, mocked: true };
+    }
+
     const payload = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text };
 
     if (transporter) {
@@ -417,6 +430,11 @@ export const emailService = {
 <p style="color:#94A3B8;font-size:12px;text-align:center">LinkTest | Learn Smarter. Practice Better. Test Your Progress.</p>
 </div></body></html>`;
     const text = `Reset your LinkTest password\n\nHi ${fullName},\n\nVisit: ${resetUrl}\n\nExpires at: ${expireStr}\n\n— LinkTest`;
+
+    if ((config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') && !customTransporterInjected) {
+      lastSentEmail = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text, sentAt: new Date() };
+      return { success: true, mocked: true };
+    }
 
     const payload = { from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`, to: email, subject, html, text };
 

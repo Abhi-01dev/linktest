@@ -1,18 +1,18 @@
 import { z } from 'zod';
 
 export const registerSchema = z.object({
-  full_name: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-  email: z.string().email('Please enter a valid email address'),
+  full_name: z.string().trim().min(2, 'Full name must be at least 2 characters').max(100),
+  email: z.string().trim().email('Please enter a valid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters')
 });
 
 export const loginSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
+  email: z.string().trim().email('Please enter a valid email address'),
   password: z.string().min(1, 'Password is required')
 });
 
 export const verifyEmailSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
+  email: z.string().trim().email('Please enter a valid email address'),
   otp: z.preprocess(
     val => (typeof val === 'number' ? String(val) : val),
     z.string().trim().regex(/^\d{6}$/, 'Verification code must be exactly 6 digits')
@@ -20,7 +20,7 @@ export const verifyEmailSchema = z.object({
 });
 
 export const resendVerificationSchema = z.object({
-  email: z.string().email('Please enter a valid email address')
+  email: z.string().trim().email('Please enter a valid email address')
 });
 
 export const googleAuthSchema = z.object({
