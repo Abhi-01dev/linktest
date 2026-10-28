@@ -141,6 +141,10 @@ export const authService = {
       emailErrorCode = err.code || 'SMTP_UNAVAILABLE';
     }
 
+    if (!emailSent) {
+      await tokenRepository.clearTokenCooldown(user.id);
+    }
+
     return {
       user: {
         id: user.id,

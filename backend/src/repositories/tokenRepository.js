@@ -269,6 +269,15 @@ export const tokenRepository = {
     if (token) token.last_sent_at = lastSentAt;
   },
 
+  async clearTokenCooldown(userId) {
+    if (isPostgresConnected && pool) {
+      await pool.query(`UPDATE email_verification_tokens SET last_sent_at = NULL WHERE user_id = $1`, [userId]);
+      return;
+    }
+    const token = memoryStore.email_verification_tokens.find(t => t.user_id === userId);
+    if (token) token.last_sent_at = null;
+  },
+
   async setTokenAttemptsForTest(userId, attempts) {
     if (isPostgresConnected && pool) {
       await pool.query(`UPDATE email_verification_tokens SET attempts = $1 WHERE user_id = $2`, [attempts, userId]);

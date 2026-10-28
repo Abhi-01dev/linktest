@@ -101,9 +101,6 @@ export function initTransporter() {
 
   try {
     transporter = nodemailer.createTransport({
-      pool: true,
-      maxConnections: 5,
-      maxMessages: 100,
       host: config.smtp.host,
       port: config.smtp.port,
       secure: config.smtp.secure, // false for 587 (STARTTLS)
@@ -115,11 +112,11 @@ export function initTransporter() {
       tls: {
         rejectUnauthorized: true
       },
-      connectionTimeout: 5000, // 5s connection timeout
-      greetingTimeout: 5000,   // 5s greeting timeout
-      socketTimeout: 10000     // 10s socket inactivity timeout
+      connectionTimeout: 10000, // 10s connection timeout
+      greetingTimeout: 10000,   // 10s greeting timeout
+      socketTimeout: 15000      // 15s socket inactivity timeout
     });
-    console.log(`[LinkTest Email] Gmail SMTP connection pool configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
+    console.log(`[LinkTest Email] Gmail SMTP transport configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
   } catch (err) {
     console.error('[LinkTest Email] Failed to initialize nodemailer transporter pool:', err.message);
     transporter = null;

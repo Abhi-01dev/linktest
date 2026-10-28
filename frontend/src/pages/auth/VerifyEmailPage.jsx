@@ -22,14 +22,19 @@ export function VerifyEmailPage() {
   const { verifyEmail } = useAuth();
   const { showToast } = useToast();
 
-  const emailParam = searchParams.get('email') || location.state?.email || '';
+  const emailParam = (searchParams.get('email') || location.state?.email || '').trim().toLowerCase();
   const [email, setEmail] = useState(emailParam);
   const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-  const [cooldown, setCooldown] = useState(60);
+  const [cooldown, setCooldown] = useState(() => {
+    if (location.state?.email_sent === false || searchParams.get('deliveryFailed') === 'true') {
+      return 0;
+    }
+    return 60;
+  });
   const [lockedOut, setLockedOut] = useState(false);
 
   // Delivery failure state: authoritative from navigation state or URL query
@@ -462,6 +467,10 @@ export function VerifyEmailPage() {
                 </button>
               )}
             </div>
+
+            <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginTop: '0.75rem', marginBottom: 0 }}>
+              💡 Can't find the email? Please check your <strong>Spam</strong> or <strong>Junk</strong> folder.
+            </p>
 
             <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid var(--color-border)', fontSize: '0.85rem' }}>
               <Link to="/login" style={{ color: 'var(--color-text-muted)' }}>
