@@ -81,17 +81,47 @@ export function getTransporter() {
   return transporter;
 }
 
+export function createTransportInstance(opts = {}) {
+  const host = (opts.host || config.smtp.host || "smtp.gmail.com").trim();
+  const port = opts.port !== undefined ? opts.port : config.smtp.port;
+  const secure = opts.secure !== undefined ? opts.secure : (port === 465 || config.smtp.secure);
+  const user = (opts.user || config.smtp.user || "").trim();
+  const pass = (opts.pass || config.smtp.pass || "").trim();
+
+  const transportConfig = {
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 25000,
+    tls: {
+      rejectUnauthorized: true
+    }
+  };
+
+  if (!secure && port === 587) {
+    transportConfig.requireTLS = true;
+  }
+
+  return nodemailer.createTransport(transportConfig);
+}
+
 export function initTransporter() {
-  if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
+  if (config.nodeEnv === "test" || process.env.MOCK_EMAIL === "true") {
     transporter = null;
     return null;
   }
 
   if (!config.smtp.user || !config.smtp.pass) {
-    if (config.nodeEnv === 'production') {
-      console.error('[LinkTest Email] FATAL: SMTP credentials not set in production.');
+    if (config.nodeEnv === "production") {
+      console.error("[LinkTest Email] FATAL: SMTP credentials not set in production.");
     } else {
-      console.info('[LinkTest Email] Notice: Gmail SMTP credentials not configured. Local fallback active.');
+      console.info("[LinkTest Email] Notice: Gmail SMTP credentials not configured. Local fallback active.");
     }
     transporter = null;
     return null;
@@ -102,30 +132,14 @@ export function initTransporter() {
   }
 
   try {
-    transporter = nodemailer.createTransport({
-      host: config.smtp.host,
-      port: config.smtp.port,
-      secure: config.smtp.secure, // false for 587 (STARTTLS)
-      requireTLS: true,           // Enforce STARTTLS
-      auth: {
-        user: config.smtp.user,
-        pass: config.smtp.pass
-      },
-      tls: {
-        rejectUnauthorized: true
-      },
-      connectionTimeout: 15000, // 15s connection timeout
-      greetingTimeout: 15000,   // 15s greeting timeout
-      socketTimeout: 20000      // 20s socket inactivity timeout
-    });
-    console.log(`[LinkTest Email] Gmail SMTP transport configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
+    transporter = createTransportInstance();
+    console.log(`[LinkTest Email] Resilient Gmail SMTP transport configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
   } catch (err) {
-    console.error('[LinkTest Email] Failed to initialize nodemailer transporter pool:', err.message);
+    console.error("[LinkTest Email] Failed to initialize nodemailer transporter pool:", err.message);
     transporter = null;
   }
   return transporter;
 }
-
 // Build branded HTML email template
 function buildVerificationHtml(fullName, otp) {
   const safeName = escapeHtml(fullName || 'Learner');
@@ -244,8 +258,21 @@ LinkTest | Learn Smarter. Practice Better. Test Your Progress.`;
 }
 
 export const emailService = {
-  async sendVerificationOtp({ email, fullName, otp }) {
-    const subject = 'Verify your email address — LinkTest';
+  async sendVerificationOtp(arg1, arg2, arg3, arg4) {
+    let email, fullName, otp, customTimeoutMs;
+    if (typeof arg1 === "object" && arg1 !== null) {
+      email = arg1.email;
+      fullName = arg1.fullName;
+      otp = arg1.otp;
+      customTimeoutMs = arg1.timeoutMs;
+    } else {
+      email = arg1;
+      otp = arg2;
+      fullName = arg3;
+      customTimeoutMs = arg4;
+    }
+
+    const subject = "Verify your email address — LinkTest";
     const html = buildVerificationHtml(fullName, otp);
     const text = buildVerificationText(fullName, otp);
 
@@ -258,77 +285,100 @@ export const emailService = {
     };
 
     // Ensure transporter is initialized if credentials exist and not in mock/test mode
-    if (!transporter && config.smtp?.user && config.smtp?.pass && config.nodeEnv !== 'test' && process.env.MOCK_EMAIL !== 'true') {
+    if (!transporter && config.smtp?.user && config.smtp?.pass && config.nodeEnv !== "test" && process.env.MOCK_EMAIL !== "true") {
       initTransporter();
     }
 
     // In-memory capture when mock/test mode is active without a custom injected transporter
-    if ((config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') && !customTransporterInjected) {
+    if ((config.nodeEnv === "test" || process.env.MOCK_EMAIL === "true") && !customTransporterInjected) {
       lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-      return { success: true, sent: true, mocked: true, messageId: 'test-mock-id' };
+      return { success: true, sent: true, mocked: true, messageId: "test-mock-id" };
     }
 
     // 1. Transporter active (Real Gmail SMTP with connection pooling & timeouts, or injected mock/test transporter)
     if (transporter) {
-      let timer;
+      const timeoutMs = customTimeoutMs || config.smtp?.timeoutMs || 25000;
+
+      const attemptSend = async (targetTransporter) => {
+        let timer;
+        try {
+          const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
+              timeoutErr.code = "ETIMEDOUT";
+              reject(timeoutErr);
+            }, timeoutMs);
+          });
+
+          const sendMailPromise = targetTransporter.sendMail(emailPayload);
+          sendMailPromise.catch(() => {});
+
+          const info = await Promise.race([sendMailPromise, timeoutPromise]);
+          clearTimeout(timer);
+          return info;
+        } catch (err) {
+          clearTimeout(timer);
+          throw err;
+        }
+      };
+
       try {
-        const timeoutMs = config.smtp?.timeoutMs || 15000;
-        const timeoutPromise = new Promise((_, reject) => {
-          timer = setTimeout(() => {
-            const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
-            timeoutErr.code = 'ETIMEDOUT';
-            reject(timeoutErr);
-          }, timeoutMs);
-        });
-
-        const sendMailPromise = transporter.sendMail(emailPayload);
-        // Prevent unhandled promise rejection if provider fails/rejects after timeout fires
-        sendMailPromise.catch(() => {});
-
-        const info = await Promise.race([
-          sendMailPromise,
-          timeoutPromise
-        ]);
-        clearTimeout(timer);
-
-        if (config.nodeEnv !== 'production') {
+        const info = await attemptSend(transporter);
+        if (config.nodeEnv !== "production") {
           console.log(`[LinkTest Email] Verification OTP successfully sent to ${email} (MessageId: ${info.messageId})`);
         } else {
           console.log(`[LinkTest Email] Verification email dispatched to ${email}`);
         }
         lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
         return { success: true, sent: true, messageId: info.messageId };
-      } catch (rawErr) {
-        clearTimeout(timer);
+      } catch (firstErr) {
         if (!customTransporterInjected) {
-          transporter = null;
+          console.warn(`[LinkTest Email] Primary send attempt failed (${firstErr.code || firstErr.message}). Retrying with resilient fallback...`);
+          try {
+            const fallbackPort = config.smtp.port === 587 ? 465 : config.smtp.port;
+            const fallbackSecure = fallbackPort === 465;
+            const fallbackTransporter = createTransportInstance({
+              port: fallbackPort,
+              secure: fallbackSecure
+            });
+
+            const info = await attemptSend(fallbackTransporter);
+            transporter = fallbackTransporter;
+            console.log(`[LinkTest Email] Verification OTP sent successfully via fallback (${fallbackPort}) to ${email}`);
+            lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
+            return { success: true, sent: true, messageId: info.messageId };
+          } catch (retryErr) {
+            transporter = null;
+            console.error(`[LinkTest Email] Fallback retry failed for ${email}:`, retryErr.code || retryErr.message);
+            throw categorizeEmailError(retryErr);
+          }
+        } else {
+          throw categorizeEmailError(firstErr);
         }
-        console.error(`[LinkTest Email] Failed sending verification email to ${email}:`, rawErr.code || rawErr.message);
-        throw categorizeEmailError(rawErr);
       }
     }
 
     // 2. Test Mode (In-memory capture when no transporter is explicitly configured/injected)
-    if (config.nodeEnv === 'test' || process.env.MOCK_EMAIL === 'true') {
+    if (config.nodeEnv === "test" || process.env.MOCK_EMAIL === "true") {
       lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
-      return { success: true, sent: true, mocked: true, messageId: 'test-mock-id' };
+      return { success: true, sent: true, mocked: true, messageId: "test-mock-id" };
     }
 
     // 3. Development Fallback (Log OTP to console only in dev/test, NEVER in production)
-    if (config.nodeEnv === 'production') {
-      const err = new Error('Email delivery service is currently unavailable.');
+    if (config.nodeEnv === "production") {
+      const err = new Error("Email delivery service is currently unavailable.");
       err.statusCode = 503;
-      err.code = 'SMTP_UNAVAILABLE';
+      err.code = "SMTP_UNAVAILABLE";
       throw err;
     }
 
-    console.log('================================================================');
-    console.log('  [LinkTest Email Simulator] VERIFICATION CODE SENT            ');
-    console.log('----------------------------------------------------------------');
+    console.log("================================================================");
+    console.log("  [LinkTest Email Simulator] VERIFICATION CODE SENT            ");
+    console.log("----------------------------------------------------------------");
     console.log(`  To:       ${email} (${fullName})`);
     console.log(`  Code:     ${otp}`);
     console.log(`  Expires:  In 10 minutes`);
-    console.log('================================================================');
+    console.log("================================================================");
 
     lastSentEmail = { ...emailPayload, otp, sentAt: new Date() };
     return { success: true, sent: true, simulated: true };

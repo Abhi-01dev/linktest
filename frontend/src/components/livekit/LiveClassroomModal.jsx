@@ -1043,7 +1043,6 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
 
           /* Chat Header */
           .lk-chat-header, .chat-header {
-            font-size: 0 !important;
             height: 56px !important;
             min-height: 56px !important;
             max-height: 56px !important;
@@ -1055,24 +1054,27 @@ export function LiveClassroomModal({ session, isTeacher = false, onClose, onSess
             justify-content: space-between !important;
             position: relative !important;
             box-sizing: border-box !important;
+            color: #F8FAFC !important;
+            font-weight: 700 !important;
+            font-size: 0.95rem !important;
+            letter-spacing: 0.02em !important;
           }
           .lk-chat-header::before {
-            content: "Chat" !important;
-            font-size: 0.95rem !important;
-            font-weight: 700 !important;
-            color: #F8FAFC !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            letter-spacing: 0.02em !important;
+            content: "" !important;
+            display: inline-block !important;
+            width: 18px !important;
+            height: 18px !important;
+            margin-right: 8px !important;
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2338BDF8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'%3E%3C/path%3E%3C/svg%3E") !important;
             background-repeat: no-repeat !important;
-            background-position: left center !important;
-            background-size: 18px 18px !important;
-            padding-left: 26px !important;
+            background-position: center !important;
+            background-size: contain !important;
+            flex-shrink: 0 !important;
           }
           .lk-chat-header .lk-close-button {
             position: static !important;
             transform: none !important;
+            margin-left: auto !important;
             display: inline-flex !important;
             align-items: center !important;
             justify-content: center !important;
