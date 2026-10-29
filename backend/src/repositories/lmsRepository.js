@@ -913,6 +913,7 @@ export const lmsRepository = {
       const subjectId = sanitizeOptionalString(record.subjectId);
       const existing = memoryStore.attendance_records.find(
         attendance => attendance.student_id === record.studentId &&
+          (attendance.batch_id === batchId || (!attendance.batch_id && !batchId)) &&
           attendance.class_id === record.classId &&
           attendance.date === record.date &&
           (attendance.subject_id === subjectId || (!attendance.subject_id && !subjectId))
@@ -992,34 +993,74 @@ export const lmsRepository = {
       let where = 'WHERE 1=1';
       const params = [];
       if (classId) { params.push(classId); where += ` AND a.class_id = $${params.length}`; }
+      if (batchId) { params.push(batchId); where += ` AND (a.batch_id = $${params.length} OR a.batch_id IS NULL)`; }
       if (teacherId) { params.push(teacherId); where += ` AND a.teacher_id = $${params.length}`; }
       if (status) { params.push(status); where += ` AND a.status = $${params.length}`; }
+
+      let selectClause = `SELECT a.*, s.name as subject_name, c.name as class_name, u.full_name as teacher_name`;
+      let joinClause = `LEFT JOIN subjects s ON a.subject_id = s.id
+                        JOIN classes c ON a.class_id = c.id
+                        JOIN users u ON a.teacher_id = u.id`;
+
+      if (studentId) {
+        params.push(studentId);
+        const sParam = params.length;
+        selectClause += `, sub.id as submission_id, sub.status as submission_status, sub.content as submission_content,
+                           sub.file_path, sub.file_name, sub.submitted_at, sub.marks_obtained,
+                           sub.marks_obtained as grade, sub.marks_obtained as score, sub.feedback, sub.graded_at`;
+        joinClause += ` LEFT JOIN assignment_submissions sub ON sub.assignment_id = a.id AND sub.student_id = $${sParam}`;
+      }
+
       const res = await pool.query(
-        `SELECT a.*, s.name as subject_name, c.name as class_name, u.full_name as teacher_name
-         FROM assignments a
-         LEFT JOIN subjects s ON a.subject_id = s.id
-         JOIN classes c ON a.class_id = c.id
-         JOIN users u ON a.teacher_id = u.id
-         ${where} ORDER BY a.due_date ASC`,
+        `${selectClause} FROM assignments a ${joinClause} ${where} ORDER BY a.due_date ASC`,
         params
       );
       return res.rows;
     }
     let assignments = [...memoryStore.assignments];
     if (classId) assignments = assignments.filter(a => a.class_id === classId);
+    if (batchId) assignments = assignments.filter(a => !a.batch_id || a.batch_id === batchId);
     if (teacherId) assignments = assignments.filter(a => a.teacher_id === teacherId);
     if (status) assignments = assignments.filter(a => a.status === status);
-    // For students: only show published assignments in their classes
+
+    // For students: only show published assignments in their enrolled classes or batches
     if (studentId) {
-      const enrollments = memoryStore.student_class_enrollments.filter(e => e.student_id === studentId);
-      const classIds = enrollments.map(e => e.class_id);
-      assignments = assignments.filter(a => classIds.includes(a.class_id) && a.status === 'published');
+      const classEnrollments = (memoryStore.student_class_enrollments || []).filter(e => e.student_id === studentId);
+      const batchEnrollments = (memoryStore.batch_enrollments || []).filter(e => e.student_id === studentId && (e.status === 'active' || !e.status));
+      const batchClassIds = batchEnrollments.map(be => (memoryStore.batches || []).find(b => b.id === be.batch_id)?.class_id).filter(Boolean);
+      const enrolledClassIds = new Set([...classEnrollments.map(e => e.class_id), ...batchClassIds]);
+      const enrolledBatchIds = new Set(batchEnrollments.map(be => be.batch_id));
+
+      assignments = assignments.filter(a => {
+        if (a.status !== 'published') return false;
+        if (enrolledClassIds.size > 0 && !enrolledClassIds.has(a.class_id)) return false;
+        if (a.batch_id && enrolledBatchIds.size > 0 && !enrolledBatchIds.has(a.batch_id)) return false;
+        return true;
+      });
     }
+
     return assignments.map(a => {
       const subject = memoryStore.subjects.find(s => s.id === a.subject_id);
       const cls = memoryStore.classes.find(c => c.id === a.class_id);
       const teacher = memoryStore.users.find(u => u.id === a.teacher_id);
-      return { ...a, subject_name: subject?.name, class_name: cls?.name, teacher_name: teacher?.full_name };
+      const sub = studentId ? (memoryStore.assignment_submissions || []).find(s => s.assignment_id === a.id && s.student_id === studentId) : null;
+      return {
+        ...a,
+        subject_name: subject?.name,
+        class_name: cls?.name,
+        teacher_name: teacher?.full_name,
+        submission_id: sub?.id,
+        submission_status: sub ? sub.status : 'pending',
+        submission_content: sub?.content,
+        file_path: sub?.file_path,
+        file_name: sub?.file_name,
+        submitted_at: sub?.submitted_at,
+        marks_obtained: sub?.marks_obtained,
+        grade: sub?.marks_obtained,
+        score: sub?.marks_obtained,
+        feedback: sub?.feedback,
+        graded_at: sub?.graded_at
+      };
     }).sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
   },
 
@@ -1188,8 +1229,10 @@ export const lmsRepository = {
     if (studentAccess) {
       const cSet = new Set(Array.isArray(studentAccess.classIds) ? studentAccess.classIds.filter(Boolean) : []);
       const crsSet = new Set(Array.isArray(studentAccess.courseIds) ? studentAccess.courseIds.filter(Boolean) : []);
+      const bSet = new Set(Array.isArray(studentAccess.batchIds) ? studentAccess.batchIds.filter(Boolean) : []);
       mats = mats.filter(m => {
-        if (!m.class_id && !m.course_id) return true;
+        if (!m.class_id && !m.course_id && !m.batch_id) return true;
+        if (m.batch_id && bSet.has(m.batch_id)) return true;
         if (m.class_id && cSet.has(m.class_id)) return true;
         if (m.course_id && crsSet.has(m.course_id)) return true;
         return false;
@@ -1212,14 +1255,24 @@ export const lmsRepository = {
     }).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   },
 
-  async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, courseId, lessonId, uploadedBy, published = true }) {
+  async createMaterial({ title, description, type, filePath, fileName, fileSize, externalUrl, subjectId, classId, batchId, courseId, lessonId, uploadedBy, published = true }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const normalizedSubjectId = sanitizeOptionalString(subjectId);
-    const normalizedClassId = sanitizeOptionalString(classId);
-    const normalizedCourseId = sanitizeOptionalString(courseId);
+    let normalizedClassId = sanitizeOptionalString(classId);
+    const normalizedBatchId = sanitizeOptionalString(batchId);
+    let normalizedCourseId = sanitizeOptionalString(courseId);
     const normalizedLessonId = sanitizeOptionalString(lessonId);
     const isPublished = published !== false;
+
+    if (normalizedBatchId) {
+      const b = (memoryStore.batches || []).find(batch => batch.id === normalizedBatchId);
+      if (b) {
+        if (!normalizedClassId) normalizedClassId = b.class_id;
+        if (!normalizedCourseId && b.course_id) normalizedCourseId = b.course_id;
+      }
+    }
+
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `INSERT INTO study_materials (id, title, description, type, file_path, file_name, file_size, external_url, subject_id, class_id, course_id, lesson_id, uploaded_by, published, created_at, updated_at)
@@ -1228,7 +1281,7 @@ export const lmsRepository = {
       );
       return res.rows[0];
     }
-    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: normalizedSubjectId, class_id: normalizedClassId, course_id: normalizedCourseId, lesson_id: normalizedLessonId, uploaded_by: uploadedBy, published: isPublished, created_at: now, updated_at: now };
+    const mat = { id, title, description: description || null, type: type || 'document', file_path: filePath || null, file_name: fileName || null, file_size: fileSize || null, external_url: externalUrl || null, subject_id: normalizedSubjectId, class_id: normalizedClassId, batch_id: normalizedBatchId, course_id: normalizedCourseId, lesson_id: normalizedLessonId, uploaded_by: uploadedBy, published: isPublished, created_at: now, updated_at: now };
     if (!memoryStore.study_materials) memoryStore.study_materials = [];
     memoryStore.study_materials.push(mat);
     return mat;

@@ -143,11 +143,10 @@ export const studentController = {
   // ── Assignments & Submissions ────────────────────────────────────────
   async getAssignments(req, res, next) {
     try {
-      const enrollments = await lmsRepository.getClassesForStudent(req.user.id);
-      const classId = enrollments[0]?.class_id;
-
+      const { classId, batchId } = req.query;
       const assignments = await lmsRepository.getAssignments({
-        classId,
+        classId: classId || undefined,
+        batchId: batchId || undefined,
         studentId: req.user.id
       });
       res.status(200).json({ success: true, data: assignments });
@@ -198,11 +197,12 @@ export const studentController = {
       const studentId = req.user.id;
       const enrolledClasses = await lmsRepository.getClassesForStudent(studentId);
       const classIds = (enrolledClasses || []).map(c => c.id || c.class_id).filter(Boolean);
+      const batchIds = (enrolledClasses || []).map(c => c.batch_id).filter(Boolean);
       const enrolledCourses = await courseRepository.getEnrolledCoursesForUser(studentId);
       const courseIds = (enrolledCourses || []).map(c => c.id).filter(Boolean);
 
       const materials = await lmsRepository.getMaterials({
-        studentAccess: { classIds, courseIds },
+        studentAccess: { classIds, batchIds, courseIds },
         published: true
       });
       res.status(200).json({ success: true, data: materials });

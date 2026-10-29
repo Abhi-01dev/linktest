@@ -31,22 +31,26 @@ function sendForbidden(res, code, message) {
 
 /**
  * Authenticate JWT Bearer Token middleware
- * Verifies Authorization header, extracts Bearer token, validates signature/expiration,
+ * Verifies Authorization header or query parameter (for direct file downloads/views),
+ * extracts Bearer token, validates signature/expiration,
  * checks database user existence and account status (active vs suspended/deactivated).
  */
 export async function authenticateToken(req, res, next) {
+  let token = null;
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
-  if (!authHeader || typeof authHeader !== 'string') {
-    return sendUnauthorized(res);
+  if (authHeader && typeof authHeader === 'string') {
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (match) {
+      token = match[1].trim();
+    }
   }
 
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    return sendUnauthorized(res);
+  // Also accept token from query parameter for direct browser tab opens / PDF previews / downloads
+  if (!token && req.query && typeof req.query.token === 'string') {
+    token = req.query.token.trim();
   }
 
-  const token = match[1].trim();
   if (!token) {
     return sendUnauthorized(res);
   }
@@ -119,20 +123,20 @@ export const requireAuth = authenticateToken;
  * Populates req.user if a valid token is present; otherwise leaves req.user = null and continues.
  */
 export async function optionalAuth(req, res, next) {
+  let token = null;
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
-  if (!authHeader || typeof authHeader !== 'string') {
-    req.user = null;
-    return next();
+  if (authHeader && typeof authHeader === 'string') {
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (match) {
+      token = match[1].trim();
+    }
   }
 
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    req.user = null;
-    return next();
+  if (!token && req.query && typeof req.query.token === 'string') {
+    token = req.query.token.trim();
   }
 
-  const token = match[1].trim();
   if (!token) {
     req.user = null;
     return next();

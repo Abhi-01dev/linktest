@@ -115,7 +115,7 @@ router.post('/', requireAuth, (req, res, next) => {
 
 /**
  * GET /api/upload/files/:category/:filename
- * Secure file delivery with path traversal prevention
+ * Secure file delivery with path traversal prevention, inline preview, and download support
  */
 router.get('/files/:category/:filename', requireAuth, async (req, res, next) => {
   try {
@@ -147,7 +147,11 @@ router.get('/files/:category/:filename', requireAuth, async (req, res, next) => 
     }
 
     const { filePath } = await storageService.getFileStream(category, filename);
-    res.sendFile(filePath);
+    if (req.query.download === 'true') {
+      res.download(filePath, decodedFilename);
+    } else {
+      res.sendFile(filePath);
+    }
   } catch (err) {
     if (err.code === 'FORBIDDEN' || err.message.includes('Path traversal') || err.message.includes('Access denied')) {
       return res.status(403).json({

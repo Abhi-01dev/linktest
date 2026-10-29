@@ -14,8 +14,27 @@ import {
   FileCheck,
   X,
   MessageSquare,
-  AlertTriangle
+  AlertTriangle,
+  Eye,
+  Download
 } from 'lucide-react';
+
+function resolveSubmissionFileUrl(filePath, download = false) {
+  if (!filePath) return null;
+  if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+  const token = localStorage.getItem('token') || '';
+  const tokenQuery = token ? `token=${encodeURIComponent(token)}` : '';
+  const dlQuery = download ? 'download=true' : '';
+  const queryParts = [tokenQuery, dlQuery].filter(Boolean).join('&');
+
+  if (filePath.startsWith('/api/upload/files/')) {
+    const separator = filePath.includes('?') ? '&' : '?';
+    return queryParts ? `${filePath}${separator}${queryParts}` : filePath;
+  }
+  const clean = filePath.replace(/^[\\/]?(uploads[\\/])?/, '').replace(/^[\\/]?(submissions)[\\/]/, '');
+  const fname = clean.split(/[\\/]/).pop();
+  return `/api/upload/files/submissions/${encodeURIComponent(fname)}${queryParts ? `?${queryParts}` : ''}`;
+}
 
 export function StudentAssignmentsPage() {
   const [assignments, setAssignments] = useState([]);
@@ -63,8 +82,8 @@ export function StudentAssignmentsPage() {
 
       if (attachmentFile) {
         const uploadResult = await api.uploadFile(attachmentFile, 'submissions');
-        filePath = uploadResult.file_path || uploadResult.file_url;
-        fileName = attachmentFile.name;
+        filePath = uploadResult.file_path || uploadResult.url || uploadResult.file_url || (uploadResult.filename ? `/api/upload/files/submissions/${uploadResult.filename}` : null);
+        fileName = uploadResult.original_name || attachmentFile.name;
       }
 
       await api.submitStudentAssignment(selectedAssignment.id, {
@@ -238,7 +257,7 @@ export function StudentAssignmentsPage() {
                       {a.title}
                     </h3>
                     <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '1rem', lineHeight: 1.5 }}>
-                      {a.description || 'Complete the assigned problem set according to faculty instructions.'}
+                      {a.instructions || a.description || 'Complete the assigned problem set according to faculty instructions.'}
                     </p>
 
                     {/* Graded Feedback Box if available */}
@@ -250,7 +269,7 @@ export function StudentAssignmentsPage() {
                             Faculty Evaluation
                           </span>
                           <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#166534' }}>
-                            {a.grade ?? a.score ?? '—'} / {a.max_marks || 20}
+                            {a.grade ?? a.score ?? a.marks_obtained ?? '—'} / {a.max_marks || 100}
                           </span>
                         </div>
                         {a.feedback && (
@@ -268,7 +287,7 @@ export function StudentAssignmentsPage() {
                         <Calendar size={13} />
                         Due: {a.due_date ? new Date(a.due_date).toLocaleDateString() : 'No date set'}
                       </span>
-                      <span>Max: {a.max_marks || 20} marks</span>
+                      <span>Max: {a.max_marks || 100} marks</span>
                     </div>
 
                     {status === 'pending' ? (
@@ -319,12 +338,12 @@ export function StudentAssignmentsPage() {
               </div>
 
               <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-                {selectedAssignment.subject_name} • Due on {selectedAssignment.due_date ? new Date(selectedAssignment.due_date).toLocaleDateString() : 'N/A'} • Max {selectedAssignment.max_marks || 20} marks
+                {selectedAssignment.subject_name} • Due on {selectedAssignment.due_date ? new Date(selectedAssignment.due_date).toLocaleDateString() : 'N/A'} • Max {selectedAssignment.max_marks || 100} marks
               </p>
 
-              {selectedAssignment.description && (
+              {(selectedAssignment.instructions || selectedAssignment.description) && (
                 <div style={{ padding: '0.75rem 1rem', background: 'var(--color-bg-alt)', borderRadius: '8px', fontSize: '0.82rem', color: 'var(--color-navy)', marginBottom: '1.25rem', border: '1px solid var(--color-border)' }}>
-                  <strong>Instructions:</strong> {selectedAssignment.description}
+                  <strong>Instructions:</strong> {selectedAssignment.instructions || selectedAssignment.description}
                 </div>
               )}
 
@@ -353,13 +372,14 @@ export function StudentAssignmentsPage() {
                     <input
                       type="file"
                       id="assignment-file"
+                      accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.zip,.jpg,.jpeg,.png"
                       style={{ display: 'none' }}
                       onChange={(e) => setAttachmentFile(e.target.files[0] || null)}
                     />
                     <label htmlFor="assignment-file" style={{ cursor: 'pointer', display: 'block' }}>
                       <Upload size={22} style={{ color: 'var(--color-orange)', margin: '0 auto 0.4rem' }} />
                       <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-navy)' }}>
-                        {attachmentFile ? attachmentFile.name : 'Choose file to attach'}
+                        {attachmentFile ? attachmentFile.name : 'Choose file to attach (PDF, Doc, Zip)'}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                         Supports PDF, DOC, DOCX, ZIP, PNG (up to 15MB)
@@ -396,7 +416,7 @@ export function StudentAssignmentsPage() {
         {/* ── View Submission Modal ── */}
         {viewingAssignment && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '1rem' }}>
-            <div className="card" style={{ maxWidth: '500px', width: '100%', padding: '2rem' }}>
+            <div className="card" style={{ maxWidth: '520px', width: '100%', padding: '2rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
                   Submission: {viewingAssignment.title}
@@ -429,7 +449,7 @@ export function StudentAssignmentsPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                     <span style={{ fontWeight: 700, color: '#166534', fontSize: '0.9rem' }}>Grade Awarded:</span>
                     <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#166534' }}>
-                      {viewingAssignment.grade ?? viewingAssignment.score ?? '—'} / {viewingAssignment.max_marks || 20}
+                      {viewingAssignment.grade ?? viewingAssignment.score ?? viewingAssignment.marks_obtained ?? '—'} / {viewingAssignment.max_marks || 100}
                     </span>
                   </div>
                   {viewingAssignment.feedback && (
@@ -445,10 +465,36 @@ export function StudentAssignmentsPage() {
                 <div style={{ color: 'var(--color-navy)', whiteSpace: 'pre-wrap' }}>
                   {viewingAssignment.submission_content || viewingAssignment.content || 'Submission recorded on file.'}
                 </div>
-                {viewingAssignment.file_name && (
-                  <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#1D4ED8', fontWeight: 600, fontSize: '0.8rem' }}>
-                    <FileText size={14} />
-                    <span>Attachment: {viewingAssignment.file_name}</span>
+
+                {(viewingAssignment.file_name || viewingAssignment.file_path) && (
+                  <div style={{ marginTop: '0.85rem', padding: '0.6rem 0.85rem', background: '#FFFFFF', borderRadius: '6px', border: '1px solid #CBD5E1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#1D4ED8', fontWeight: 600, fontSize: '0.82rem' }}>
+                      <FileText size={15} />
+                      <span style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {viewingAssignment.file_name || 'Submitted Document.pdf'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <a
+                        href={resolveSubmissionFileUrl(viewingAssignment.file_path, false)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-sm btn-primary"
+                        style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                      >
+                        <Eye size={12} />
+                        <span>View PDF</span>
+                      </a>
+                      <a
+                        href={resolveSubmissionFileUrl(viewingAssignment.file_path, true)}
+                        download={viewingAssignment.file_name || 'submission.pdf'}
+                        className="btn btn-sm btn-outline"
+                        style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                      >
+                        <Download size={12} />
+                        <span>Download</span>
+                      </a>
+                    </div>
                   </div>
                 )}
               </div>

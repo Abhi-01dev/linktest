@@ -1,14 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
-import { ClipboardCheck, Calendar, Check, Clock, X, Save, Users, AlertCircle, RotateCcw } from 'lucide-react';
+import {
+  ClipboardCheck,
+  Calendar,
+  Check,
+  Clock,
+  X,
+  Save,
+  Users,
+  AlertCircle,
+  RotateCcw,
+  CheckCircle2,
+  AlertTriangle,
+  HelpCircle
+} from 'lucide-react';
 
 export function TeacherAttendancePage() {
   const [assignments, setAssignments] = useState([]);
   const [selectedAssignment, setSelectedAssignment] = useState(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [students, setStudents] = useState([]);
-  const [attendanceMap, setAttendanceMap] = useState({}); // { [studentId]: { status: 'present', remarks: '' } }
+  const [attendanceMap, setAttendanceMap] = useState({}); // { [studentId]: { status: 'present'|'absent'|'late'|null, remarks: '' } }
+  const [isDateRecorded, setIsDateRecorded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -82,13 +96,16 @@ export function TeacherAttendancePage() {
 
       setStudents(resolvedStudents);
 
-      // Build map
+      const hasRecorded = Array.isArray(existingRecords) && existingRecords.length > 0;
+      setIsDateRecorded(hasRecorded);
+
+      // Build map - do NOT force unmarked dates to "present"
       const initialMap = {};
       resolvedStudents.forEach(s => {
         const studentId = s.id;
         const existing = (existingRecords || []).find(r => r.student_id === studentId);
         initialMap[studentId] = {
-          status: existing ? existing.status : 'present',
+          status: existing ? existing.status : (hasRecorded ? 'absent' : null),
           remarks: existing ? existing.remarks || '' : ''
         };
       });
@@ -132,6 +149,12 @@ export function TeacherAttendancePage() {
     showToast(`Marked all students as ${status}`, 'info');
   };
 
+  // Status stats
+  const presentCount = students.filter(s => attendanceMap[s.id]?.status === 'present').length;
+  const lateCount = students.filter(s => attendanceMap[s.id]?.status === 'late').length;
+  const absentCount = students.filter(s => attendanceMap[s.id]?.status === 'absent').length;
+  const unmarkedCount = students.filter(s => !attendanceMap[s.id]?.status).length;
+
   const handleSave = async () => {
     if (!selectedAssignment?.batch_id && !selectedAssignment?.class_id) {
       showToast('Select an assigned class or batch before saving attendance', 'error');
@@ -140,6 +163,11 @@ export function TeacherAttendancePage() {
 
     if (students.length === 0) {
       showToast('No students to record attendance for', 'warning');
+      return;
+    }
+
+    if (unmarkedCount > 0) {
+      showToast(`Please mark status for all students (${unmarkedCount} unmarked) or click "Mark All Present"`, 'warning');
       return;
     }
 
@@ -174,7 +202,7 @@ export function TeacherAttendancePage() {
             Daily Roll-Call Attendance
           </h1>
           <p style={{ color: '#64748B', fontSize: '0.875rem' }}>
-            Record live classroom attendance, track tardiness, and submit verified roll call.
+            Record live classroom attendance, track tardiness, and submit verified roll call for each batch.
           </p>
         </div>
         <button
@@ -189,10 +217,10 @@ export function TeacherAttendancePage() {
       </div>
 
       {/* Control bar */}
-      <div className="card" style={{ padding: '1rem', marginBottom: '1.5rem', display: 'flex', gap: '1.25rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="card" style={{ padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '1.25rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#475569' }}>Class & Subject:</label>
+            <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#475569' }}>Batch & Subject:</label>
             <select
               value={selectedAssignment?.id || ''}
               onChange={(e) => {
@@ -201,7 +229,7 @@ export function TeacherAttendancePage() {
               }}
               disabled={assignments.length === 0}
               className="form-select"
-              style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}
+              style={{ fontSize: '0.85rem', padding: '0.45rem 0.85rem' }}
             >
               {assignments.length === 0 ? (
                 <option value="" disabled>No options</option>
@@ -222,30 +250,72 @@ export function TeacherAttendancePage() {
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="form-input"
-              style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem', width: 'auto' }}
+              style={{ fontSize: '0.85rem', padding: '0.45rem 0.85rem', width: 'auto' }}
             />
+          </div>
+
+          {/* Record Status Badge */}
+          <div>
+            {isDateRecorded ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.65rem', borderRadius: '9999px', background: '#DCFCE7', color: '#166534', fontSize: '0.78rem', fontWeight: 600 }}>
+                <CheckCircle2 size={13} />
+                <span>Attendance Recorded</span>
+              </span>
+            ) : (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.65rem', borderRadius: '9999px', background: '#FEF3C7', color: '#92400E', fontSize: '0.78rem', fontWeight: 600 }}>
+                <AlertTriangle size={13} />
+                <span>Not Marked Yet</span>
+              </span>
+            )}
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        {/* Quick actions */}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <button
             onClick={() => markAll('present')}
             type="button"
             className="btn btn-outline btn-sm"
-            style={{ fontSize: '0.78rem', color: '#16A34A', borderColor: '#BBF7D0' }}
+            style={{ fontSize: '0.78rem', color: '#16A34A', borderColor: '#BBF7D0', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
           >
-            Mark All Present
+            <Check size={13} />
+            <span>Mark All Present</span>
           </button>
           <button
             onClick={() => markAll('absent')}
             type="button"
             className="btn btn-outline btn-sm"
-            style={{ fontSize: '0.78rem', color: '#DC2626', borderColor: '#FCA5A5' }}
+            style={{ fontSize: '0.78rem', color: '#DC2626', borderColor: '#FCA5A5', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
           >
-            Mark All Absent
+            <X size={13} />
+            <span>Mark All Absent</span>
           </button>
         </div>
       </div>
+
+      {/* Summary Pills */}
+      {students.length > 0 && !loading && (
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+          <div style={{ padding: '0.45rem 0.85rem', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', fontSize: '0.8rem', color: '#475569' }}>
+            Total: <strong>{students.length}</strong>
+          </div>
+          <div style={{ padding: '0.45rem 0.85rem', background: '#DCFCE7', border: '1px solid #BBF7D0', borderRadius: '8px', fontSize: '0.8rem', color: '#166534' }}>
+            Present: <strong>{presentCount}</strong>
+          </div>
+          <div style={{ padding: '0.45rem 0.85rem', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: '8px', fontSize: '0.8rem', color: '#92400E' }}>
+            Late: <strong>{lateCount}</strong>
+          </div>
+          <div style={{ padding: '0.45rem 0.85rem', background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: '8px', fontSize: '0.8rem', color: '#991B1B' }}>
+            Absent: <strong>{absentCount}</strong>
+          </div>
+          {unmarkedCount > 0 && (
+            <div style={{ padding: '0.45rem 0.85rem', background: '#F1F5F9', border: '1px dashed #94A3B8', borderRadius: '8px', fontSize: '0.8rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+              <HelpCircle size={13} />
+              <span>Unmarked: <strong>{unmarkedCount}</strong></span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Roster table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -271,9 +341,9 @@ export function TeacherAttendancePage() {
         ) : students.length === 0 ? (
           <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', color: '#64748B' }}>
             <Users size={36} style={{ margin: '0 auto 0.75rem', opacity: 0.35, color: '#475569' }} />
-            <p style={{ margin: 0, fontWeight: 600, color: '#334155', fontSize: '0.95rem' }}>No students enrolled in this class.</p>
+            <p style={{ margin: 0, fontWeight: 600, color: '#334155', fontSize: '0.95rem' }}>No students enrolled in this class or batch.</p>
             <p style={{ fontSize: '0.825rem', color: '#94A3B8', marginTop: '0.35rem', maxWidth: '360px', marginInline: 'auto' }}>
-              Enrolled students in this batch or class will automatically appear in roll call.
+              Enrolled students in this batch will automatically appear in roll call.
             </p>
           </div>
         ) : (
@@ -288,7 +358,7 @@ export function TeacherAttendancePage() {
             </thead>
             <tbody>
               {students.map((student, idx) => {
-                const currentStatus = attendanceMap[student.id]?.status || 'present';
+                const currentStatus = attendanceMap[student.id]?.status;
                 return (
                   <tr key={student.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                     <td style={{ padding: '0.85rem 1.25rem', color: '#94A3B8', fontSize: '0.8rem' }}>
@@ -367,6 +437,11 @@ export function TeacherAttendancePage() {
                           <span>Absent</span>
                         </button>
                       </div>
+                      {!currentStatus && (
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#94A3B8', fontStyle: 'italic' }}>
+                          (Unmarked)
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: '0.85rem 1.25rem' }}>
                       <input

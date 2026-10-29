@@ -32,6 +32,7 @@ const createMaterialSchema = z.object({
   external_url: z.string().url().optional().nullable(),
   subject_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
   class_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
+  batch_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
   course_id: z.string().uuid().or(z.string().min(1)).optional().nullable(),
   lesson_id: z.string().uuid().or(z.string().min(1)).optional().nullable()
 });
@@ -387,6 +388,7 @@ export const teacherController = {
         externalUrl: parsed.external_url,
         subjectId: parsed.subject_id,
         classId: parsed.class_id,
+        batchId: parsed.batch_id,
         courseId: parsed.course_id,
         lessonId: parsed.lesson_id,
         uploadedBy: req.user.id

@@ -14,7 +14,8 @@ import {
   Layers,
   Eye,
   X,
-  User
+  User,
+  Video
 } from 'lucide-react';
 
 export function StudentMaterialsPage() {
@@ -22,7 +23,6 @@ export function StudentMaterialsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('all');
-  const [previewMaterial, setPreviewMaterial] = useState(null);
 
   const { showToast } = useToast();
 
@@ -61,13 +61,26 @@ export function StudentMaterialsPage() {
     if (t.includes('code') || t.includes('repo')) return <FileCode size={20} style={{ color: '#10B981' }} />;
     if (t.includes('zip') || t.includes('archive')) return <FileArchive size={20} style={{ color: '#8B5CF6' }} />;
     if (t.includes('slide') || t.includes('ppt')) return <Layers size={20} style={{ color: '#F59E0B' }} />;
+    if (t.includes('video')) return <Video size={20} style={{ color: '#8B5CF6' }} />;
     return <BookOpen size={20} style={{ color: '#3B82F6' }} />;
   };
 
-  const getDownloadUrl = (item) => {
-    if (item.file_url) return item.file_url;
-    if (item.file_path) return `/api/upload/files/${item.file_path.replace(/^uploads[\\/]/, '')}`;
-    return item.external_url || '#';
+  const resolveMaterialUrl = (item, download = false) => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+    const rawUrl = item.file_url || item.file_path || item.external_url || '';
+    if (!rawUrl) return '#';
+    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+      return rawUrl;
+    }
+    let url = rawUrl;
+    if (!url.startsWith('/api/')) {
+      url = `/api/upload/files/${url.replace(/^(uploads[\\/]|api\/upload\/files\/)/, '')}`;
+    }
+    const params = new URLSearchParams();
+    if (token) params.set('token', token);
+    if (download) params.set('download', 'true');
+    const qs = params.toString();
+    return qs ? `${url}?${qs}` : url;
   };
 
   return (
@@ -148,7 +161,10 @@ export function StudentMaterialsPage() {
         </div>
 
         {loading ? (
-          <div style={{ padding: '3rem', textAlign: 'center', color: '#64748B' }}>Loading study materials...</div>
+          <div style={{ padding: '3.5rem 1rem', textAlign: 'center', color: '#64748B' }}>
+            <div style={{ width: 28, height: 28, border: '3px solid #E2E8F0', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 0.75rem' }} />
+            <span>Loading study materials...</span>
+          </div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: '3.5rem 1rem', textAlign: 'center', background: 'var(--color-bg-alt)', borderRadius: '12px', border: '1px solid var(--color-border)' }}>
             <BookOpen size={36} style={{ color: 'var(--color-text-muted)', margin: '0 auto 0.75rem' }} />
@@ -162,9 +178,10 @@ export function StudentMaterialsPage() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
             {filtered.map(m => {
-              const fileLink = getDownloadUrl(m);
               const hasFile = Boolean(m.file_path || m.file_url);
               const hasExternal = Boolean(m.external_url);
+              const viewUrl = resolveMaterialUrl(m, false);
+              const downloadUrl = resolveMaterialUrl(m, true);
 
               return (
                 <div key={m.id} className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
@@ -184,30 +201,54 @@ export function StudentMaterialsPage() {
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '0.35rem' }}>
                       {m.title}
                     </h3>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', lineHeight: 1.5, marginBottom: '1rem' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', lineHeight: 1.5, marginBottom: '0.75rem' }}>
                       {m.description || 'Curriculum resource published for enrolled students.'}
                     </p>
+
+                    {hasFile && m.file_name && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.55rem', background: '#F1F5F9', borderRadius: '6px', fontSize: '0.75rem', color: '#475569', marginBottom: '0.75rem' }}>
+                        <FileText size={12} />
+                        <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {m.file_name}
+                        </span>
+                        {m.file_size && (
+                          <span style={{ color: '#94A3B8' }}>({(m.file_size / 1024 / 1024).toFixed(1)} MB)</span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <div style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                       <User size={12} />
-                      <span>{m.teacher_name || m.subject_name || 'Faculty Resource'}</span>
+                      <span>{m.teacher_name || m.uploader_name || m.subject_name || 'Faculty Resource'}</span>
                     </div>
 
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       {hasFile && (
-                        <a
-                          href={fileLink}
-                          download
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn btn-sm btn-outline"
-                          style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-                        >
-                          <Download size={12} />
-                          <span>Download</span>
-                        </a>
+                        <>
+                          <a
+                            href={viewUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-outline"
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            title="Preview in new tab"
+                          >
+                            <Eye size={12} />
+                            <span>View</span>
+                          </a>
+                          <a
+                            href={downloadUrl}
+                            download={m.file_name || 'material'}
+                            className="btn btn-sm btn-outline"
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            title="Download file"
+                          >
+                            <Download size={12} />
+                            <span>Download</span>
+                          </a>
+                        </>
                       )}
 
                       {hasExternal && (

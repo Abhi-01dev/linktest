@@ -159,6 +159,8 @@ export class StorageService {
       throw new Error('Invalid file payload.');
     }
 
+    const fileUrl = `/api/upload/files/${category}/${safeName}`;
+
     return {
       provider: 'local',
       category,
@@ -166,7 +168,9 @@ export class StorageService {
       original_name: file.originalname,
       mime_type: file.mimetype,
       size_bytes: file.size,
-      url: `/api/upload/files/${category}/${safeName}`,
+      url: fileUrl,
+      file_path: fileUrl,
+      file_url: fileUrl,
       storage_path: destPath
     };
   }
@@ -197,6 +201,8 @@ export class StorageService {
         mime_type: file.mimetype,
         size_bytes: file.size,
         url: publicUrl,
+        file_path: publicUrl,
+        file_url: publicUrl,
         storage_path: `${category}/${safeName}`
       };
     } catch (err) {
