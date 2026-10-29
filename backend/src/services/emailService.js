@@ -114,9 +114,9 @@ export function initTransporter() {
       tls: {
         rejectUnauthorized: true
       },
-      connectionTimeout: 10000, // 10s connection timeout
-      greetingTimeout: 10000,   // 10s greeting timeout
-      socketTimeout: 15000      // 15s socket inactivity timeout
+      connectionTimeout: 15000, // 15s connection timeout
+      greetingTimeout: 15000,   // 15s greeting timeout
+      socketTimeout: 20000      // 20s socket inactivity timeout
     });
     console.log(`[LinkTest Email] Gmail SMTP transport configured for ${config.smtp.user} (${config.smtp.host}:${config.smtp.port})`);
   } catch (err) {
@@ -272,7 +272,7 @@ export const emailService = {
     if (transporter) {
       let timer;
       try {
-        const timeoutMs = config.smtp?.timeoutMs || 6000;
+        const timeoutMs = config.smtp?.timeoutMs || 15000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
             const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
@@ -300,6 +300,9 @@ export const emailService = {
         return { success: true, sent: true, messageId: info.messageId };
       } catch (rawErr) {
         clearTimeout(timer);
+        if (!customTransporterInjected) {
+          transporter = null;
+        }
         console.error(`[LinkTest Email] Failed sending verification email to ${email}:`, rawErr.code || rawErr.message);
         throw categorizeEmailError(rawErr);
       }
@@ -367,7 +370,7 @@ export const emailService = {
     if (transporter) {
       let timer;
       try {
-        const timeoutMs = config.smtp?.timeoutMs || 6000;
+        const timeoutMs = config.smtp?.timeoutMs || 15000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
             const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);
@@ -441,7 +444,7 @@ export const emailService = {
     if (transporter) {
       let timer;
       try {
-        const timeoutMs = config.smtp?.timeoutMs || 6000;
+        const timeoutMs = config.smtp?.timeoutMs || 15000;
         const timeoutPromise = new Promise((_, reject) => {
           timer = setTimeout(() => {
             const timeoutErr = new Error(`SMTP connection timed out after ${timeoutMs}ms`);

@@ -63,7 +63,7 @@ const markAttendanceSchema = z.object({
       const parsedDate = new Date(`${value}T00:00:00.000Z`);
       return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
     }, 'date must be a valid calendar date'),
-  subject_id: z.string().min(1),
+  subject_id: z.string().optional().nullable(),
   records: z.array(z.object({
     student_id: z.string().min(1),
     status: z.enum(['present', 'absent', 'late', 'excused']),
@@ -134,8 +134,8 @@ export const teacherController = {
     try {
       const { classId, batchId } = req.query;
       let students = [];
-      if (classId) {
-        students = await lmsRepository.getStudentsInClass(classId, batchId || null);
+      if (classId || batchId) {
+        students = await lmsRepository.getStudentsInClass(classId || null, batchId || null);
       } else {
         // Fetch students from all assigned classes
         const teacherClasses = await lmsRepository.getTeacherAssignments(req.user.id);
@@ -186,7 +186,7 @@ export const teacherController = {
   async markAttendance(req, res, next) {
     try {
       const { batch_id: batchId, date, subject_id: subjectId, records } = markAttendanceSchema.parse(req.body);
-      const batch = await lmsRepository.getAttendanceBatch(batchId, req.user.id, subjectId);
+      const batch = await lmsRepository.getAttendanceBatch(batchId, req.user.id, subjectId || null);
       if (!batch) {
         return res.status(404).json({
           success: false,

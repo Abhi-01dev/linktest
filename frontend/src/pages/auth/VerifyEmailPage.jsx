@@ -345,7 +345,11 @@ export function VerifyEmailPage() {
               >
                 <AlertCircle size={18} style={{ flexShrink: 0, color: '#D97706' }} />
                 <span>
-                  Initial email delivery could not be completed. Click <strong>Resend Code</strong> below once the cooldown expires to receive your code.
+                  Initial email delivery could not be completed.{' '}
+                  {cooldown > 0
+                    ? `Click Resend Code below in ${cooldown}s to receive your code.`
+                    : <>Click <strong>Resend Code</strong> below to receive your code.</>
+                  }
                 </span>
               </div>
             )}

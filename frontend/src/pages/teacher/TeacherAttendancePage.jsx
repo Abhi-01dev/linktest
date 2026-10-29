@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
-import { ClipboardCheck, Calendar, Check, Clock, X, Save, Users } from 'lucide-react';
+import { ClipboardCheck, Calendar, Check, Clock, X, Save, Users, AlertCircle, RotateCcw } from 'lucide-react';
 
 export function TeacherAttendancePage() {
   const [assignments, setAssignments] = useState([]);
@@ -10,6 +10,7 @@ export function TeacherAttendancePage() {
   const [students, setStudents] = useState([]);
   const [attendanceMap, setAttendanceMap] = useState({}); // { [studentId]: { status: 'present', remarks: '' } }
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const { showToast } = useToast();
@@ -18,12 +19,14 @@ export function TeacherAttendancePage() {
     async function loadMeta() {
       try {
         setLoading(true);
+        setError(null);
         const list = await api.getTeacherClasses();
         setAssignments(list || []);
         if (list?.length > 0) {
           setSelectedAssignment(list[0]);
         }
       } catch (err) {
+        setError(err.message || 'Failed to load teacher classes');
         showToast(err.message || 'Failed to load teacher classes', 'error');
       } finally {
         setLoading(false);
@@ -33,35 +36,66 @@ export function TeacherAttendancePage() {
   }, []);
 
   const loadStudentsAndRecords = async () => {
-    if (!selectedAssignment?.class_id) return;
+    if (!selectedAssignment) return;
+    const targetClassId = selectedAssignment.class_id;
+    const targetBatchId = selectedAssignment.batch_id;
+    if (!targetClassId && !targetBatchId) return;
+
     try {
       setLoading(true);
-      const [sList, existingRecords] = await Promise.all([
-        api.getTeacherStudents({
-          classId: selectedAssignment.class_id,
-          batchId: selectedAssignment.batch_id || undefined
-        }),
-        api.getTeacherAttendance({
-          classId: selectedAssignment.class_id,
-          batchId: selectedAssignment.batch_id || undefined,
-          subjectId: selectedAssignment.subject_id,
-          date
-        })
-      ]);
+      setError(null);
 
-      setStudents(sList || []);
+      let sList = [];
+      let existingRecords = [];
+
+      try {
+        const results = await Promise.all([
+          api.getTeacherStudents({
+            classId: targetClassId || undefined,
+            batchId: targetBatchId || undefined
+          }),
+          api.getTeacherAttendance({
+            classId: targetClassId || undefined,
+            batchId: targetBatchId || undefined,
+            subjectId: selectedAssignment.subject_id || undefined,
+            date
+          })
+        ]);
+        sList = results[0] || [];
+        existingRecords = results[1] || [];
+      } catch (fetchErr) {
+        // Fallback: If api.getTeacherStudents had an issue, check if assignment already has embedded student list
+        if (selectedAssignment.students?.length > 0) {
+          sList = selectedAssignment.students;
+        } else {
+          throw fetchErr;
+        }
+      }
+
+      // If sList is empty but selectedAssignment has embedded students, use fallback
+      let resolvedStudents = (sList && sList.length > 0) ? sList : (selectedAssignment.students || []);
+      resolvedStudents = resolvedStudents.map(s => ({
+        ...s,
+        id: s.id || s.student_id,
+        enrollment_number: s.enrollment_number || s.enrollmentNumber || null
+      }));
+
+      setStudents(resolvedStudents);
 
       // Build map
       const initialMap = {};
-      (sList || []).forEach(s => {
-        const existing = (existingRecords || []).find(r => r.student_id === s.id);
-        initialMap[s.id] = {
+      resolvedStudents.forEach(s => {
+        const studentId = s.id;
+        const existing = (existingRecords || []).find(r => r.student_id === studentId);
+        initialMap[studentId] = {
           status: existing ? existing.status : 'present',
           remarks: existing ? existing.remarks || '' : ''
         };
       });
       setAttendanceMap(initialMap);
     } catch (err) {
+      console.error('Failed to load roll call roster:', err);
+      setError(err.message || 'Failed to load roll call roster');
       showToast(err.message || 'Failed to load roll call roster', 'error');
     } finally {
       setLoading(false);
@@ -99,8 +133,13 @@ export function TeacherAttendancePage() {
   };
 
   const handleSave = async () => {
-    if (!selectedAssignment?.batch_id || !selectedAssignment.subject_id) {
-      showToast('Select an assigned batch and subject before saving attendance', 'error');
+    if (!selectedAssignment?.batch_id && !selectedAssignment?.class_id) {
+      showToast('Select an assigned class or batch before saving attendance', 'error');
+      return;
+    }
+
+    if (students.length === 0) {
+      showToast('No students to record attendance for', 'warning');
       return;
     }
 
@@ -113,12 +152,13 @@ export function TeacherAttendancePage() {
       }));
 
       await api.markTeacherAttendance({
-        batch_id: selectedAssignment.batch_id,
+        batch_id: selectedAssignment.batch_id || selectedAssignment.class_id,
         date,
-        subject_id: selectedAssignment.subject_id,
+        subject_id: selectedAssignment.subject_id || undefined,
         records
       });
       showToast('Attendance saved successfully!', 'success');
+      await loadStudentsAndRecords();
     } catch (err) {
       showToast(err.message || 'Failed to save attendance', 'error');
     } finally {
@@ -168,7 +208,7 @@ export function TeacherAttendancePage() {
               ) : (
                 assignments.map(a => (
                   <option key={a.id} value={a.id}>
-                    {a.batch_name ? `${a.batch_name} (${a.class_name}) • ${a.subject_name}` : `${a.class_name} • ${a.subject_name}`}
+                    {a.batch_name ? `${a.batch_name} (${a.class_name}) • ${a.subject_name || 'Class Attendance'}` : `${a.class_name} • ${a.subject_name || 'Class Attendance'}`}
                   </option>
                 ))
               )}
@@ -210,9 +250,32 @@ export function TeacherAttendancePage() {
       {/* Roster table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
-          <div style={{ padding: '3rem', textAlign: 'center', color: '#64748B' }}>Loading student roll call...</div>
+          <div style={{ padding: '3.5rem 1rem', textAlign: 'center', color: '#64748B' }}>
+            <div style={{ width: 28, height: 28, border: '3px solid #E2E8F0', borderTopColor: '#2563EB', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 0.75rem' }} />
+            <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Loading student roll call roster...</span>
+          </div>
+        ) : error ? (
+          <div style={{ padding: '3rem 1.5rem', textAlign: 'center' }}>
+            <AlertCircle size={36} style={{ color: '#EF4444', margin: '0 auto 0.75rem' }} />
+            <p style={{ color: '#DC2626', fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.25rem' }}>{error}</p>
+            <p style={{ color: '#64748B', fontSize: '0.85rem', marginBottom: '1rem' }}>We were unable to load the roll call roster for this selection.</p>
+            <button
+              onClick={loadStudentsAndRecords}
+              className="btn btn-outline btn-sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', margin: '0 auto' }}
+            >
+              <RotateCcw size={14} />
+              <span>Retry Loading Roster</span>
+            </button>
+          </div>
         ) : students.length === 0 ? (
-          <div style={{ padding: '3rem', textAlign: 'center', color: '#64748B' }}>No students enrolled in this class.</div>
+          <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', color: '#64748B' }}>
+            <Users size={36} style={{ margin: '0 auto 0.75rem', opacity: 0.35, color: '#475569' }} />
+            <p style={{ margin: 0, fontWeight: 600, color: '#334155', fontSize: '0.95rem' }}>No students enrolled in this class.</p>
+            <p style={{ fontSize: '0.825rem', color: '#94A3B8', marginTop: '0.35rem', maxWidth: '360px', marginInline: 'auto' }}>
+              Enrolled students in this batch or class will automatically appear in roll call.
+            </p>
+          </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
             <thead>
@@ -232,7 +295,14 @@ export function TeacherAttendancePage() {
                       {idx + 1}
                     </td>
                     <td style={{ padding: '0.85rem 1.25rem', fontWeight: 600, color: '#0F172A' }}>
-                      <div>{student.full_name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span>{student.full_name}</span>
+                        {student.enrollment_number && (
+                          <span style={{ fontSize: '0.72rem', background: '#F1F5F9', color: '#475569', padding: '0.1rem 0.45rem', borderRadius: '4px', fontWeight: 500 }}>
+                            {student.enrollment_number}
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize: '0.75rem', color: '#64748B' }}>{student.email}</div>
                     </td>
                     <td style={{ padding: '0.85rem 1.25rem' }}>
@@ -318,4 +388,5 @@ export function TeacherAttendancePage() {
     </div>
   );
 }
+
 export default TeacherAttendancePage;

@@ -608,28 +608,91 @@ export const lmsRepository = {
 
   async getStudentsInClass(classId, batchId = null) {
     if (isPostgresConnected && pool) {
-      let query = `SELECT u.id, u.full_name, u.email, u.status, u.last_login_at,
-                          sp.enrollment_number, sce.batch_id, sce.enrolled_at, b.name as batch_name
-                   FROM student_class_enrollments sce
-                   JOIN users u ON sce.student_id = u.id
-                   LEFT JOIN student_profiles sp ON sp.user_id = u.id
-                   LEFT JOIN batches b ON sce.batch_id = b.id
-                   WHERE sce.class_id = $1`;
-      const params = [classId];
-      if (batchId) { params.push(batchId); query += ` AND sce.batch_id = $2`; }
-      const res = await pool.query(query + ' ORDER BY u.full_name', params);
+      let query = `
+        WITH combined_enrollments AS (
+          SELECT sce.student_id, sce.class_id, sce.batch_id, sce.enrolled_at
+          FROM student_class_enrollments sce
+          UNION ALL
+          SELECT be.student_id, b.class_id, be.batch_id, be.enrolled_at
+          FROM batch_enrollments be
+          JOIN batches b ON b.id = be.batch_id
+          WHERE (be.status = 'active' OR be.status IS NULL)
+        )
+        SELECT DISTINCT ON (u.id)
+               u.id,
+               u.full_name,
+               u.email,
+               u.status,
+               u.last_login_at,
+               sp.enrollment_number,
+               ce.batch_id,
+               b.name as batch_name,
+               ce.enrolled_at
+        FROM combined_enrollments ce
+        JOIN users u ON ce.student_id = u.id AND u.role = 'STUDENT'
+        LEFT JOIN student_profiles sp ON sp.user_id = u.id
+        LEFT JOIN batches b ON b.id = ce.batch_id
+        WHERE 1=1`;
+      const params = [];
+      if (classId) {
+        params.push(classId);
+        query += ` AND ce.class_id = $${params.length}`;
+      }
+      if (batchId) {
+        params.push(batchId);
+        query += ` AND ce.batch_id = $${params.length}`;
+      }
+      query += ` ORDER BY u.id, ce.enrolled_at DESC`;
+      const res = await pool.query(`SELECT * FROM (${query}) sub ORDER BY full_name ASC`, params);
       return res.rows;
     }
-    let enrollments = memoryStore.student_class_enrollments.filter(e => e.class_id === classId);
-    if (batchId) enrollments = enrollments.filter(e => e.batch_id === batchId);
-    return enrollments.map(e => {
-      const user = memoryStore.users.find(u => u.id === e.student_id);
-      const profile = memoryStore.student_profiles.find(p => p.user_id === e.student_id);
-      const batch = memoryStore.batches.find(b => b.id === e.batch_id);
-      if (!user) return null;
+
+    const activeBatchEnrollments = (memoryStore.batch_enrollments || [])
+      .filter(be => (be.status === 'active' || !be.status))
+      .map(be => {
+        const batch = (memoryStore.batches || []).find(b => b.id === be.batch_id);
+        return {
+          student_id: be.student_id,
+          class_id: batch?.class_id || null,
+          batch_id: be.batch_id,
+          enrolled_at: be.enrolled_at
+        };
+      });
+
+    const classEnrollments = (memoryStore.student_class_enrollments || [])
+      .map(sce => ({
+        student_id: sce.student_id,
+        class_id: sce.class_id,
+        batch_id: sce.batch_id || null,
+        enrolled_at: sce.enrolled_at
+      }));
+
+    let allEnrollments = [...classEnrollments, ...activeBatchEnrollments];
+    if (classId) {
+      allEnrollments = allEnrollments.filter(e => e.class_id === classId);
+    }
+    if (batchId) {
+      allEnrollments = allEnrollments.filter(e => e.batch_id === batchId);
+    }
+
+    const studentMap = new Map();
+    for (const e of allEnrollments) {
+      if (studentMap.has(e.student_id)) continue;
+      const user = (memoryStore.users || []).find(u => u.id === e.student_id && u.role === 'STUDENT');
+      if (!user) continue;
+      const profile = (memoryStore.student_profiles || []).find(p => p.user_id === e.student_id);
+      const batch = (memoryStore.batches || []).find(b => b.id === e.batch_id);
       const { password_hash, ...safeUser } = user;
-      return { ...safeUser, enrollment_number: profile?.enrollment_number, batch_id: e.batch_id, enrolled_at: e.enrolled_at, batch_name: batch?.name };
-    }).filter(Boolean);
+      studentMap.set(e.student_id, {
+        ...safeUser,
+        enrollment_number: profile?.enrollment_number,
+        batch_id: e.batch_id,
+        enrolled_at: e.enrolled_at,
+        batch_name: batch?.name
+      });
+    }
+
+    return Array.from(studentMap.values()).sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
   },
 
   async getClassesForStudent(studentId) {
@@ -772,32 +835,45 @@ export const lmsRepository = {
   // ============================================================
   // ATTENDANCE
   // ============================================================
-  async getAttendanceBatch(batchId, teacherId, subjectId) {
+  async getAttendanceBatch(batchId, teacherId, subjectId = null) {
     if (isPostgresConnected && pool) {
       const res = await pool.query(
         `SELECT b.id, b.class_id,
-                EXISTS (
-                  SELECT 1 FROM teacher_assignments ta
-                  WHERE ta.teacher_id = $2
-                    AND ta.class_id = b.class_id
-                    AND ta.batch_id = b.id
-                    AND ta.subject_id = $3
+                (
+                  EXISTS (
+                    SELECT 1 FROM teacher_assignments ta
+                    WHERE ta.teacher_id = $2
+                      AND ta.class_id = b.class_id
+                      AND (ta.batch_id = b.id OR ta.batch_id IS NULL)
+                      AND (ta.subject_id = $3 OR $3 IS NULL)
+                  )
+                  OR (
+                    $3 IS NULL AND EXISTS (
+                      SELECT 1 FROM batch_teachers bt
+                      WHERE bt.teacher_id = $2
+                        AND bt.batch_id = b.id
+                    )
+                  )
                 ) as is_assigned
          FROM batches b
          WHERE b.id = $1`,
-        [batchId, teacherId, subjectId]
+        [batchId, teacherId, subjectId || null]
       );
       return res.rows[0] || null;
     }
 
     const batch = memoryStore.batches.find(item => item.id === batchId);
     if (!batch) return null;
-    const isAssigned = memoryStore.teacher_assignments.some(assignment =>
-      assignment.teacher_id === teacherId &&
-      assignment.class_id === batch.class_id &&
-      assignment.batch_id === batch.id &&
-      assignment.subject_id === subjectId
-    );
+    const isAssigned =
+      memoryStore.teacher_assignments.some(assignment =>
+        assignment.teacher_id === teacherId &&
+        assignment.class_id === batch.class_id &&
+        (assignment.batch_id === batch.id || !assignment.batch_id) &&
+        (assignment.subject_id === subjectId || !subjectId)
+      ) ||
+      (!subjectId && (memoryStore.batch_teachers || []).some(bt =>
+        bt.teacher_id === teacherId && bt.batch_id === batch.id
+      ));
     return { id: batch.id, class_id: batch.class_id, is_assigned: isAssigned };
   },
 
