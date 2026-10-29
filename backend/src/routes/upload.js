@@ -148,7 +148,10 @@ router.get('/files/:category/:filename', requireAuth, async (req, res, next) => 
 
     const { filePath } = await storageService.getFileStream(category, filename);
     if (req.query.download === 'true') {
-      res.download(filePath, decodedFilename);
+      const downloadName = (req.query.filename && typeof req.query.filename === 'string')
+        ? path.basename(decodeURIComponent(req.query.filename))
+        : decodedFilename;
+      res.download(filePath, downloadName);
     } else {
       res.sendFile(filePath);
     }

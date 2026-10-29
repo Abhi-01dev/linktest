@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../../services/api';
+import { api, resolveFileUrl } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
 import {
   FileText,
@@ -17,20 +17,7 @@ import {
 } from 'lucide-react';
 
 function resolveSubmissionFileUrl(filePath, download = false) {
-  if (!filePath) return null;
-  if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
-  const token = localStorage.getItem('token') || '';
-  const tokenQuery = token ? `token=${encodeURIComponent(token)}` : '';
-  const dlQuery = download ? 'download=true' : '';
-  const queryParts = [tokenQuery, dlQuery].filter(Boolean).join('&');
-
-  if (filePath.startsWith('/api/upload/files/')) {
-    const separator = filePath.includes('?') ? '&' : '?';
-    return queryParts ? `${filePath}${separator}${queryParts}` : filePath;
-  }
-  const clean = filePath.replace(/^[\\/]?(uploads[\\/])?/, '').replace(/^[\\/]?(submissions)[\\/]/, '');
-  const fname = clean.split(/[\\/]/).pop();
-  return `/api/upload/files/submissions/${encodeURIComponent(fname)}${queryParts ? `?${queryParts}` : ''}`;
+  return resolveFileUrl(filePath, download);
 }
 
 export function TeacherAssignmentsPage() {
@@ -58,8 +45,29 @@ export function TeacherAssignmentsPage() {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [gradeMarks, setGradeMarks] = useState(0);
   const [gradeFeedback, setGradeFeedback] = useState('');
+  const [downloadingSubId, setDownloadingSubId] = useState(null);
 
   const { showToast } = useToast();
+
+  const handleDownloadSubmission = async (sub) => {
+    const filePath = sub?.file_path || sub?.file_url;
+    if (!filePath) {
+      showToast('No submitted file attachment found.', 'warning');
+      return;
+    }
+    const subId = sub.id || sub.submission_id || 'active';
+    setDownloadingSubId(subId);
+    try {
+      showToast('Downloading student submission...', 'info');
+      await api.downloadFile(filePath, sub.file_name || 'submission.pdf');
+      showToast('Assignment downloaded successfully!', 'success');
+    } catch (err) {
+      console.error('Failed to download submission:', err);
+      showToast(err.message || 'Failed to download assignment file', 'error');
+    } finally {
+      setDownloadingSubId(null);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -370,16 +378,17 @@ export function TeacherAssignmentsPage() {
                                   <Eye size={11} />
                                   <span>View PDF</span>
                                 </a>
-                                <a
-                                  href={fileDownloadUrl}
-                                  download={sub.file_name || 'submission.pdf'}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadSubmission(sub)}
+                                  disabled={downloadingSubId === (sub.id || sub.submission_id)}
                                   className="btn btn-sm btn-ghost"
                                   style={{ fontSize: '0.7rem', padding: '0.15rem 0.45rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#475569' }}
-                                  title="Download submission file"
+                                  title="Download student submission file"
                                 >
                                   <Download size={11} />
-                                  <span>Download</span>
-                                </a>
+                                  <span>{downloadingSubId === (sub.id || sub.submission_id) ? 'Downloading...' : 'Download'}</span>
+                                </button>
                               </div>
                             ) : (
                               !sub.content && <span style={{ color: '#94A3B8', fontStyle: 'italic' }}>No solution submitted</span>
@@ -461,15 +470,17 @@ export function TeacherAssignmentsPage() {
                       <Eye size={12} />
                       <span>View PDF</span>
                     </a>
-                    <a
-                      href={resolveSubmissionFileUrl(selectedSubmission.file_path, true)}
-                      download={selectedSubmission.file_name || 'submission.pdf'}
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadSubmission(selectedSubmission)}
+                      disabled={downloadingSubId === (selectedSubmission.id || selectedSubmission.submission_id)}
                       className="btn btn-sm btn-outline"
                       style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                      title="Download student solution file"
                     >
                       <Download size={12} />
-                      <span>Download</span>
-                    </a>
+                      <span>{downloadingSubId === (selectedSubmission.id || selectedSubmission.submission_id) ? 'Downloading...' : 'Download'}</span>
+                    </button>
                   </div>
                 </div>
               )}

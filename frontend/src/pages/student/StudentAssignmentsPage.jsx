@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../../services/api';
+import { api, resolveFileUrl } from '../../services/api';
 import { StudentNav } from '../../components/student/StudentNav';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -20,20 +20,7 @@ import {
 } from 'lucide-react';
 
 function resolveSubmissionFileUrl(filePath, download = false) {
-  if (!filePath) return null;
-  if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
-  const token = localStorage.getItem('token') || '';
-  const tokenQuery = token ? `token=${encodeURIComponent(token)}` : '';
-  const dlQuery = download ? 'download=true' : '';
-  const queryParts = [tokenQuery, dlQuery].filter(Boolean).join('&');
-
-  if (filePath.startsWith('/api/upload/files/')) {
-    const separator = filePath.includes('?') ? '&' : '?';
-    return queryParts ? `${filePath}${separator}${queryParts}` : filePath;
-  }
-  const clean = filePath.replace(/^[\\/]?(uploads[\\/])?/, '').replace(/^[\\/]?(submissions)[\\/]/, '');
-  const fname = clean.split(/[\\/]/).pop();
-  return `/api/upload/files/submissions/${encodeURIComponent(fname)}${queryParts ? `?${queryParts}` : ''}`;
+  return resolveFileUrl(filePath, download);
 }
 
 export function StudentAssignmentsPage() {
@@ -49,8 +36,27 @@ export function StudentAssignmentsPage() {
 
   // Review Modal (for Graded/Submitted)
   const [viewingAssignment, setViewingAssignment] = useState(null);
+  const [downloading, setDownloading] = useState(false);
 
   const { showToast } = useToast();
+
+  const handleDownloadSubmission = async (filePath, fileName) => {
+    if (!filePath) {
+      showToast('No submitted file attachment found.', 'warning');
+      return;
+    }
+    setDownloading(true);
+    try {
+      showToast('Downloading assignment...', 'info');
+      await api.downloadFile(filePath, fileName || 'submission.pdf');
+      showToast('Assignment downloaded successfully!', 'success');
+    } catch (err) {
+      console.error('Download error:', err);
+      showToast(err.message || 'Failed to download file', 'error');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -485,15 +491,16 @@ export function StudentAssignmentsPage() {
                         <Eye size={12} />
                         <span>View PDF</span>
                       </a>
-                      <a
-                        href={resolveSubmissionFileUrl(viewingAssignment.file_path, true)}
-                        download={viewingAssignment.file_name || 'submission.pdf'}
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadSubmission(viewingAssignment.file_path, viewingAssignment.file_name)}
+                        disabled={downloading}
                         className="btn btn-sm btn-outline"
                         style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
                       >
                         <Download size={12} />
-                        <span>Download</span>
-                      </a>
+                        <span>{downloading ? 'Downloading...' : 'Download'}</span>
+                      </button>
                     </div>
                   </div>
                 )}

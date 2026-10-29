@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../../services/api';
+import { api, resolveFileUrl } from '../../services/api';
 import { useToast } from '../../context/ToastContext';
 import {
   BookOpen,
@@ -98,21 +98,20 @@ export function TeacherMaterialsPage() {
   };
 
   const resolveMaterialUrl = (item, download = false) => {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token');
     const rawUrl = item.file_url || item.file_path || item.external_url || '';
-    if (!rawUrl) return '#';
-    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-      return rawUrl;
+    return resolveFileUrl(rawUrl, download, item.file_name);
+  };
+
+  const handleDownloadMaterial = async (m) => {
+    const rawUrl = m.file_path || m.file_url;
+    if (!rawUrl) return;
+    try {
+      showToast('Downloading study material...', 'info');
+      await api.downloadFile(rawUrl, m.file_name || 'material.pdf');
+      showToast('Material downloaded successfully!', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to download material', 'error');
     }
-    let url = rawUrl;
-    if (!url.startsWith('/api/')) {
-      url = `/api/upload/files/${url.replace(/^(uploads[\\/]|api\/upload\/files\/)/, '')}`;
-    }
-    const params = new URLSearchParams();
-    if (token) params.set('token', token);
-    if (download) params.set('download', 'true');
-    const qs = params.toString();
-    return qs ? `${url}?${qs}` : url;
   };
 
   const getDocIcon = (t) => {
@@ -293,16 +292,16 @@ export function TeacherMaterialsPage() {
                           <Eye size={12} />
                           <span>View</span>
                         </a>
-                        <a
-                          href={downloadUrl}
-                          download={m.file_name || 'material'}
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadMaterial(m)}
                           className="btn btn-sm btn-outline"
                           style={{ fontSize: '0.75rem', padding: '0.25rem 0.55rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                           title="Download file"
                         >
                           <Download size={12} />
                           <span>Download</span>
-                        </a>
+                        </button>
                       </>
                     )}
 

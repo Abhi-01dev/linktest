@@ -1,11 +1,11 @@
-const getApiBaseUrl = () => {
+export const getApiBaseUrl = () => {
   const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
   if (!envUrl) return '/api';
   const trimmed = String(envUrl).trim().replace(/\/+$/, '');
   return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`;
 };
 
-const BASE_URL = getApiBaseUrl();
+export const BASE_URL = getApiBaseUrl();
 
 class ApiClient {
   constructor() {
@@ -1481,6 +1481,93 @@ class ApiClient {
     });
     return res.data;
   }
+
+  async downloadFile(fileUrl, preferredFileName = 'download') {
+    if (!fileUrl) {
+      throw new Error('No file path provided for download.');
+    }
+    const token = this.token || localStorage.getItem('linktest_token') || localStorage.getItem('token');
+
+    let fullUrl = fileUrl;
+    if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+      const apiRoot = BASE_URL.replace(/\/api\/?$/, '');
+      const cleanPath = fullUrl.startsWith('/') ? fullUrl : `/${fullUrl}`;
+      fullUrl = `${apiRoot}${cleanPath}`;
+    }
+
+    // Append query params: download=true, token, and filename
+    const separator = fullUrl.includes('?') ? '&' : '?';
+    const params = new URLSearchParams();
+    if (token && !fullUrl.includes('token=')) params.set('token', token);
+    if (!fullUrl.includes('download=')) params.set('download', 'true');
+    if (preferredFileName && !fullUrl.includes('filename=')) {
+      params.set('filename', preferredFileName);
+    }
+    const qs = params.toString();
+    const targetUrl = qs ? `${fullUrl}${separator}${qs}` : fullUrl;
+
+    const response = await fetch(targetUrl, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || err.message || `Download failed with status ${response.status}`);
+    }
+
+    // Critical safety check against SPA rewrites returning HTML index files
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('text/html')) {
+      throw new Error('Server returned an HTML document instead of the requested file. The file may no longer be available on the server.');
+    }
+
+    // Determine actual filename
+    let filename = preferredFileName;
+    const disposition = response.headers.get('content-disposition');
+    if (disposition && disposition.includes('filename=')) {
+      const match = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+      if (match?.[1]) {
+        filename = match[1].replace(/['"]/g, '').trim();
+      }
+    }
+
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename || 'download';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+    return true;
+  }
+}
+
+export function resolveFileUrl(filePath, download = false, preferredFileName = null) {
+  if (!filePath) return '#';
+  if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+
+  const token = localStorage.getItem('linktest_token') || localStorage.getItem('token') || '';
+  const tokenQuery = token ? `token=${encodeURIComponent(token)}` : '';
+  const dlQuery = download ? 'download=true' : '';
+  const fnQuery = preferredFileName ? `filename=${encodeURIComponent(preferredFileName)}` : '';
+  const queryParts = [tokenQuery, dlQuery, fnQuery].filter(Boolean).join('&');
+
+  const apiRoot = BASE_URL.replace(/\/api\/?$/, '');
+
+  let fullPath = filePath;
+  if (!fullPath.startsWith('/api/')) {
+    const clean = fullPath.replace(/^[\\/]?(uploads[\\/])?/, '').replace(/^[\\/]?(submissions|materials|avatars)[\\/]/, '');
+    const fname = clean.split(/[\\/]/).pop();
+    fullPath = `/api/upload/files/submissions/${encodeURIComponent(fname)}`;
+  }
+
+  const separator = fullPath.includes('?') ? '&' : '?';
+  const resolved = queryParts ? `${fullPath}${separator}${queryParts}` : fullPath;
+  return `${apiRoot}${resolved}`;
 }
 
 export const api = new ApiClient();
