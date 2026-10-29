@@ -11,7 +11,51 @@ import { aiService } from './aiService.js';
 import { generateTestResultsPdf } from './pdfReportService.js';
 import { notificationService } from './notificationService.js';
 
+/**
+ * Determines whether an attempt was disqualified or reached maximum permitted violation limits
+ */
+export function isAttemptViolationDisqualified(attempt) {
+  if (!attempt) return false;
+  if (attempt.disqualified === true || attempt.disqualified === 'true') return true;
+
+  const status = String(attempt.status || '').toUpperCase();
+  const submissionStatus = String(attempt.submission_status || '').toUpperCase();
+  const reason = String(attempt.submission_reason || '').toUpperCase();
+
+  const violationKeywords = [
+    'MAX_TAB_SWITCHES',
+    'SECOND_FULLSCREEN_EXIT',
+    'MAX_SECURITY_WARNINGS',
+    'SECURITY_VIOLATION',
+    'MAX_VIOLATIONS',
+    'TAB_SWITCH',
+    'FULLSCREEN_EXIT'
+  ];
+
+  if ((status === 'AUTO_SUBMITTED' || submissionStatus === 'AUTO_SUBMITTED') &&
+      violationKeywords.some(keyword => reason.includes(keyword))) {
+    return true;
+  }
+
+  // Also verify counters against violation thresholds for finalized attempts
+  const maxWarnings = Number(attempt.max_security_warnings || 3);
+  const maxFullscreenExits = Number(attempt.max_fullscreen_exits || 2);
+  const maxTabSwitches = Number(attempt.tab_switch_limit || 3);
+
+  const isFinalized = ['AUTO_SUBMITTED', 'auto_submitted', 'submitted', 'evaluated'].includes(attempt.status) ||
+    ['AUTO_SUBMITTED', 'auto_submitted'].includes(attempt.submission_status);
+
+  if (isFinalized) {
+    if ((attempt.security_warning_count || 0) >= maxWarnings) return true;
+    if ((attempt.fullscreen_exit_count || 0) >= maxFullscreenExits) return true;
+    if ((attempt.proctoring_summary?.tab_switch_events || 0) >= maxTabSwitches) return true;
+  }
+
+  return false;
+}
+
 export const mockTestService = {
+  isAttemptViolationDisqualified,
   // ---------------------------------------------------------------------------
   // 1. STUDENT EXAMINATION WORKFLOW
   // ---------------------------------------------------------------------------
@@ -35,16 +79,19 @@ export const mockTestService = {
     return Promise.all(tests.map(async (test) => {
       const attempts = studentAttempts.filter(a => a.test_id === test.id);
       const activeAttempt = attempts.find(a => a.status === 'in_progress');
-      const completedAttempts = attempts.filter(a => ['submitted', 'evaluated'].includes(a.status));
+      const completedAttempts = attempts.filter(a => ['submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted'].includes(a.status));
       const bestAttempt = completedAttempts.sort((a, b) => (b.total_score || 0) - (a.total_score || 0))[0];
+
+      const disqualifiedAttempt = attempts.find(a => isAttemptViolationDisqualified(a));
+      const hasDisqualification = Boolean(disqualifiedAttempt);
 
       const now = new Date();
       const isStartValid = !test.scheduled_start || new Date(test.scheduled_start) <= now;
       const isEndValid = !test.scheduled_end || new Date(test.scheduled_end) >= now;
       const withinWindow = isStartValid && isEndValid;
 
-      const attemptsRemaining = Math.max(0, test.max_attempts - completedAttempts.length);
-      const canAttempt = withinWindow && (attemptsRemaining > 0 || !!activeAttempt);
+      const attemptsRemaining = hasDisqualification ? 0 : Math.max(0, test.max_attempts - completedAttempts.length);
+      const canAttempt = !hasDisqualification && withinWindow && (attemptsRemaining > 0 || (!!activeAttempt && !isAttemptViolationDisqualified(activeAttempt)));
 
       const latestRequest = await mockTestJoinRequestRepository.getLatestByStudentAndTest(student.id, test.id);
       const joinRequestStatus = latestRequest ? latestRequest.status : 'NONE';
@@ -54,6 +101,9 @@ export const mockTestService = {
         attempts_used: completedAttempts.length,
         attempts_remaining: attemptsRemaining,
         can_attempt: canAttempt,
+        is_disqualified: hasDisqualification,
+        disqualification_reason: disqualifiedAttempt ? (disqualifiedAttempt.submission_reason || 'MAX_SECURITY_WARNINGS') : null,
+        disqualified_attempt_id: disqualifiedAttempt ? disqualifiedAttempt.id : null,
         within_schedule_window: withinWindow,
         active_attempt_id: activeAttempt ? activeAttempt.id : null,
         best_score: bestAttempt ? bestAttempt.total_score : null,
@@ -99,6 +149,20 @@ export const mockTestService = {
 
     // Check for active or previous attempts
     const existingAttempts = await mockTestRepository.getAttemptsByStudent(student.id, testId);
+
+    // CRITICAL SECURITY ENFORCEMENT:
+    // If student has reached the maximum violation limit in any previous attempt for this test,
+    // they are strictly and permanently prohibited from taking or retaking this test.
+    const disqualifiedAttempt = existingAttempts.find(a => isAttemptViolationDisqualified(a));
+    if (disqualifiedAttempt) {
+      const reason = disqualifiedAttempt.submission_reason || 'Maximum security violation limit exceeded';
+      const err = new Error(`You have reached the maximum permitted violation limit for this examination (${reason}) and are permanently prohibited from retaking it.`);
+      err.status = 403;
+      err.statusCode = 403;
+      err.code = 'VIOLATION_LIMIT_EXCEEDED';
+      throw err;
+    }
+
     const activeAttempt = existingAttempts.find(a => a.status === 'in_progress');
 
     if (activeAttempt) {
@@ -116,11 +180,13 @@ export const mockTestService = {
       }
     }
 
-    // Check attempt limits
-    const completedCount = existingAttempts.filter(a => ['submitted', 'evaluated'].includes(a.status)).length;
+    // Check attempt limits (include all completed and auto-submitted attempts)
+    const completedCount = existingAttempts.filter(a => ['submitted', 'evaluated', 'AUTO_SUBMITTED', 'auto_submitted'].includes(a.status)).length;
     if (completedCount >= test.max_attempts) {
       const err = new Error(`Maximum allowed attempts (${test.max_attempts}) reached for this test.`);
       err.status = 400;
+      err.statusCode = 400;
+      err.code = 'MAX_ATTEMPTS_REACHED';
       throw err;
     }
 
@@ -321,9 +387,11 @@ export const mockTestService = {
       throw err;
     }
 
-    if (attempt.status !== 'in_progress') {
+    if (attempt.status !== 'in_progress' || isAttemptViolationDisqualified(attempt)) {
       const err = new Error('This attempt has already been finalized and cannot accept further modifications.');
       err.status = 400;
+      err.statusCode = 400;
+      err.code = 'ATTEMPT_FINALIZED';
       throw err;
     }
 
@@ -451,8 +519,10 @@ export const mockTestService = {
     }
 
     // Strict separate counters (Requirement 2 & 10)
-    const MAX_WARNINGS = 3;
-    const MAX_FULLSCREEN_EXITS = 2;
+    const test = await mockTestRepository.getTestById(attempt.test_id);
+    const MAX_WARNINGS = Number(test?.proctoring_config?.max_security_warnings) || 3;
+    const MAX_FULLSCREEN_EXITS = Number(test?.proctoring_config?.max_fullscreen_exits) || 2;
+    const MAX_TAB_SWITCHES = Number(test?.proctoring_config?.tab_switch_limit) || 3;
 
     // Check for duplicate debouncing: ignore identical event if received within 2.5 seconds
     const existingEvents = await mockTestRepository.getProctoringEvents(attemptId);
@@ -541,7 +611,7 @@ export const mockTestService = {
       newSecurityWarningCount += 1;
     }
 
-    const tabSwitchThresholdReached = summary.tab_switch_events >= 3;
+    const tabSwitchThresholdReached = summary.tab_switch_events >= MAX_TAB_SWITCHES;
     if (newSecurityWarningCount >= MAX_WARNINGS || newFullscreenExitCount >= MAX_FULLSCREEN_EXITS || tabSwitchThresholdReached) {
       summary.flagged = true;
     }
@@ -558,7 +628,8 @@ export const mockTestService = {
       const submissionResult = await this.submitAttempt(attemptId, student, {
         auto_submitted: true,
         reason: 'MAX_TAB_SWITCHES',
-        status: 'AUTO_SUBMITTED'
+        status: 'AUTO_SUBMITTED',
+        disqualified: true
       });
 
       return {
@@ -593,6 +664,7 @@ export const mockTestService = {
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
         integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
         proctoring_summary: summary
       });
 
@@ -617,7 +689,8 @@ export const mockTestService = {
       const submissionResult = await this.submitAttempt(attemptId, student, {
         auto_submitted: true,
         reason: 'SECOND_FULLSCREEN_EXIT',
-        status: 'AUTO_SUBMITTED'
+        status: 'AUTO_SUBMITTED',
+        disqualified: true
       });
 
       return {
@@ -634,7 +707,7 @@ export const mockTestService = {
         max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
         maxFullscreenExits: MAX_FULLSCREEN_EXITS,
         integrity_trust_index: integrityTrustIndex,
-        disqualified: Boolean(attempt.disqualified),
+        disqualified: true,
         auto_submitted: true,
         autoSubmitted: true,
         status: 'AUTO_SUBMITTED',
@@ -651,6 +724,7 @@ export const mockTestService = {
         security_warning_count: newSecurityWarningCount,
         fullscreen_exit_count: newFullscreenExitCount,
         integrity_trust_index: integrityTrustIndex,
+        disqualified: true,
         proctoring_summary: summary
       });
 
@@ -679,7 +753,8 @@ export const mockTestService = {
       const submissionResult = await this.submitAttempt(attemptId, student, {
         auto_submitted: true,
         reason: 'MAX_SECURITY_WARNINGS',
-        status: 'AUTO_SUBMITTED'
+        status: 'AUTO_SUBMITTED',
+        disqualified: true
       });
 
       return {
@@ -696,7 +771,7 @@ export const mockTestService = {
         max_fullscreen_exits: MAX_FULLSCREEN_EXITS,
         maxFullscreenExits: MAX_FULLSCREEN_EXITS,
         integrity_trust_index: integrityTrustIndex,
-        disqualified: Boolean(attempt.disqualified),
+        disqualified: true,
         auto_submitted: true,
         autoSubmitted: true,
         status: 'AUTO_SUBMITTED',
@@ -851,6 +926,8 @@ export const mockTestService = {
     const submissionReason = options.reason || (isAutoSubmitted ? 'MAX_SECURITY_WARNINGS' : 'Normal candidate submission');
     const finalStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : (evaluation.pending_review_count > 0 ? 'submitted' : 'evaluated');
     const submissionStatus = isAutoSubmitted ? 'AUTO_SUBMITTED' : 'SUBMITTED';
+    const isViolationDisqualified = Boolean(options.disqualified) || Boolean(attempt.disqualified) ||
+      ['MAX_TAB_SWITCHES', 'SECOND_FULLSCREEN_EXIT', 'MAX_SECURITY_WARNINGS', 'SECURITY_VIOLATION'].includes(submissionReason);
 
     let resultStatus = 'EVALUATED';
     let releasedAt = null;
@@ -870,6 +947,7 @@ export const mockTestService = {
       status: finalStatus,
       submission_status: submissionStatus,
       submission_reason: submissionReason,
+      disqualified: isViolationDisqualified,
       result_status: resultStatus,
       released_at: releasedAt,
       released_by: releasedBy,

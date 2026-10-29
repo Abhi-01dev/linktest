@@ -491,6 +491,24 @@ export function MockTestDashboard() {
                           <span>Fullscreen Enforced</span>
                         </div>
                       )}
+
+                      {test.is_disqualified && (
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          background: '#FEF2F2',
+                          color: '#DC2626',
+                          border: '1px solid #FCA5A5',
+                          padding: '0.2rem 0.5rem',
+                          borderRadius: '4px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700
+                        }}>
+                          <AlertCircle size={13} />
+                          <span>Disqualified (Violation Limit)</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -524,7 +542,11 @@ export function MockTestDashboard() {
                   }}>
                     {/* Status / History Pill */}
                     <div>
-                      {attemptsUsed > 0 ? (
+                      {test.is_disqualified ? (
+                        <div style={{ fontSize: '0.78rem', color: '#DC2626', fontWeight: 700 }}>
+                          Disqualified: {test.disqualification_reason || 'Max Violations'}
+                        </div>
+                      ) : attemptsUsed > 0 ? (
                         <div style={{ fontSize: '0.78rem', color: (test.has_passed ?? test.hasPassed) ? '#059669' : '#DC2626', fontWeight: 700 }}>
                           Best: {test.best_score ?? test.bestScore}/{totalMarks} ({test.best_percentage ?? test.bestPercentage}%)
                         </div>
@@ -537,7 +559,28 @@ export function MockTestDashboard() {
 
                     {/* Action Button */}
                     <div>
-                      {hasActiveAttempt ? (
+                      {test.is_disqualified ? (
+                        <button
+                          disabled
+                          className="btn"
+                          style={{
+                            padding: '0.45rem 0.95rem',
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            background: '#FEF2F2',
+                            color: '#DC2626',
+                            border: '1px solid #FCA5A5',
+                            cursor: 'not-allowed',
+                            opacity: 0.95
+                          }}
+                        >
+                          <AlertCircle size={14} />
+                          <span>Disqualified (Limit Exceeded)</span>
+                        </button>
+                      ) : hasActiveAttempt ? (
                         <Link
                           to={`/mock-tests/${test.id}/runner/${activeAttemptId}`}
                           className="btn btn-warning"

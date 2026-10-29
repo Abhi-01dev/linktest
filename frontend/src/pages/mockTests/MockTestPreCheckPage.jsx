@@ -151,7 +151,10 @@ export function MockTestPreCheckPage() {
       navigate(`/mock-tests/${id}/runner/${attemptId}`);
     } catch (err) {
       console.error('Failed to launch exam:', err);
-      if (err.code === 'MOCK_TEST_APPROVAL_REQUIRED' || err.status === 403) {
+      if (err.code === 'VIOLATION_LIMIT_EXCEEDED' || (err.message && err.message.toLowerCase().includes('violation limit'))) {
+        alert(err.message || 'You have reached the maximum permitted violation limit for this examination.');
+        navigate('/mock-tests');
+      } else if (err.code === 'MOCK_TEST_APPROVAL_REQUIRED' || err.status === 403) {
         setJoinStatus('PENDING');
         alert(err.message || 'Teacher approval is required before you can join this mock test.');
       } else {
@@ -194,6 +197,61 @@ export function MockTestPreCheckPage() {
           <p>{initError || 'Examination details unavailable.'}</p>
           <Link to="/mock-tests" className="btn btn-secondary" style={{ marginTop: '1rem' }}>
             Back to Mock Tests
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // If student has reached maximum violation limits and is disqualified, block pre-check
+  if (test?.is_disqualified) {
+    return (
+      <div className="container" style={{ padding: '4rem 1rem', maxWidth: '620px' }}>
+        <div style={{
+          background: '#FFFFFF',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid #FCA5A5',
+          padding: '2.5rem',
+          boxShadow: '0 10px 30px -5px rgba(239, 68, 68, 0.15)',
+          textAlign: 'center'
+        }}>
+          <div style={{
+            width: '64px',
+            height: '64px',
+            borderRadius: '50%',
+            background: '#FEF2F2',
+            color: '#DC2626',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 1.25rem'
+          }}>
+            <AlertCircle size={36} />
+          </div>
+
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#DC2626', marginBottom: '0.75rem' }}>
+            Examination Disqualified
+          </h2>
+
+          <p style={{ color: '#475569', fontSize: '0.95rem', lineHeight: 1.6, marginBottom: '1.25rem' }}>
+            You have reached the maximum permitted security violation limit for this examination. Under examination integrity policies, you are strictly prohibited from attempting or retaking this test.
+          </p>
+
+          <div style={{
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: '8px',
+            padding: '0.75rem 1rem',
+            marginBottom: '1.5rem',
+            fontSize: '0.88rem',
+            color: '#991B1B',
+            fontWeight: 600
+          }}>
+            Enforcement Reason: {test.disqualification_reason || 'Maximum Violation Limit Exceeded'}
+          </div>
+
+          <Link to="/mock-tests" className="btn btn-secondary">
+            Return to Mock Tests
           </Link>
         </div>
       </div>

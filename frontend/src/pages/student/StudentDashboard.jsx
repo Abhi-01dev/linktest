@@ -839,7 +839,24 @@ export function StudentDashboard() {
                         >
                           {test.subject || 'General'}
                         </span>
-                        {isProctored ? (
+                        {test.is_disqualified ? (
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              background: '#FEE2E2',
+                              color: '#DC2626',
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: '4px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                          >
+                            <AlertCircle size={11} />
+                            Disqualified
+                          </span>
+                        ) : isProctored ? (
                           <span
                             style={{
                               fontSize: '0.68rem',
@@ -929,7 +946,14 @@ export function StudentDashboard() {
                         {attemptsUsed > 0 ? `Completed (${attemptsUsed})` : 'Not attempted'}
                       </span>
 
-                      {hasActiveAttempt ? (
+                      {test.is_disqualified ? (
+                        <span
+                          className="badge"
+                          style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', padding: '0.35rem 0.6rem', fontSize: '0.75rem', fontWeight: 700 }}
+                        >
+                          Disqualified
+                        </span>
+                      ) : hasActiveAttempt ? (
                         <Link
                           to={`/mock-tests/${test.id}/runner/${activeAttemptId}`}
                           className="btn btn-sm btn-warning"

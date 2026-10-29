@@ -86,6 +86,16 @@ export const mockTestController = {
         test.questions = await mockTestRepository.getQuestionsByTestId(id, { sanitize: true });
       }
 
+      if (req.user && req.user.role === 'STUDENT') {
+        const studentAttempts = await mockTestRepository.getAttemptsByStudent(req.user.id, id);
+        const disqualifiedAttempt = studentAttempts.find(a => mockTestService.isAttemptViolationDisqualified(a));
+        if (disqualifiedAttempt) {
+          test.is_disqualified = true;
+          test.disqualification_reason = disqualifiedAttempt.submission_reason || 'MAX_SECURITY_WARNINGS';
+          test.can_attempt = false;
+        }
+      }
+
       return res.status(200).json({ success: true, data: { test } });
     } catch (err) {
       next(err);

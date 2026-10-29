@@ -158,6 +158,51 @@ describe('Proctoring Pipeline & Security Enforcement Suite', () => {
     await postJson(`/mock-tests/join-requests/${s2ReqId}/approve`, {}, teacherToken);
   });
 
+  async function createTestForSuite(titleSuffix) {
+    const createTestRes = await postJson('/mock-tests', {
+      title: `Secure Proctoring Verification Test ${titleSuffix}`,
+      subject: 'Computer Science',
+      duration_minutes: 60,
+      total_marks: 20,
+      max_attempts: 10,
+      pass_percentage: 50,
+      status: 'published',
+      proctoring_config: {
+        webcam_required: true,
+        face_detection: true,
+        max_tab_switches: 3,
+        max_fullscreen_exits: 2
+      },
+      questions: [
+        {
+          question_text: 'What protocol does secure HTTP use for encryption?',
+          question_type: 'mcq_single',
+          options: ['TLS', 'FTP', 'SSH', 'Telnet'],
+          answer_key: { correct_index: 0 },
+          marks: 10
+        },
+        {
+          question_text: 'Define proctoring integrity in distributed computer-based exams.',
+          question_type: 'long_answer',
+          marks: 10
+        }
+      ]
+    }, teacherToken);
+
+    const tId = createTestRes.data.data.test.id;
+    const lId = (createTestRes.data.data.test.questions || []).find(q => q.question_type === 'long_answer')?.id;
+
+    const s1Req = await postJson(`/mock-tests/${tId}/join-request`, {}, studentToken);
+    const s1ReqId = s1Req.data.data.id;
+    await postJson(`/mock-tests/join-requests/${s1ReqId}/approve`, {}, teacherToken);
+
+    const s2Req = await postJson(`/mock-tests/${tId}/join-request`, {}, student2Token);
+    const s2ReqId = s2Req.data.data.id;
+    await postJson(`/mock-tests/join-requests/${s2ReqId}/approve`, {}, teacherToken);
+
+    return { testId: tId, laQuestionId: lId };
+  }
+
   after(() => {
     if (server) server.close();
   });
@@ -226,7 +271,8 @@ describe('Proctoring Pipeline & Security Enforcement Suite', () => {
   // ---------------------------------------------------------------------------
   test('Tab/Window: Tab switch and blur within debounce window do not double count; 3 strikes auto-submits', async () => {
     // Start fresh attempt
-    const startRes = await postJson(`/mock-tests/${testId}/attempts`, {}, studentToken);
+    const { testId: tabTestId } = await createTestForSuite(`Tab_${Date.now()}`);
+    const startRes = await postJson(`/mock-tests/${tabTestId}/attempts`, {}, studentToken);
     const attemptId = startRes.data.data.attempt_id || startRes.data.data.id;
     assert.ok(attemptId, 'Attempt started');
 
@@ -273,7 +319,8 @@ describe('Proctoring Pipeline & Security Enforcement Suite', () => {
   // ---------------------------------------------------------------------------
   test('Face & Camera Events: FACE_NOT_DETECTED, MULTIPLE_FACES, CAMERA_DISCONNECTED are recorded', async () => {
     // Start fresh attempt
-    const startRes = await postJson(`/mock-tests/${testId}/attempts`, {}, studentToken);
+    const { testId: faceTestId } = await createTestForSuite(`Face_${Date.now()}`);
+    const startRes = await postJson(`/mock-tests/${faceTestId}/attempts`, {}, studentToken);
     const attemptId = startRes.data.data.attempt_id || startRes.data.data.id;
     assert.ok(attemptId, 'Attempt started');
 
@@ -321,7 +368,8 @@ describe('Proctoring Pipeline & Security Enforcement Suite', () => {
   // ---------------------------------------------------------------------------
   test('Security & Anti-Tampering: Student cannot manipulate strikes or forge events for others', async () => {
     // Start fresh attempt for Student 1
-    const startRes = await postJson(`/mock-tests/${testId}/attempts`, {}, studentToken);
+    const { testId: tamperTestId, laQuestionId: tamperLaId } = await createTestForSuite(`Tamper_${Date.now()}`);
+    const startRes = await postJson(`/mock-tests/${tamperTestId}/attempts`, {}, studentToken);
     const attemptId = startRes.data.data.attempt_id || startRes.data.data.id;
     assert.ok(attemptId, 'Attempt started');
 
@@ -341,9 +389,9 @@ describe('Proctoring Pipeline & Security Enforcement Suite', () => {
     assert.equal(tamperRes.status, 200);
     assert.equal(tamperRes.data.data.security_warning_count, 1, 'Client-supplied warning counts are ignored');
     // 3. Unreleased results privacy check: Student 1 submits long answer response needing manual evaluation
-    if (laQuestionId) {
+    if (tamperLaId) {
       await putJson(`/mock-tests/attempts/${attemptId}/answers`, {
-        question_id: laQuestionId,
+        question_id: tamperLaId,
         text_response: 'Proctoring integrity ensures computer-based tests are conducted fairly without unauthorized aids.'
       }, studentToken);
     }

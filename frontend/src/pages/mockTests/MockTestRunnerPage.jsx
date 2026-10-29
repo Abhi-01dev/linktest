@@ -648,7 +648,8 @@ function MockTestRunnerView() {
   }, [attemptId, DEBUG_PROCTOR]);
 
   const attemptStatus = examData?.status || examData?.attempt?.status;
-  const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted);
+  const isAttemptDisqualified = Boolean(examData?.disqualified || examData?.attempt?.disqualified);
+  const isAutoSubmitted = attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || Boolean(autoSubmittedState?.submitted) || isAttemptDisqualified;
   const isCompleted = isAutoSubmitted || attemptStatus === 'submitted' || attemptStatus === 'evaluated' || attemptStatus === 'completed';
   const isExpired = attemptStatus === 'expired';
   const isTestActive = Boolean(
@@ -718,9 +719,10 @@ function MockTestRunnerView() {
 
       const attemptStatus = data?.status || data?.attempt?.status;
       const subReason = data?.submission_reason || data?.attempt?.submission_reason;
+      const isDisqualified = Boolean(data?.disqualified || data?.attempt?.disqualified);
 
       // Auto-submitted restore check (Requirement 16)
-      if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted') {
+      if (attemptStatus === 'AUTO_SUBMITTED' || attemptStatus === 'auto_submitted' || isDisqualified) {
         isFinalizedRef.current = true;
         stopCameraRef.current?.();
         setAutoSubmittedState({
